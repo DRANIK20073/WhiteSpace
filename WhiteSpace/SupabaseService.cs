@@ -3,6 +3,8 @@ using System.Windows;
 using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
 using System.Text.RegularExpressions;
+using System.Windows.Navigation;
+using WhiteSpace.Pages;
 
 public class SupabaseService
 {
@@ -12,30 +14,36 @@ public class SupabaseService
 
     public static async Task InitAsync()
     {
-        var url = "https://ceqnfiznaanuzojjgdcs.supabase.co";  // Ваш URL Supabase
-        var key = "sb_publishable_GpGetyC36F_fZ2rLWEgSBg_UJ7ptd9G";  // Ваш ключ
+        var url = "https://ceqnfiznaanuzojjgdcs.supabase.co";  //URL Supabase
+        var key = "sb_publishable_GpGetyC36F_fZ2rLWEgSBg_UJ7ptd9G";  //ключ
 
-        _client = new Client(url, key);  // Здесь инициализируем Supabase клиент
+        _client = new Client(url, key); 
         await _client.InitializeAsync();
     }
 
-    public async Task SignUpAsync(string email, string password)
+    public async Task<bool> SignUpAsync(string email, string password)
     {
         try
         {
-            // Регистрация пользователя в Supabase Authentication
+            if (_client == null)
+            {
+                MessageBox.Show("Клиент Supabase не был инициализирован.");
+                return false;
+            }
+
             var response = await _client.Auth.SignUp(email, password);
 
             if (response.User != null)
             {
-                // Получаем ID пользователя из ответа
                 var userId = response.User.Id;
-
                 MessageBox.Show("Регистрация успешна 🎉");
+
+                return true;
             }
             else
             {
                 MessageBox.Show("Ошибка регистрации");
+                return false;
             }
         }
         catch (Supabase.Gotrue.Exceptions.GotrueException ex)
@@ -56,12 +64,15 @@ public class SupabaseService
             {
                 MessageBox.Show($"Ошибка при регистрации: {ex.Message}");
             }
+            return false;
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Неизвестная ошибка: {ex.Message}");
+            return false;
         }
     }
+
 
 
     public async Task<bool> UpdateUsernameAsync(string newUsername)
@@ -76,7 +87,6 @@ public class SupabaseService
                 return false;
             }
 
-            // Валидация нового имени пользователя
             if (string.IsNullOrWhiteSpace(newUsername) || newUsername.Length < 3)
             {
                 MessageBox.Show("Имя пользователя должно содержать минимум 3 символа.");
@@ -85,15 +95,12 @@ public class SupabaseService
 
             var userId = Guid.Parse(user.Id);
 
-            // Пробуем получить существующий профиль
             var existingProfile = await _client.From<Profile>()
                 .Where(p => p.Id == userId)
                 .Single();
 
             if (existingProfile != null)
             {
-                // ОБНОВЛЯЕМ СУЩЕСТВУЮЩИЙ ПРОФИЛЬ
-                // Создаем копию с обновленными данными
                 var updatedProfile = new Profile
                 {
                     Id = existingProfile.Id,
@@ -102,7 +109,6 @@ public class SupabaseService
                     CreatedAt = existingProfile.CreatedAt
                 };
 
-                // Используем Upsert для обновления
                 var result = await _client.From<Profile>().Upsert(updatedProfile);
 
                 if (result.Models?.Any() == true)
@@ -149,7 +155,7 @@ public class SupabaseService
     }
 
 
-    public async Task SignInAsync(string email, string password)
+    public async Task<bool> SignInAsync(string email, string password)
     {
         try
         {
@@ -157,11 +163,18 @@ public class SupabaseService
             if (session != null)
             {
                 MessageBox.Show("Вход выполнен ✅");
+                return true;
+            }
+            else
+            {
+                MessageBox.Show("Не удалось войти. Проверьте введенные данные.");
+                return false; 
             }
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Ошибка входа: {ex.Message}");
+            return false; 
         }
     }
 
@@ -173,12 +186,11 @@ public class SupabaseService
 
             if (user != null)
             {
-                // Получаем профиль пользователя
+
                 var profile = await GetMyProfileAsync();
 
                 if (profile != null && !string.IsNullOrEmpty(profile.Username))
                 {
-                    // Выводим только username
                     MessageBox.Show($"Имя пользователя: {profile.Username}");
                 }
                 else if (profile != null && string.IsNullOrEmpty(profile.Username))
