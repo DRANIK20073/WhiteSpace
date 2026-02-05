@@ -13,34 +13,42 @@
 
         <!-- Приветствие -->
         <TextBlock Text="{Binding UserGreeting}"
-                   FontSize="24"
-                   FontWeight="SemiBold"
-                   Margin="0,0,0,20"/>
+               FontSize="24"
+               FontWeight="SemiBold"
+               Margin="0,0,0,20"/>
 
         <!-- Кнопки -->
         <StackPanel Grid.Row="1"
-                    Orientation="Horizontal"
-                    Margin="0,0,0,20">
+                Orientation="Horizontal"
+                Margin="0,0,0,20">
 
             <Button Content="➕ Создать доску"
-                    Width="180"
-                    Height="40"/>
+                Width="180"
+                Height="40"
+                Click="CreateBoard_Click"/>
 
             <Button Content="🔗 Подключиться по коду"
-                    Width="220"
-                    Height="40"
-                    Margin="10,0,0,0"/>
+                Width="220"
+                Height="40"
+                Margin="10,0,0,0"/>
         </StackPanel>
 
-        <!-- Пока заглушка под доски -->
-        <Border Grid.Row="2"
-                Background="White"
-                Padding="15"
-                CornerRadius="6">
-            <TextBlock Text="Здесь будет список ваших досок"
-                       Foreground="Gray"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center"/>
-        </Border>
+        <!-- Список досок -->
+        <ListView Grid.Row="2"
+              Name="BoardsListView"
+              ItemsSource="{Binding Boards}"
+              HorizontalAlignment="Stretch">
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel>
+                        <TextBlock Text="{Binding Title}" FontSize="18" Margin="5"/>
+                        <Button Content="Открыть"
+                            Width="100"
+                            Click="OpenBoard_Click"
+                            CommandParameter="{Binding Id}"/>
+                    </StackPanel>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
     </Grid>
 </Page>

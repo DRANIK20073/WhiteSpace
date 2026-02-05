@@ -21,6 +21,7 @@ public class SupabaseService
         await _client.InitializeAsync();
     }
 
+    //Регистрация
     public async Task<bool> SignUpAsync(string email, string password)
     {
         try
@@ -73,8 +74,7 @@ public class SupabaseService
         }
     }
 
-
-
+    //Обновить имя пользователя
     public async Task<bool> UpdateUsernameAsync(string newUsername)
     {
         try
@@ -154,7 +154,7 @@ public class SupabaseService
         }
     }
 
-
+    //Логин
     public async Task<bool> SignInAsync(string email, string password)
     {
         try
@@ -178,6 +178,7 @@ public class SupabaseService
         }
     }
 
+    //Получить текущего пользователя (отобразить имя)
     public async Task GetCurrentUserAsync()
     {
         try
@@ -213,6 +214,7 @@ public class SupabaseService
         }
     }
 
+    //Профиль текущего пользователя
     public async Task<Profile?> GetMyProfileAsync()
     {
         try
@@ -239,5 +241,78 @@ public class SupabaseService
             return null;
         }
     }
+
+    //Создать доску
+    public async Task<Board> CreateBoardAsync(string title)
+    {
+        try
+        {
+            var user = _client.Auth.CurrentUser;
+            if (user == null)
+            {
+                MessageBox.Show("Пользователь не авторизован");
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                MessageBox.Show("Название доски не может быть пустым");
+                return null;
+            }
+
+            var board = new Board
+            {
+                Title = title,
+                OwnerId = Guid.Parse(user.Id),
+                AccessCode = Guid.NewGuid().ToString("N")[..6].ToUpper(),
+                CreatedAt = DateTime.UtcNow
+            };
+
+            var result = await _client.From<Board>().Insert(board);
+
+            if (result.Models?.Any() == true)
+            {
+                MessageBox.Show("Доска успешно создана 🎉");
+                return result.Models.First(); // Возвращаем объект доски, который содержит ID
+            }
+
+            MessageBox.Show("Не удалось создать доску");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка создания доски: {ex.Message}");
+            return null;
+        }
+    }
+
+    //Получить список досок
+    public async Task<List<Board>> GetBoardsAsync()
+    {
+        try
+        {
+            var user = _client.Auth.CurrentUser;
+            if (user == null)
+            {
+                MessageBox.Show("Пользователь не авторизован.");
+                return new List<Board>();
+            }
+
+            var userId = Guid.Parse(user.Id);
+
+            var result = await _client.From<Board>()
+                .Where(b => b.OwnerId == userId)
+                .Get();
+
+            return result.Models?.ToList() ?? new List<Board>();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка при получении досок: {ex.Message}");
+            return new List<Board>();
+        }
+    }
+
+
 }
 
