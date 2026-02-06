@@ -53,6 +53,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        //Загрузка списка досок
         private async void LoadBoards()
         {
             var service = new SupabaseService();
@@ -67,11 +68,12 @@ namespace WhiteSpace.Pages
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
+        //Создать доску
         private async void CreateBoard_Click(object sender, RoutedEventArgs e)
         {
             var service = new SupabaseService();
 
-            // Окно для ввода имени доски
+            // Окно для ввода имени доски 
             string boardTitle = Microsoft.VisualBasic.Interaction.InputBox(
                 "Введите имя для новой доски:",
                 "Создание новой доски",

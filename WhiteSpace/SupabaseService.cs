@@ -155,26 +155,26 @@ public class SupabaseService
     }
 
     //Логин
-    public async Task<bool> SignInAsync(string email, string password)
+    public async Task<bool> SignInAsync(string email, string password, bool rememberMe)
     {
         try
         {
-            var session = await SupabaseService.Client.Auth.SignIn(email, password);
-            if (session != null)
+            var session = await Client.Auth.SignIn(email, password);
+
+            if (session == null)
+                return false;
+
+            if (rememberMe)
             {
-                MessageBox.Show("Вход выполнен ✅");
-                return true;
+                SessionStorage.SaveSession(session);
             }
-            else
-            {
-                MessageBox.Show("Не удалось войти. Проверьте введенные данные.");
-                return false; 
-            }
+
+            return true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка входа: {ex.Message}");
-            return false; 
+            MessageBox.Show(ex.Message);
+            return false;
         }
     }
 

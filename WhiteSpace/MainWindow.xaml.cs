@@ -8,8 +8,6 @@ namespace WhiteSpace
         public MainWindow()
         {
             InitializeComponent();
-            // Загружаем страницу регистрации при запуске
-            MainFrame.Navigate(new RegisterPage());
         }
     }
 }

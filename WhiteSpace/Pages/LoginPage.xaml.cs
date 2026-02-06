@@ -15,14 +15,17 @@ namespace WhiteSpace.Pages
 
         private async void Login_Click(object sender, RoutedEventArgs e)
         {
-            string email = EmailBox.Text; 
-            string password = PasswordBox.Password; 
+            var service = new SupabaseService();
 
-            bool result = await _supabaseService.SignInAsync(email, password);
+            bool success = await service.SignInAsync(
+                EmailBox.Text,
+                PasswordBox.Password,
+                RememberMeCheckBox.IsChecked == true
+            );
 
-            if (result)
+            if (success)
             {
-                NavigateAndClear(new UserHomePage());
+                NavigationService.Navigate(new UserHomePage());
             }
         }
 
