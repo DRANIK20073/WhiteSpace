@@ -1,4 +1,4 @@
-﻿using Supabase.Postgrest.Models;  // именно этот BaseModel нужен
+﻿using Supabase.Postgrest.Models;
 using Supabase.Postgrest.Attributes;
 
 [Table("profiles")]

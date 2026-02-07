@@ -2,21 +2,51 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Title="Доска"
-      Background="#F3F3F3">
+      Background="#F3F3F3"
+      Loaded="Page_Loaded">
 
     <Grid>
-        <!-- Панель инструментов -->
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
-            <Button Content="✏ Карандаш" Click="Pen_Click"/>
-            <Button Content="⬛ Прямоугольник" Click="Rect_Click"/>
-            <Button Content="🔵 Круг" Click="Ellipse_Click"/>
-            <Button Content="🅣 Текст" Click="Text_Click"/>
-        </StackPanel>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
 
-        <!-- Область доски -->
-        <Canvas x:Name="BoardCanvas"
-                Background="White"
-                HorizontalAlignment="Stretch"
-                VerticalAlignment="Stretch"/>
+        <!-- Viewport (камера) -->
+        <Border Grid.Row="0" Background="#F6F6F6" ClipToBounds="True">
+            <Grid x:Name="Viewport"
+                  MouseDown="Viewport_MouseDown"
+                  MouseMove="Viewport_MouseMove"
+                  MouseUp="Viewport_MouseUp"
+                  MouseWheel="Viewport_MouseWheel">
+
+                <!-- Без сетки, только однотонный фон -->
+                <Grid.Background>
+                    <SolidColorBrush Color="#FFFFFF"/>
+                    <!-- Белый фон, можно заменить на любой другой -->
+                </Grid.Background>
+
+                <!-- Большой Canvas (условно бесконечный) -->
+                <Canvas x:Name="BoardCanvas" Width="50000" Height="50000">
+                    <Canvas.RenderTransform>
+                        <TransformGroup>
+                            <ScaleTransform x:Name="BoardScale" ScaleX="1" ScaleY="1"/>
+                            <TranslateTransform x:Name="BoardTranslate" X="0" Y="0"/>
+                        </TransformGroup>
+                    </Canvas.RenderTransform>
+                </Canvas>
+            </Grid>
+        </Border>
+
+        <!-- Панель инструментов снизу -->
+        <Border Grid.Row="1" Background="White" Padding="10" BorderBrush="#22000000" BorderThickness="1">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                <Button Content="🖐 Рука" Width="90" Margin="4" Click="Hand_Click"/>
+                <Button Content="✏ Карандаш" Width="110" Margin="4" Click="Pen_Click"/>
+                <Button Content="⬛ Прямоуг." Width="110" Margin="4" Click="Rect_Click"/>
+                <Button Content="🔵 Круг" Width="90" Margin="4" Click="Ellipse_Click"/>
+                <Button Content="🅣 Текст" Width="90" Margin="4" Click="Text_Click"/>
+                <Button Content="Сохранить изменения" Width="150" Margin="4" Click="SaveBoardChanges_Click"/>
+            </StackPanel>
+        </Border>
     </Grid>
 </Page>

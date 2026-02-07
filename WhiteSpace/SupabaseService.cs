@@ -5,6 +5,10 @@ using Supabase.Postgrest.Models;
 using System.Text.RegularExpressions;
 using System.Windows.Navigation;
 using WhiteSpace.Pages;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Shapes;
+using Newtonsoft.Json;
 
 public class SupabaseService
 {
@@ -162,18 +166,41 @@ public class SupabaseService
             var session = await Client.Auth.SignIn(email, password);
 
             if (session == null)
+            {
+                MessageBox.Show("Не удалось войти. Проверьте введенные данные.");
                 return false;
+            }
 
             if (rememberMe)
             {
                 SessionStorage.SaveSession(session);
             }
 
+            MessageBox.Show("Вход выполнен успешно!");
+
             return true;
+        }
+        catch (Supabase.Gotrue.Exceptions.GotrueException ex)
+        {
+            // Перевод ошибок на русский
+            if (ex.Message.Contains("missing email or phone"))
+            {
+                MessageBox.Show("Ошибка входа: Не указан email.");
+            }
+            else if (ex.Message.Contains("invalid_credentials"))
+            {
+                MessageBox.Show("Ошибка входа: Неверные учетные данные.");
+            }
+            else
+            {
+                MessageBox.Show($"Ошибка входа: {ex.Message}");
+            }
+
+            return false;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message);
+            MessageBox.Show($"Неизвестная ошибка: {ex.Message}");
             return false;
         }
     }
@@ -313,6 +340,68 @@ public class SupabaseService
         }
     }
 
+    // Сохранение фигуры на доске
+    public async Task<bool> SaveShapeAsync(Guid boardId, BoardShape shape)
+    {
+        try
+        {
+            var userId = _client.Auth.CurrentUser?.Id;
+
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new Exception("Пользователь не авторизован");
+            }
+
+            // Получаем доску, принадлежащую пользователю
+            var result = await _client
+                .From<Board>()
+                .Where(b => b.OwnerId == Guid.Parse(userId) && b.Id == boardId)
+                .Single();  // Используем Single вместо Get для одной записи
+
+            if (result == null)
+            {
+                throw new Exception("Доска не найдена");
+            }
+
+            // Устанавливаем BoardId для фигуры
+            shape.BoardId = boardId;
+
+            // Для всех типов фигур используем одинаковый метод сохранения
+            var resultInsert = await _client
+                .From<BoardShape>()
+                .Insert(shape);
+
+            return resultInsert.Model != null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при сохранении фигуры: {ex.Message}");
+            return false;
+        }
+    }
+
+
+    // Метод для загрузки фигур с базы данных
+    public async Task<List<BoardShape>> LoadBoardShapesAsync(Guid boardId)
+    {
+        try
+        {
+            // Загружаем все фигуры, связанные с доской
+            var result = await _client
+                .From<BoardShape>()  // Указываем тип модели BoardShape
+                .Where(s => s.BoardId == boardId)  // Фильтруем по ID доски
+                .Get();
+
+            // Возвращаем список фигур
+            return result.Models?.ToList() ?? new List<BoardShape>();
+        }
+        catch (Exception ex)
+        {
+            // Обрабатываем ошибки при загрузке данных
+            Console.WriteLine($"Ошибка при загрузке фигур: {ex.Message}");
+            return new List<BoardShape>();
+        }
+    }
 
 }
 

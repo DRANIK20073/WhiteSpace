@@ -31,6 +31,12 @@
                 Width="220"
                 Height="40"
                 Margin="10,0,0,0"/>
+
+            <Button Content="🚪 Выход"
+            Width="180"
+            Height="40"
+            Click="Logout_Click"
+            Margin="10,0,0,0"/>
         </StackPanel>
 
         <!-- Список досок -->

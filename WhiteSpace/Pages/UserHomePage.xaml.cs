@@ -73,12 +73,11 @@ namespace WhiteSpace.Pages
         {
             var service = new SupabaseService();
 
-            // Окно для ввода имени доски 
             string boardTitle = Microsoft.VisualBasic.Interaction.InputBox(
                 "Введите имя для новой доски:",
                 "Создание новой доски",
-                "Новая доска", // Значение по умолчанию
-                -1, -1); // Позиция окна
+                "Новая доска",
+                -1, -1);
 
             if (string.IsNullOrWhiteSpace(boardTitle))
             {
@@ -90,10 +89,9 @@ namespace WhiteSpace.Pages
 
             if (newBoard != null)
             {
-                var newBoardId = newBoard.Id; // Извлекаем ID доски
+                var newBoardId = newBoard.Id;
 
-                // Переход на страницу доски с передачей ID
-                this.NavigationService.Navigate(new BoardPage(newBoardId));  // Переход на страницу доски
+                this.NavigationService.Navigate(new BoardPage(newBoardId)); 
             }
             else
             {
@@ -101,13 +99,23 @@ namespace WhiteSpace.Pages
             }
         }
 
+        //Открыть доску
         private void OpenBoard_Click(object sender, RoutedEventArgs e)
         {
-            // Получаем ID доски из CommandParameter
             var boardId = (Guid)((Button)sender).CommandParameter;
 
-            // Переход на страницу доски с передачей ID
             this.NavigationService.Navigate(new BoardPage(boardId));
         }
+
+        //Выход из аккаунта
+        private void Logout_Click(object sender, RoutedEventArgs e)
+        {
+            SessionStorage.ClearSession();
+
+            SupabaseService.Client.Auth.SignOut();
+
+            this.NavigationService.Navigate(new LoginPage());
+        }
+
     }
 }
