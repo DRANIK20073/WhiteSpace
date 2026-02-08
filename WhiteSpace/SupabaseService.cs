@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Newtonsoft.Json;
+using Microsoft.IdentityModel.Tokens;
 
 public class SupabaseService
 {
@@ -340,67 +341,109 @@ public class SupabaseService
         }
     }
 
-    // Сохранение фигуры на доске
-    public async Task<bool> SaveShapeAsync(Guid boardId, BoardShape shape)
+    //Сохранить изменения на доске
+    public async Task<bool> SaveShapeAsync(BoardShape shape)
     {
         try
         {
-            var userId = _client.Auth.CurrentUser?.Id;
-
-            if (string.IsNullOrEmpty(userId))
+            // Сериализация списка точек в строку JSON
+            string pointsJson = null;
+            if (shape.DeserializedPoints != null && shape.DeserializedPoints.Count > 0)
             {
-                throw new Exception("Пользователь не авторизован");
+                pointsJson = JsonConvert.SerializeObject(shape.DeserializedPoints); // Преобразуем List<Point> в JSON строку
             }
 
-            // Получаем доску, принадлежащую пользователю
-            var result = await _client
-                .From<Board>()
-                .Where(b => b.OwnerId == Guid.Parse(userId) && b.Id == boardId)
-                .Single();  // Используем Single вместо Get для одной записи
-
-            if (result == null)
+            // Используем Upsert для добавления или обновления фигуры
+            var result = await _client.From<BoardShape>().Upsert(new BoardShape
             {
-                throw new Exception("Доска не найдена");
+                // Передаем все данные, включая Id
+                Id = shape.Id,  // Это важно для обновления существующей фигуры
+                BoardId = shape.BoardId,
+                Type = shape.Type,
+                X = shape.X,
+                Y = shape.Y,
+                Width = shape.Width,
+                Height = shape.Height,
+                Color = shape.Color,
+                Text = shape.Text,
+                Points = pointsJson
+            });
+
+            if (result.Models?.Any() == true)
+            {
+                MessageBox.Show("Фигура успешно сохранена.");
+                return true;
             }
-
-            // Устанавливаем BoardId для фигуры
-            shape.BoardId = boardId;
-
-            // Для всех типов фигур используем одинаковый метод сохранения
-            var resultInsert = await _client
-                .From<BoardShape>()
-                .Insert(shape);
-
-            return resultInsert.Model != null;
+            else
+            {
+                MessageBox.Show("Не удалось сохранить фигуру.");
+                return false;
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при сохранении фигуры: {ex.Message}");
+            MessageBox.Show($"Ошибка при сохранении фигуры: {ex.Message}");
             return false;
         }
     }
-
 
     // Метод для загрузки фигур с базы данных
     public async Task<List<BoardShape>> LoadBoardShapesAsync(Guid boardId)
     {
         try
         {
-            // Загружаем все фигуры, связанные с доской
             var result = await _client
-                .From<BoardShape>()  // Указываем тип модели BoardShape
-                .Where(s => s.BoardId == boardId)  // Фильтруем по ID доски
+                .From<BoardShape>()
+                .Where(s => s.BoardId == boardId)
                 .Get();
 
-            // Возвращаем список фигур
-            return result.Models?.ToList() ?? new List<BoardShape>();
+            var shapes = new List<BoardShape>();
+
+            if (result.Models != null)
+            {
+                foreach (var model in result.Models)
+                {
+                    // Десериализация строки JSON в List<Point> и сохранение в коллекцию
+                    if (!string.IsNullOrEmpty(model.Points))
+                    {
+                        model.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(model.Points); // Десериализуем строку JSON в List<Point>
+                    }
+
+                    shapes.Add(model);
+                }
+            }
+
+            return shapes;
         }
         catch (Exception ex)
         {
-            // Обрабатываем ошибки при загрузке данных
             Console.WriteLine($"Ошибка при загрузке фигур: {ex.Message}");
             return new List<BoardShape>();
         }
+    }
+
+    // Метод для генерации уникального Id
+    public async Task<int> GenerateUniqueIdAsync(Guid boardId)
+    {
+        int newId;
+        bool idExists;
+
+        do
+        {
+            // Генерируем новый уникальный Id
+            newId = Guid.NewGuid().GetHashCode(); // Генерация случайного int
+
+            // Проверяем, существует ли уже такой id
+            var existingShape = await _client
+                .From<BoardShape>()
+                .Where(s => s.BoardId == boardId && s.Id == newId)
+                .Get();
+
+            idExists = existingShape.Models?.Count > 0; // Если фигура с таким id существует, генерируем новый
+        }
+        while (idExists);
+
+        return newId;
     }
 
 }

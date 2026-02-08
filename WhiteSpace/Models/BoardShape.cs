@@ -1,5 +1,8 @@
-﻿using Supabase.Postgrest.Models;
-using Supabase.Postgrest.Attributes;
+﻿using Supabase.Postgrest.Attributes;
+using Supabase.Postgrest.Models;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
 using System.Windows;
 
 [Table("boardshape")]
@@ -12,7 +15,7 @@ public class BoardShape : BaseModel
     public Guid BoardId { get; set; }
 
     [Column("type")]
-    public string Type { get; set; }
+    public string Type { get; set; } = "";
 
     [Column("x")]
     public double X { get; set; }
@@ -27,11 +30,16 @@ public class BoardShape : BaseModel
     public double Height { get; set; }
 
     [Column("color")]
-    public string Color { get; set; }
+    public string? Color { get; set; }
 
     [Column("text")]
-    public string Text { get; set; }
+    public string? Text { get; set; }
 
+    // Храним строку JSON в базе данных
     [Column("points")]
-    public List<Point> Points { get; set; } = new List<Point>();
+    public string? Points { get; set; }
+
+    // Используем List<Point> для хранения точек в памяти
+    [JsonIgnore]  // Этот атрибут указывает, что это свойство не нужно сериализовать в JSON
+    public List<Point> DeserializedPoints { get; set; } = new List<Point>();  // Коллекция точек для работы в коде
 }

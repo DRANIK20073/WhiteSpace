@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using Supabase;
+using Newtonsoft.Json;
 
 namespace WhiteSpace.Pages
 {
@@ -63,7 +64,8 @@ namespace WhiteSpace.Pages
             // Добавляем загруженные фигуры на канвас
             foreach (var shape in shapes)
             {
-                if (shape.Type == "line") // Проверяем, если это линия
+                // Добавляем фигуры на доску
+                if (shape.Type == "line")
                 {
                     var polyline = new Polyline
                     {
@@ -75,7 +77,8 @@ namespace WhiteSpace.Pages
                     };
 
                     // Добавляем все точки из shape.Points
-                    foreach (var point in shape.Points)
+                    var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                    foreach (var point in points)
                     {
                         polyline.Points.Add(new Point(point.X, point.Y));
                     }
@@ -114,6 +117,8 @@ namespace WhiteSpace.Pages
 
                         // Добавляем на BoardCanvas
                         BoardCanvas.Children.Add(element);
+                        // Добавляем фигуру в коллекцию
+                        _shapesOnBoard.Add(shape);
                     }
                 }
             }
@@ -173,32 +178,34 @@ namespace WhiteSpace.Pages
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
 
-            // 1) Если клик по объекту — можно тянуть (в любом режиме, кроме Pen)
+            // 1) Если клик по объекту — начинаем перетаскивание (в режиме Hand)
             if (_tool == ToolMode.Hand)
             {
                 if (TryStartDragElement(e, world))
-                    return;
+                {
+                    return; // Если объект перетаскивается, не продолжаем панорамирование
+                }
 
-                // иначе — пан по пустому месту
+                // 2) Если не было клика по объекту — начинаем панорамирование доски
                 StartPan(screen);
                 return;
             }
 
-            // 2) Pen
+            // 3) Pen — Начало рисования
             if (_tool == ToolMode.Pen && e.LeftButton == MouseButtonState.Pressed)
             {
                 StartStroke(world);
                 return;
             }
 
-            // 3) Rect/Ellipse: клик фиксирует фигуру
+            // 4) Rect/Ellipse: клик фиксирует фигуру
             if ((_tool == ToolMode.Rect || _tool == ToolMode.Ellipse) && e.LeftButton == MouseButtonState.Pressed)
             {
                 PlaceShapeAt(world);
                 return;
             }
 
-            // 4) Text: клик ставит textbox
+            // 5) Text: клик ставит textbox
             if (_tool == ToolMode.Text && e.LeftButton == MouseButtonState.Pressed)
             {
                 PlaceTextAt(world);
@@ -218,12 +225,18 @@ namespace WhiteSpace.Pages
             if (_isDrawing && _currentStroke != null && e.LeftButton == MouseButtonState.Pressed)
             {
                 _currentStroke.Points.Add(world);  // Добавляем точку в линию
-                                                   // Сохраняем точку в BoardShape
+
+                // Сохраняем точку в BoardShape
                 var shape = _shapesOnBoard.Last();
-                shape.Points.Add(world);  // Добавляем точку в коллекцию точек линии
+                shape.DeserializedPoints.Add(world);  // Добавляем точку в коллекцию точек линии
+            }
+
+            // Перемещение перетаскиваемого объекта
+            if (_isDraggingElement)
+            {
+                MoveElementTo(world);  // Перемещаем элемент
             }
         }
-
 
         private void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
@@ -303,7 +316,7 @@ namespace WhiteSpace.Pages
                 Y = startWorld.Y,
                 Color = "black"
             };
-            shape.Points.Add(startWorld);  // Добавляем первую точку
+            shape.DeserializedPoints.Add(startWorld);  // Добавляем первую точку
 
             _shapesOnBoard.Add(shape);  // Добавляем фигуру (линию) в коллекцию
 
@@ -361,9 +374,12 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void PlaceShapeAt(Point world)
+        private async void PlaceShapeAt(Point world)
         {
-            // Создаем BoardShape, но не добавляем его на канвас сразу
+            // Генерируем уникальный id для новой фигуры
+            int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+
+            // Создаем BoardShape с уникальным id
             BoardShape shape = _tool switch
             {
                 ToolMode.Rect => new BoardShape
@@ -375,7 +391,8 @@ namespace WhiteSpace.Pages
                     Width = DefaultRectW,
                     Height = DefaultRectH,
                     Color = "black",
-                    Text = ""
+                    Text = "",
+                    Id = uniqueId // Устанавливаем уникальный Id
                 },
                 ToolMode.Ellipse => new BoardShape
                 {
@@ -386,7 +403,8 @@ namespace WhiteSpace.Pages
                     Width = DefaultEllipse,
                     Height = DefaultEllipse,
                     Color = "black",
-                    Text = ""
+                    Text = "",
+                    Id = uniqueId // Устанавливаем уникальный Id
                 },
                 _ => null
             };
@@ -404,7 +422,8 @@ namespace WhiteSpace.Pages
                         Height = shape.Height,
                         Stroke = Brushes.Black,
                         StrokeThickness = 2,
-                        Fill = Brushes.Transparent
+                        Fill = Brushes.Transparent,
+                        Uid = shape.Id.ToString() // Устанавливаем Id для элемента
                     },
                     "ellipse" => new Ellipse
                     {
@@ -412,7 +431,8 @@ namespace WhiteSpace.Pages
                         Height = shape.Height,
                         Stroke = Brushes.Black,
                         StrokeThickness = 2,
-                        Fill = Brushes.Transparent
+                        Fill = Brushes.Transparent,
+                        Uid = shape.Id.ToString() // Устанавливаем Id для элемента
                     },
                     _ => null
                 };
@@ -481,16 +501,19 @@ namespace WhiteSpace.Pages
         {
             if (_dragElement == null) return;
 
-            // Обновляем позицию фигуры в коллекции
-            var shape = _shapesOnBoard.FirstOrDefault(s => s.X == Canvas.GetLeft(_dragElement) && s.Y == Canvas.GetTop(_dragElement));
+            // Ищем фигуру по Id, который был установлен в BoardShape
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid); // Преобразуем Id в строку для корректного сравнения
+
             if (shape != null)
             {
-                shape.X = world.X - _dragOffsetWorld.X; // Обновляем координаты
+                // Обновляем координаты фигуры в коллекции
+                shape.X = world.X - _dragOffsetWorld.X;
                 shape.Y = world.Y - _dragOffsetWorld.Y;
-            }
 
-            Canvas.SetLeft(_dragElement, world.X - _dragOffsetWorld.X);
-            Canvas.SetTop(_dragElement, world.Y - _dragOffsetWorld.Y);
+                // Обновляем положение фигуры на канвасе
+                Canvas.SetLeft(_dragElement, world.X - _dragOffsetWorld.X);
+                Canvas.SetTop(_dragElement, world.Y - _dragOffsetWorld.Y);
+            }
         }
 
         // Метод для сохранения всех изменений на доске
@@ -498,10 +521,11 @@ namespace WhiteSpace.Pages
         {
             try
             {
-                // Проходим по всем фигурам и сохраняем их
+                // Проходим по всем фигурам на доске и сохраняем их
                 foreach (var shape in _shapesOnBoard)
                 {
-                    var result = await _supabaseService.SaveShapeAsync(_boardId, shape);
+                    // Для каждой фигуры проверяем, нужно ли её обновить или создать
+                    var result = await _supabaseService.SaveShapeAsync(shape);
 
                     if (!result)
                     {
@@ -517,5 +541,6 @@ namespace WhiteSpace.Pages
                 MessageBox.Show($"Ошибка при сохранении: {ex.Message}");
             }
         }
+
     }
 }
