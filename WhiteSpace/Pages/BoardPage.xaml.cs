@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -38,12 +39,18 @@ namespace WhiteSpace.Pages
         private bool _isDraggingElement;
         private UIElement _dragElement;
         private Point _dragOffsetWorld;
+        private Point _dragStartWorld;
+        private bool _wasTextEditingEnabled;
 
         public BoardPage(Guid boardId)
         {
             InitializeComponent();
             _boardId = boardId;
             _supabaseService = new SupabaseService();
+
+            // Добавляем обработчик для событий мыши на Canvas, чтобы перехватывать клики по TextBox
+            BoardCanvas.MouseDown += BoardCanvas_MouseDown;
+            BoardCanvas.PreviewMouseDown += BoardCanvas_PreviewMouseDown;
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
@@ -64,64 +71,182 @@ namespace WhiteSpace.Pages
             // Добавляем загруженные фигуры на канвас
             foreach (var shape in shapes)
             {
-                // Добавляем фигуры на доску
-                if (shape.Type == "line")
+                AddShapeToCanvas(shape);
+            }
+        }
+
+        private void AddShapeToCanvas(BoardShape shape)
+        {
+            if (shape.Type == "line")
+            {
+                var polyline = new Polyline
                 {
-                    var polyline = new Polyline
+                    Stroke = Brushes.Black,
+                    StrokeThickness = 2,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    Uid = shape.Id.ToString()
+                };
+
+                var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                foreach (var point in points)
+                {
+                    polyline.Points.Add(new Point(point.X, point.Y));
+                }
+
+                BoardCanvas.Children.Add(polyline);
+                _shapesOnBoard.Add(shape);
+            }
+            else if (shape.Type == "text")
+            {
+                var textBox = new TextBox
+                {
+                    Text = shape.Text,
+                    MinWidth = 120,
+                    FontSize = 16,
+                    Background = Brushes.Transparent,
+                    BorderBrush = Brushes.Black,
+                    BorderThickness = new Thickness(1),
+                    Uid = shape.Id.ToString(),
+                    IsReadOnly = false,
+                    Focusable = true
+                };
+
+                // Обработчики событий для TextBox
+                textBox.PreviewMouseDown += TextBox_PreviewMouseDown;
+                textBox.PreviewMouseUp += TextBox_PreviewMouseUp;
+                textBox.LostFocus += TextBox_LostFocus;
+                textBox.TextChanged += TextBox_TextChanged;
+
+                Canvas.SetLeft(textBox, shape.X);
+                Canvas.SetTop(textBox, shape.Y);
+
+                BoardCanvas.Children.Add(textBox);
+                _shapesOnBoard.Add(shape);
+            }
+            else
+            {
+                UIElement element = shape.Type switch
+                {
+                    "rectangle" => new Rectangle
                     {
+                        Width = shape.Width,
+                        Height = shape.Height,
                         Stroke = Brushes.Black,
                         StrokeThickness = 2,
-                        StrokeLineJoin = PenLineJoin.Round,
-                        StrokeStartLineCap = PenLineCap.Round,
-                        StrokeEndLineCap = PenLineCap.Round
-                    };
-
-                    // Добавляем все точки из shape.Points
-                    var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-                    foreach (var point in points)
+                        Fill = Brushes.Transparent,
+                        Uid = shape.Id.ToString()
+                    },
+                    "ellipse" => new Ellipse
                     {
-                        polyline.Points.Add(new Point(point.X, point.Y));
-                    }
+                        Width = shape.Width,
+                        Height = shape.Height,
+                        Stroke = Brushes.Black,
+                        StrokeThickness = 2,
+                        Fill = Brushes.Transparent,
+                        Uid = shape.Id.ToString()
+                    },
+                    _ => null
+                };
 
-                    // Добавляем polyline на BoardCanvas
-                    BoardCanvas.Children.Add(polyline);
-                }
-                else
+                if (element != null)
                 {
-                    UIElement element = shape.Type switch
-                    {
-                        "rectangle" => new Rectangle
-                        {
-                            Width = shape.Width,
-                            Height = shape.Height,
-                            Stroke = Brushes.Black,
-                            StrokeThickness = 2,
-                            Fill = Brushes.Transparent
-                        },
-                        "ellipse" => new Ellipse
-                        {
-                            Width = shape.Width,
-                            Height = shape.Height,
-                            Stroke = Brushes.Black,
-                            StrokeThickness = 2,
-                            Fill = Brushes.Transparent
-                        },
-                        _ => null
-                    };
+                    Canvas.SetLeft(element, shape.X - shape.Width / 2);
+                    Canvas.SetTop(element, shape.Y - shape.Height / 2);
 
-                    if (element != null)
-                    {
-                        // Проставляем координаты для фигур
-                        Canvas.SetLeft(element, shape.X - shape.Width / 2);
-                        Canvas.SetTop(element, shape.Y - shape.Height / 2);
-
-                        // Добавляем на BoardCanvas
-                        BoardCanvas.Children.Add(element);
-                        // Добавляем фигуру в коллекцию
-                        _shapesOnBoard.Add(shape);
-                    }
+                    BoardCanvas.Children.Add(element);
+                    _shapesOnBoard.Add(shape);
                 }
             }
+        }
+
+        // === Обработчики событий для TextBox ===
+        private void TextBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            var textBox = sender as TextBox;
+            if (textBox == null) return;
+
+            if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
+            {
+                // В режиме руки начинаем перетаскивание TextBox
+                var world = ScreenToWorld(e.GetPosition(Viewport));
+                _dragStartWorld = world;
+
+                // Запоминаем состояние редактирования
+                _wasTextEditingEnabled = !textBox.IsReadOnly;
+
+                // Временно блокируем редактирование для перетаскивания
+                textBox.IsReadOnly = true;
+                textBox.Cursor = Cursors.SizeAll;
+
+                // Начинаем перетаскивание
+                _isDraggingElement = true;
+                _dragElement = textBox;
+
+                double left = Canvas.GetLeft(textBox);
+                double top = Canvas.GetTop(textBox);
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
+
+                _dragOffsetWorld = new Point(world.X - left, world.Y - top);
+
+                Viewport.CaptureMouse();
+                e.Handled = true; // Предотвращаем дальнейшую обработку
+            }
+        }
+
+        private void TextBox_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+        {
+            var textBox = sender as TextBox;
+            if (textBox == null) return;
+
+            if (_isDraggingElement && _dragElement == textBox)
+            {
+                // Завершаем перетаскивание
+                _isDraggingElement = false;
+                _dragElement = null;
+
+                // Восстанавливаем возможность редактирования
+                textBox.IsReadOnly = false;
+                textBox.Cursor = Cursors.IBeam;
+
+                Viewport.ReleaseMouseCapture();
+
+                // Сохраняем позицию
+                SaveTextBoxPosition(textBox);
+                e.Handled = true;
+            }
+        }
+
+        private void TextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            var textBox = sender as TextBox;
+            if (textBox != null)
+            {
+                // Сохраняем текст при потере фокуса
+                SaveTextBoxText(textBox);
+            }
+        }
+
+        private void TextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            var textBox = sender as TextBox;
+            if (textBox != null && textBox.IsFocused)
+            {
+                // Можно добавить автосохранение или другие действия
+            }
+        }
+
+        private void BoardCanvas_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // Этот обработчик срабатывает до всех остальных
+            // Полезно для отладки
+        }
+
+        private void BoardCanvas_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // Этот обработчик может перехватывать события от элементов на Canvas
         }
 
         // === Инструменты ===
@@ -151,14 +276,43 @@ namespace WhiteSpace.Pages
                 EnsurePreviewShape();
             }
 
-            // Курсор
-            Cursor = _tool switch
+            // Курсор для Viewport
+            Viewport.Cursor = _tool switch
             {
                 ToolMode.Hand => Cursors.Hand,
                 ToolMode.Pen => Cursors.Pen,
                 ToolMode.Text => Cursors.IBeam,
                 _ => Cursors.Cross
             };
+
+            // Настройка TextBox в зависимости от режима
+            foreach (var child in BoardCanvas.Children)
+            {
+                if (child is TextBox textBox)
+                {
+                    if (_tool == ToolMode.Hand)
+                    {
+                        // В режиме руки можно перетаскивать, но не редактировать сразу
+                        textBox.IsReadOnly = true;
+                        textBox.Cursor = Cursors.Hand;
+                        textBox.Background = Brushes.Transparent;
+                    }
+                    else if (_tool == ToolMode.Text)
+                    {
+                        // В режиме текста можно редактировать
+                        textBox.IsReadOnly = false;
+                        textBox.Cursor = Cursors.IBeam;
+                        textBox.Background = Brushes.White;
+                    }
+                    else
+                    {
+                        // В других режимах блокируем всё
+                        textBox.IsReadOnly = true;
+                        textBox.Cursor = Cursors.Arrow;
+                        textBox.Background = Brushes.Transparent;
+                    }
+                }
+            }
         }
 
         // === Mouse helpers (Screen <-> World) ===
@@ -178,12 +332,44 @@ namespace WhiteSpace.Pages
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
 
+            // Если уже перетаскиваем элемент, не начинаем панорамирование
+            if (_isDraggingElement)
+                return;
+
             // 1) Если клик по объекту — начинаем перетаскивание (в режиме Hand)
             if (_tool == ToolMode.Hand)
             {
-                if (TryStartDragElement(e, world))
+                // Проверяем клик по не-TexBox элементам
+                var hitTestResult = VisualTreeHelper.HitTest(Viewport, screen);
+                if (hitTestResult != null)
                 {
-                    return; // Если объект перетаскивается, не продолжаем панорамирование
+                    var hitElement = hitTestResult.VisualHit;
+
+                    // Ищем родительский элемент
+                    while (hitElement != null && !(hitElement is UIElement))
+                        hitElement = VisualTreeHelper.GetParent(hitElement);
+
+                    var uiElement = hitElement as UIElement;
+
+                    if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
+                        !(uiElement is TextBox) && uiElement != _previewShape)
+                    {
+                        // Начинаем перетаскивание для не-TextBox элементов
+                        if (uiElement is Polyline || uiElement is Rectangle || uiElement is Ellipse)
+                        {
+                            _isDraggingElement = true;
+                            _dragElement = uiElement;
+
+                            double left = Canvas.GetLeft(uiElement);
+                            double top = Canvas.GetTop(uiElement);
+                            if (double.IsNaN(left)) left = 0;
+                            if (double.IsNaN(top)) top = 0;
+
+                            _dragOffsetWorld = new Point(world.X - left, world.Y - top);
+                            Viewport.CaptureMouse();
+                            return;
+                        }
+                    }
                 }
 
                 // 2) Если не было клика по объекту — начинаем панорамирование доски
@@ -208,9 +394,33 @@ namespace WhiteSpace.Pages
             // 5) Text: клик ставит textbox
             if (_tool == ToolMode.Text && e.LeftButton == MouseButtonState.Pressed)
             {
-                PlaceTextAt(world);
+                // Проверяем, не кликнули ли по существующему TextBox
+                var hitTestResult = VisualTreeHelper.HitTest(Viewport, screen);
+                if (hitTestResult != null && hitTestResult.VisualHit is TextBox)
+                {
+                    // Кликнули по существующему TextBox - фокусируемся на нём
+                    var textBox = FindParentTextBox(hitTestResult.VisualHit);
+                    if (textBox != null)
+                    {
+                        textBox.Focus();
+                        textBox.SelectAll();
+                    }
+                }
+                else
+                {
+                    // Кликнули на пустое место - создаём новый TextBox
+                    PlaceTextAt(world);
+                }
                 return;
             }
+        }
+
+        private TextBox FindParentTextBox(DependencyObject child)
+        {
+            while (child != null && !(child is TextBox))
+                child = VisualTreeHelper.GetParent(child);
+
+            return child as TextBox;
         }
 
         private void Viewport_MouseMove(object sender, MouseEventArgs e)
@@ -224,40 +434,151 @@ namespace WhiteSpace.Pages
             // Рисование линии
             if (_isDrawing && _currentStroke != null && e.LeftButton == MouseButtonState.Pressed)
             {
-                _currentStroke.Points.Add(world);  // Добавляем точку в линию
-
-                // Сохраняем точку в BoardShape
-                var shape = _shapesOnBoard.Last();
-                shape.DeserializedPoints.Add(world);  // Добавляем точку в коллекцию точек линии
+                _currentStroke.Points.Add(world);
+                var shape = _shapesOnBoard.Find(s => s.Id.ToString() == _currentStroke.Uid);
+                if (shape != null)
+                {
+                    shape.DeserializedPoints.Add(world);
+                }
             }
 
             // Перемещение перетаскиваемого объекта
-            if (_isDraggingElement)
+            if (_isDraggingElement && _dragElement != null)
             {
-                MoveElementTo(world);  // Перемещаем элемент
+                MoveElementTo(world);
+            }
+
+            // Панорамирование
+            if (_isPanning)
+            {
+                BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
+                BoardTranslate.Y = _panStartY + (screen.Y - _panStartScreen.Y);
             }
         }
 
         private void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
-            _isPanning = false;
-
-            if (_isDraggingElement)
+            // Завершаем перетаскивание не-TexBox элементов
+            if (_isDraggingElement && !(_dragElement is TextBox))
             {
+                if (_dragElement != null)
+                {
+                    SaveElementPosition(_dragElement);  // Сохраняем новое положение
+                }
                 _isDraggingElement = false;
                 _dragElement = null;
             }
 
+            // Для рисования (если фигура рисуется)
             if (_isDrawing)
             {
+                if (_currentStroke != null)
+                {
+                    var shape = _shapesOnBoard.Find(s => s.Id.ToString() == _currentStroke.Uid);
+                    if (shape != null)
+                    {
+                        shape.Points = JsonConvert.SerializeObject(_currentStroke.Points);
+                        _ = _supabaseService.SaveShapeAsync(shape);
+                    }
+                }
                 _isDrawing = false;
                 _currentStroke = null;
             }
 
+            _isPanning = false;
             Viewport.ReleaseMouseCapture();
         }
 
-        // Zoom относительно курсора
+
+        // === Перемещение элементов ===
+        private void MoveElementTo(Point world)
+        {
+            if (_dragElement == null) return;
+
+            double offsetX = world.X - _dragOffsetWorld.X;
+            double offsetY = world.Y - _dragOffsetWorld.Y;
+
+            // Перемещаем элемент на канвасе
+            Canvas.SetLeft(_dragElement, offsetX);
+            Canvas.SetTop(_dragElement, offsetY);
+
+            // Обновляем координаты в объекте BoardShape
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
+            if (shape != null)
+            {
+                shape.X = offsetX;
+                shape.Y = offsetY;
+
+                // Если это линия (Polyline), обновляем все точки
+                if (_dragElement is Polyline polyline)
+                {
+                    // Обновляем список точек для полилинии
+                    var newPoints = new List<Point>();
+                    foreach (var point in polyline.Points)
+                    {
+                        // Сдвигаем каждую точку с учетом новой позиции
+                        newPoints.Add(new Point(point.X + offsetX, point.Y + offsetY));
+                    }
+
+                    // Обновляем DeserializedPoints
+                    shape.DeserializedPoints = newPoints;
+
+                    // Сериализуем обновленные точки в строку JSON
+                    shape.Points = JsonConvert.SerializeObject(newPoints);
+                }
+            }
+        }
+
+        private async void SaveElementPosition(UIElement element)
+        {
+            var shape = _shapesOnBoard.Find(s => s.Id.ToString() == element.Uid);
+            if (shape != null)
+            {
+                // Если это текстовое поле, сохраняем координаты
+                if (element is TextBox textBox)
+                {
+                    shape.X = Canvas.GetLeft(textBox);
+                    shape.Y = Canvas.GetTop(textBox);
+                }
+                // Для других фигур (например, прямоугольников или эллипсов)
+                else if (element is Polyline polyline)
+                {
+                    shape.X = Canvas.GetLeft(element);
+                    shape.Y = Canvas.GetTop(element);
+                }
+                else if (element is Shape visualShape)
+                {
+                    shape.X = Canvas.GetLeft(element) + shape.Width / 2;
+                    shape.Y = Canvas.GetTop(element) + shape.Height / 2;
+                }
+
+                // Сохраняем в базу данных
+                await _supabaseService.SaveShapeAsync(shape);
+            }
+        }
+
+        private async void SaveTextBoxPosition(TextBox textBox)
+        {
+            var shape = _shapesOnBoard.Find(s => s.Id.ToString() == textBox.Uid);
+            if (shape != null)
+            {
+                shape.X = Canvas.GetLeft(textBox);
+                shape.Y = Canvas.GetTop(textBox);
+                await _supabaseService.SaveShapeAsync(shape);
+            }
+        }
+
+        private async void SaveTextBoxText(TextBox textBox)
+        {
+            var shape = _shapesOnBoard.Find(s => s.Id.ToString() == textBox.Uid);
+            if (shape != null)
+            {
+                shape.Text = textBox.Text;
+                await _supabaseService.SaveShapeAsync(shape);
+            }
+        }
+
+
         private void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
         {
             var screen = e.GetPosition(Viewport);
@@ -275,12 +596,10 @@ namespace WhiteSpace.Pages
 
             var after = ScreenToWorld(screen);
 
-            // Компенсируем, чтобы точка под курсором оставалась под курсором
             BoardTranslate.X += (after.X - before.X) * scale;
             BoardTranslate.Y += (after.Y - before.Y) * scale;
         }
 
-        // === Пан ===
         private void StartPan(Point screen)
         {
             _isPanning = true;
@@ -290,9 +609,7 @@ namespace WhiteSpace.Pages
             Viewport.CaptureMouse();
         }
 
-        // === Рисование ===
-        // Рисование линии (карандаш)
-        private void StartStroke(Point startWorld)
+        private async void StartStroke(Point startWorld)
         {
             _isDrawing = true;
 
@@ -307,23 +624,24 @@ namespace WhiteSpace.Pages
             _currentStroke.Points.Add(startWorld);
             BoardCanvas.Children.Add(_currentStroke);
 
-            // Сохраняем начальную точку линии в BoardShape
+            int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+            _currentStroke.Uid = uniqueId.ToString();
+
             var shape = new BoardShape
             {
                 BoardId = _boardId,
                 Type = "line",
                 X = startWorld.X,
                 Y = startWorld.Y,
-                Color = "black"
+                Color = "black",
+                Id = uniqueId
             };
-            shape.DeserializedPoints.Add(startWorld);  // Добавляем первую точку
+            shape.DeserializedPoints.Add(startWorld);
 
-            _shapesOnBoard.Add(shape);  // Добавляем фигуру (линию) в коллекцию
-
+            _shapesOnBoard.Add(shape);
             Viewport.CaptureMouse();
         }
 
-        // === Призрак фигуры ===
         private void EnsurePreviewShape()
         {
             if (_previewShape != null) return;
@@ -376,10 +694,8 @@ namespace WhiteSpace.Pages
 
         private async void PlaceShapeAt(Point world)
         {
-            // Генерируем уникальный id для новой фигуры
             int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
-            // Создаем BoardShape с уникальным id
             BoardShape shape = _tool switch
             {
                 ToolMode.Rect => new BoardShape
@@ -392,7 +708,7 @@ namespace WhiteSpace.Pages
                     Height = DefaultRectH,
                     Color = "black",
                     Text = "",
-                    Id = uniqueId // Устанавливаем уникальный Id
+                    Id = uniqueId
                 },
                 ToolMode.Ellipse => new BoardShape
                 {
@@ -404,16 +720,15 @@ namespace WhiteSpace.Pages
                     Height = DefaultEllipse,
                     Color = "black",
                     Text = "",
-                    Id = uniqueId // Устанавливаем уникальный Id
+                    Id = uniqueId
                 },
                 _ => null
             };
 
             if (shape != null)
             {
-                _shapesOnBoard.Add(shape);  // Добавляем фигуру в коллекцию
+                _shapesOnBoard.Add(shape);
 
-                // Создаем визуальный элемент для отображения на канвасе
                 UIElement element = shape.Type switch
                 {
                     "rectangle" => new Rectangle
@@ -423,7 +738,7 @@ namespace WhiteSpace.Pages
                         Stroke = Brushes.Black,
                         StrokeThickness = 2,
                         Fill = Brushes.Transparent,
-                        Uid = shape.Id.ToString() // Устанавливаем Id для элемента
+                        Uid = shape.Id.ToString()
                     },
                     "ellipse" => new Ellipse
                     {
@@ -432,7 +747,7 @@ namespace WhiteSpace.Pages
                         Stroke = Brushes.Black,
                         StrokeThickness = 2,
                         Fill = Brushes.Transparent,
-                        Uid = shape.Id.ToString() // Устанавливаем Id для элемента
+                        Uid = shape.Id.ToString()
                     },
                     _ => null
                 };
@@ -441,106 +756,57 @@ namespace WhiteSpace.Pages
                 {
                     Canvas.SetLeft(element, shape.X - shape.Width / 2);
                     Canvas.SetTop(element, shape.Y - shape.Height / 2);
-
-                    BoardCanvas.Children.Add(element);  // Добавляем визуальный элемент на канвас
+                    BoardCanvas.Children.Add(element);
+                    await _supabaseService.SaveShapeAsync(shape);
                 }
             }
         }
 
-        // === Текст ===
-        private void PlaceTextAt(Point world)
+        private async void PlaceTextAt(Point world)
         {
             var tb = new TextBox
             {
-                Text = "",
+                Text = "Текст",
                 MinWidth = 120,
                 FontSize = 16,
-                Background = Brushes.Transparent,
+                Background = Brushes.White,
                 BorderBrush = Brushes.Black,
-                BorderThickness = new Thickness(1)
+                BorderThickness = new Thickness(1),
+                IsReadOnly = false,
+                Focusable = true,
+                Cursor = Cursors.IBeam
             };
+
+            // Добавляем обработчики
+            tb.PreviewMouseDown += TextBox_PreviewMouseDown;
+            tb.PreviewMouseUp += TextBox_PreviewMouseUp;
+            tb.LostFocus += TextBox_LostFocus;
+            tb.TextChanged += TextBox_TextChanged;
 
             Canvas.SetLeft(tb, world.X);
             Canvas.SetTop(tb, world.Y);
-
             BoardCanvas.Children.Add(tb);
+
+            var uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+            tb.Uid = uniqueId.ToString();
+
+            var shape = new BoardShape
+            {
+                BoardId = _boardId,
+                Type = "text",
+                X = world.X,
+                Y = world.Y,
+                Width = 120,
+                Height = 30,
+                Text = tb.Text,
+                Id = uniqueId
+            };
+
+            _shapesOnBoard.Add(shape);
+            await _supabaseService.SaveShapeAsync(shape);
+
             tb.Focus();
+            tb.SelectAll();
         }
-
-        // === Выбор и перетаскивание объектов ===
-        private bool TryStartDragElement(MouseButtonEventArgs e, Point world)
-        {
-            DependencyObject src = (DependencyObject)e.OriginalSource;
-
-            while (src != null && src is not UIElement)
-                src = VisualTreeHelper.GetParent(src);
-
-            UIElement el = src as UIElement;
-
-            if (el == null || el == BoardCanvas || el == Viewport)
-                return false;
-
-            if (!BoardCanvas.Children.Contains(el))
-                return false;
-
-            _isDraggingElement = true;
-            _dragElement = el;
-
-            double left = Canvas.GetLeft(el);
-            double top = Canvas.GetTop(el);
-            if (double.IsNaN(left)) left = 0;
-            if (double.IsNaN(top)) top = 0;
-
-            _dragOffsetWorld = new Point(world.X - left, world.Y - top);
-
-            Viewport.CaptureMouse();
-            return true;
-        }
-
-        private void MoveElementTo(Point world)
-        {
-            if (_dragElement == null) return;
-
-            // Ищем фигуру по Id, который был установлен в BoardShape
-            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid); // Преобразуем Id в строку для корректного сравнения
-
-            if (shape != null)
-            {
-                // Обновляем координаты фигуры в коллекции
-                shape.X = world.X - _dragOffsetWorld.X;
-                shape.Y = world.Y - _dragOffsetWorld.Y;
-
-                // Обновляем положение фигуры на канвасе
-                Canvas.SetLeft(_dragElement, world.X - _dragOffsetWorld.X);
-                Canvas.SetTop(_dragElement, world.Y - _dragOffsetWorld.Y);
-            }
-        }
-
-        // Метод для сохранения всех изменений на доске
-        private async void SaveBoardChanges_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                // Проходим по всем фигурам на доске и сохраняем их
-                foreach (var shape in _shapesOnBoard)
-                {
-                    // Для каждой фигуры проверяем, нужно ли её обновить или создать
-                    var result = await _supabaseService.SaveShapeAsync(shape);
-
-                    if (!result)
-                    {
-                        MessageBox.Show("Ошибка при сохранении изменений.");
-                        return;
-                    }
-                }
-
-                MessageBox.Show("Все изменения успешно сохранены.");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка при сохранении: {ex.Message}");
-            }
-        }
-
     }
 }
