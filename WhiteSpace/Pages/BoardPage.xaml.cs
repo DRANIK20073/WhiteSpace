@@ -35,6 +35,14 @@ namespace WhiteSpace.Pages
         private const double DefaultRectH = 90;
         private const double DefaultEllipse = 100;
 
+        // Изменение размеров фигру
+        private bool _isResizing;
+        private UIElement _resizeTarget;
+        private Rectangle _resizeBorder;
+        private string _resizeDirection; // "nw", "n", "ne", "e", "se", "s", "sw", "w"
+        private Point _resizeStartWorld;
+        private double _startW, _startH, _startX, _startY;
+
         // Перетаскивание объектов
         private bool _isDraggingElement;
         private UIElement _dragElement;
@@ -454,6 +462,12 @@ namespace WhiteSpace.Pages
                 BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
                 BoardTranslate.Y = _panStartY + (screen.Y - _panStartScreen.Y);
             }
+
+            if (_isResizing && _resizeTarget != null)
+            {
+                ResizeElement(world);
+                return;
+            }
         }
 
         private void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
@@ -483,6 +497,13 @@ namespace WhiteSpace.Pages
                 }
                 _isDrawing = false;
                 _currentStroke = null;
+            }
+
+            if (_isResizing)
+            {
+                SaveResizedShape();
+                _isResizing = false;
+                Viewport.ReleaseMouseCapture();
             }
 
             _isPanning = false;
@@ -807,6 +828,196 @@ namespace WhiteSpace.Pages
 
             tb.Focus();
             tb.SelectAll();
+        }
+
+        //Ручки для изменения размеров фигуры
+        private void AddHandle(double x, double y, string dir)
+        {
+            var handle = new Rectangle
+            {
+                Width = 8,
+                Height = 8,
+                Fill = Brushes.White,
+                Stroke = Brushes.DodgerBlue,
+                StrokeThickness = 1,
+                Cursor = GetResizeCursor(dir),
+                Tag = dir
+            };
+
+            handle.MouseDown += ResizeHandle_MouseDown;
+
+            Canvas.SetLeft(handle, x - 4);
+            Canvas.SetTop(handle, y - 4);
+
+            BoardCanvas.Children.Add(handle);
+        }
+
+        private void AddResizeHandles(double x, double y, double w, double h)
+        {
+            AddHandle(x, y, "nw");
+            AddHandle(x + w / 2, y, "n");
+            AddHandle(x + w, y, "ne");
+
+            AddHandle(x + w, y + h / 2, "e");
+
+            AddHandle(x + w, y + h, "se");
+            AddHandle(x + w / 2, y + h, "s");
+            AddHandle(x, y + h, "sw");
+
+            AddHandle(x, y + h / 2, "w");
+        }
+
+        private void ShowResizeFrame(UIElement element)
+        {
+            RemoveResizeFrame();
+
+            _resizeTarget = element;
+
+            double left = Canvas.GetLeft(element);
+            double top = Canvas.GetTop(element);
+            double width = ((FrameworkElement)element).ActualWidth;
+            double height = ((FrameworkElement)element).ActualHeight;
+
+            _resizeBorder = new Rectangle
+            {
+                Width = width,
+                Height = height,
+                Stroke = Brushes.DodgerBlue,
+                StrokeThickness = 1,
+                StrokeDashArray = new DoubleCollection { 3, 2 },
+                IsHitTestVisible = false
+            };
+
+            Canvas.SetLeft(_resizeBorder, left);
+            Canvas.SetTop(_resizeBorder, top);
+
+            BoardCanvas.Children.Add(_resizeBorder);
+
+            AddResizeHandles(left, top, width, height);
+        }
+
+        private void RemoveResizeFrame()
+        {
+            if (_resizeBorder != null)
+            {
+                BoardCanvas.Children.Remove(_resizeBorder);
+                _resizeBorder = null;
+            }
+
+            // удаляем все хэндлы
+            var handles = BoardCanvas.Children
+                .OfType<Rectangle>()
+                .Where(r => r.Tag is string s && s.Length <= 2)
+                .ToList();
+
+            foreach (var h in handles)
+                BoardCanvas.Children.Remove(h);
+
+            _resizeTarget = null;
+        }
+
+        private Cursor GetResizeCursor(string dir)
+        {
+            return dir switch
+            {
+                "nw" or "se" => Cursors.SizeNWSE,
+                "ne" or "sw" => Cursors.SizeNESW,
+                "n" or "s" => Cursors.SizeNS,
+                "e" or "w" => Cursors.SizeWE,
+                _ => Cursors.Arrow
+            };
+        }
+
+        private void UpdateResizeFrame(double x, double y, double w, double h)
+        {
+            if (_resizeBorder == null) return;
+
+            _resizeBorder.Width = w;
+            _resizeBorder.Height = h;
+
+            Canvas.SetLeft(_resizeBorder, x);
+            Canvas.SetTop(_resizeBorder, y);
+
+            // пересоздаём хэндлы
+            var oldHandles = BoardCanvas.Children
+                .OfType<Rectangle>()
+                .Where(r => r.Tag is string s && s.Length <= 2)
+                .ToList();
+
+            foreach (var hnd in oldHandles)
+                BoardCanvas.Children.Remove(hnd);
+
+            AddResizeHandles(x, y, w, h);
+        }
+
+        private void ResizeHandle_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (_resizeTarget == null) return;
+
+            var handle = sender as FrameworkElement;
+            _resizeDirection = handle.Tag.ToString();
+            _isResizing = true;
+
+            var world = ScreenToWorld(e.GetPosition(Viewport));
+            _resizeStartWorld = world;
+
+            _startX = Canvas.GetLeft(_resizeTarget);
+            _startY = Canvas.GetTop(_resizeTarget);
+            _startW = ((FrameworkElement)_resizeTarget).ActualWidth;
+            _startH = ((FrameworkElement)_resizeTarget).ActualHeight;
+
+            Viewport.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void ResizeElement(Point world)
+        {
+            double dx = world.X - _resizeStartWorld.X;
+            double dy = world.Y - _resizeStartWorld.Y;
+
+            double newX = _startX;
+            double newY = _startY;
+            double newW = _startW;
+            double newH = _startH;
+
+            if (_resizeDirection.Contains("e")) newW += dx;
+            if (_resizeDirection.Contains("s")) newH += dy;
+            if (_resizeDirection.Contains("w"))
+            {
+                newW -= dx;
+                newX += dx;
+            }
+            if (_resizeDirection.Contains("n"))
+            {
+                newH -= dy;
+                newY += dy;
+            }
+
+            if (newW < 20 || newH < 20) return;
+
+            var fe = (FrameworkElement)_resizeTarget;
+            fe.Width = newW;
+            fe.Height = newH;
+
+            Canvas.SetLeft(fe, newX);
+            Canvas.SetTop(fe, newY);
+
+            UpdateResizeFrame(newX, newY, newW, newH);
+        }
+
+        private async void SaveResizedShape()
+        {
+            var shape = _shapesOnBoard
+                .FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+
+            if (shape == null) return;
+
+            shape.Width = ((FrameworkElement)_resizeTarget).ActualWidth;
+            shape.Height = ((FrameworkElement)_resizeTarget).ActualHeight;
+            shape.X = Canvas.GetLeft(_resizeTarget) + shape.Width / 2;
+            shape.Y = Canvas.GetTop(_resizeTarget) + shape.Height / 2;
+
+            await _supabaseService.SaveShapeAsync(shape);
         }
     }
 }
