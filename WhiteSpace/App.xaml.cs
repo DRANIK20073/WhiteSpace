@@ -9,35 +9,39 @@ namespace WhiteSpace
         {
             base.OnStartup(e);
 
-            // 1. Инициализация Supabase
             await SupabaseService.InitAsync();
 
-            // 2. Загружаем сохранённую сессию
             var session = SessionStorage.LoadSession();
 
-            // 3. Создаём окно, НО ПОКА НЕ ПОКАЗЫВАЕМ
             var window = new MainWindow();
             MainWindow = window;
 
-            if (session != null)
+            if (session != null &&
+                !string.IsNullOrWhiteSpace(session.RefreshToken))
             {
-                await SupabaseService.Client.Auth.SetSession(
-                    session.AccessToken,
-                    session.RefreshToken,
-                    false
-                );
-
-                if (SupabaseService.Client.Auth.CurrentUser != null)
+                try
                 {
-                    // 4️⃣ Навигация ДО Show()
-                    window.MainFrame.Navigate(new UserHomePage());
+                    await SupabaseService.Client.Auth.SetSession(
+                        session.AccessToken,
+                        session.RefreshToken,
+                        false
+                    );
 
-                    window.Show();
-                    return;
+                    if (SupabaseService.Client.Auth.CurrentUser != null)
+                    {
+                        window.MainFrame.Navigate(new UserHomePage());
+                        window.Show();
+                        return;
+                    }
+                }
+                catch (Supabase.Gotrue.Exceptions.GotrueException)
+                {
+                    // ⬇️ refresh token мёртв — это нормально
+                    SessionStorage.ClearSession();
+                    await SupabaseService.Client.Auth.SignOut();
                 }
             }
 
-            // если нет сессии
             window.MainFrame.Navigate(new LoginPage());
             window.Show();
         }
