@@ -20,6 +20,9 @@ namespace WhiteSpace.Pages
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
 
+        private bool _isCreatingShape = false;
+        private Dictionary<string, Point> _originalCorners;
+
         // Пан/камера
         private bool _isPanning;
         private Point _panStartScreen;
@@ -35,11 +38,11 @@ namespace WhiteSpace.Pages
         private const double DefaultRectH = 90;
         private const double DefaultEllipse = 100;
 
-        // Изменение размеров фигру
+        // Изменение размеров фигуры
         private bool _isResizing;
         private UIElement _resizeTarget;
         private Rectangle _resizeBorder;
-        private string _resizeDirection; // "nw", "n", "ne", "e", "se", "s", "sw", "w"
+        private string _resizeDirection;
         private Point _resizeStartWorld;
         private double _startW, _startH, _startX, _startY;
 
@@ -50,39 +53,43 @@ namespace WhiteSpace.Pages
         private Point _dragStartWorld;
         private bool _wasTextEditingEnabled;
 
+        // Словарь для хранения ручек изменения размера
+        private Dictionary<string, Rectangle> _resizeHandles = new Dictionary<string, Rectangle>();
+
         public BoardPage(Guid boardId)
         {
             InitializeComponent();
             _boardId = boardId;
             _supabaseService = new SupabaseService();
 
-            // Добавляем обработчик для событий мыши на Canvas, чтобы перехватывать клики по TextBox
-            BoardCanvas.MouseDown += BoardCanvas_MouseDown;
-            BoardCanvas.PreviewMouseDown += BoardCanvas_PreviewMouseDown;
+            // Добавляем обработчики событий для Viewport
+            Viewport.MouseDown += Viewport_MouseDown;
+            Viewport.MouseMove += Viewport_MouseMove;
+            Viewport.MouseUp += Viewport_MouseUp;
+            Viewport.MouseWheel += Viewport_MouseWheel;
+
+            Loaded += Page_Loaded;
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
-            // Центрируем доску
             var viewportCenter = new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2);
             var canvasCenter = new Point(BoardCanvas.Width / 2, BoardCanvas.Height / 2);
 
             BoardTranslate.X = viewportCenter.X - canvasCenter.X;
             BoardTranslate.Y = viewportCenter.Y - canvasCenter.Y;
 
-            // Устанавливаем начальный инструмент (например, "Рука")
             SetTool(ToolMode.Hand);
 
-            // Загружаем все фигуры с базы данных
             var shapes = await _supabaseService.LoadBoardShapesAsync(_boardId);
 
-            // Добавляем загруженные фигуры на канвас
             foreach (var shape in shapes)
             {
                 AddShapeToCanvas(shape);
             }
         }
 
+        //Загрузка фигур на доску из бд
         private void AddShapeToCanvas(BoardShape shape)
         {
             if (shape.Type == "line")
@@ -169,7 +176,7 @@ namespace WhiteSpace.Pages
             }
         }
 
-        // === Обработчики событий для TextBox ===
+        //Обработчики событий для TextBox
         private void TextBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
             var textBox = sender as TextBox;
@@ -177,18 +184,14 @@ namespace WhiteSpace.Pages
 
             if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
             {
-                // В режиме руки начинаем перетаскивание TextBox
                 var world = ScreenToWorld(e.GetPosition(Viewport));
                 _dragStartWorld = world;
 
-                // Запоминаем состояние редактирования
                 _wasTextEditingEnabled = !textBox.IsReadOnly;
 
-                // Временно блокируем редактирование для перетаскивания
                 textBox.IsReadOnly = true;
                 textBox.Cursor = Cursors.SizeAll;
 
-                // Начинаем перетаскивание
                 _isDraggingElement = true;
                 _dragElement = textBox;
 
@@ -200,7 +203,7 @@ namespace WhiteSpace.Pages
                 _dragOffsetWorld = new Point(world.X - left, world.Y - top);
 
                 Viewport.CaptureMouse();
-                e.Handled = true; // Предотвращаем дальнейшую обработку
+                e.Handled = true;
             }
         }
 
@@ -211,17 +214,14 @@ namespace WhiteSpace.Pages
 
             if (_isDraggingElement && _dragElement == textBox)
             {
-                // Завершаем перетаскивание
                 _isDraggingElement = false;
                 _dragElement = null;
 
-                // Восстанавливаем возможность редактирования
                 textBox.IsReadOnly = false;
                 textBox.Cursor = Cursors.IBeam;
 
                 Viewport.ReleaseMouseCapture();
 
-                // Сохраняем позицию
                 SaveTextBoxPosition(textBox);
                 e.Handled = true;
             }
@@ -232,32 +232,16 @@ namespace WhiteSpace.Pages
             var textBox = sender as TextBox;
             if (textBox != null)
             {
-                // Сохраняем текст при потере фокуса
                 SaveTextBoxText(textBox);
             }
         }
 
         private void TextBox_TextChanged(object sender, TextChangedEventArgs e)
         {
-            var textBox = sender as TextBox;
-            if (textBox != null && textBox.IsFocused)
-            {
-                // Можно добавить автосохранение или другие действия
-            }
+            // Автосохранение можно добавить при необходимости
         }
 
-        private void BoardCanvas_PreviewMouseDown(object sender, MouseButtonEventArgs e)
-        {
-            // Этот обработчик срабатывает до всех остальных
-            // Полезно для отладки
-        }
-
-        private void BoardCanvas_MouseDown(object sender, MouseButtonEventArgs e)
-        {
-            // Этот обработчик может перехватывать события от элементов на Canvas
-        }
-
-        // === Инструменты ===
+        //Инструменты
         private void Hand_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Hand);
         private void Pen_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Pen);
         private void Rect_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Rect);
@@ -274,6 +258,9 @@ namespace WhiteSpace.Pages
             _isPanning = false;
             _isDraggingElement = false;
             _dragElement = null;
+
+            // Убираем ручки и рамку
+            RemoveResizeFrame();
 
             // Убираем старую фигуру-призрак
             RemovePreviewShape();
@@ -300,21 +287,18 @@ namespace WhiteSpace.Pages
                 {
                     if (_tool == ToolMode.Hand)
                     {
-                        // В режиме руки можно перетаскивать, но не редактировать сразу
                         textBox.IsReadOnly = true;
                         textBox.Cursor = Cursors.Hand;
                         textBox.Background = Brushes.Transparent;
                     }
                     else if (_tool == ToolMode.Text)
                     {
-                        // В режиме текста можно редактировать
                         textBox.IsReadOnly = false;
                         textBox.Cursor = Cursors.IBeam;
                         textBox.Background = Brushes.White;
                     }
                     else
                     {
-                        // В других режимах блокируем всё
                         textBox.IsReadOnly = true;
                         textBox.Cursor = Cursors.Arrow;
                         textBox.Background = Brushes.Transparent;
@@ -336,6 +320,21 @@ namespace WhiteSpace.Pages
         // === Viewport events ===
         private void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            // Проверяем, не кликнули ли по ручке
+            var hitTestResult = VisualTreeHelper.HitTest(Viewport, e.GetPosition(Viewport));
+            if (hitTestResult != null)
+            {
+                var hitElement = hitTestResult.VisualHit;
+                while (hitElement != null && !(hitElement is Rectangle))
+                    hitElement = VisualTreeHelper.GetParent(hitElement);
+
+                // Если кликнули по ручке, не обрабатываем дальше
+                if (hitElement is Rectangle rect && rect.Tag is string tag && tag.Length <= 2)
+                {
+                    return;
+                }
+            }
+
             Viewport.Focus();
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
@@ -348,10 +347,10 @@ namespace WhiteSpace.Pages
             if (_tool == ToolMode.Hand)
             {
                 // Проверяем клик по не-TexBox элементам
-                var hitTestResult = VisualTreeHelper.HitTest(Viewport, screen);
-                if (hitTestResult != null)
+                var hitTestResult2 = VisualTreeHelper.HitTest(Viewport, screen);
+                if (hitTestResult2 != null)
                 {
-                    var hitElement = hitTestResult.VisualHit;
+                    var hitElement = hitTestResult2.VisualHit;
 
                     // Ищем родительский элемент
                     while (hitElement != null && !(hitElement is UIElement))
@@ -375,6 +374,11 @@ namespace WhiteSpace.Pages
 
                             _dragOffsetWorld = new Point(world.X - left, world.Y - top);
                             Viewport.CaptureMouse();
+
+                            // Показываем рамку для перемещаемого элемента
+                            ShowResizeFrame(uiElement);
+
+                            // ВАЖНО: Прерываем выполнение, чтобы не создавать новую фигуру
                             return;
                         }
                     }
@@ -389,6 +393,8 @@ namespace WhiteSpace.Pages
             if (_tool == ToolMode.Pen && e.LeftButton == MouseButtonState.Pressed)
             {
                 StartStroke(world);
+
+                // ВАЖНО: Прерываем выполнение
                 return;
             }
 
@@ -396,6 +402,8 @@ namespace WhiteSpace.Pages
             if ((_tool == ToolMode.Rect || _tool == ToolMode.Ellipse) && e.LeftButton == MouseButtonState.Pressed)
             {
                 PlaceShapeAt(world);
+
+                // ВАЖНО: Прерываем выполнение
                 return;
             }
 
@@ -403,11 +411,11 @@ namespace WhiteSpace.Pages
             if (_tool == ToolMode.Text && e.LeftButton == MouseButtonState.Pressed)
             {
                 // Проверяем, не кликнули ли по существующему TextBox
-                var hitTestResult = VisualTreeHelper.HitTest(Viewport, screen);
-                if (hitTestResult != null && hitTestResult.VisualHit is TextBox)
+                var hitTestResult3 = VisualTreeHelper.HitTest(Viewport, screen);
+                if (hitTestResult3 != null && hitTestResult3.VisualHit is TextBox)
                 {
                     // Кликнули по существующему TextBox - фокусируемся на нём
-                    var textBox = FindParentTextBox(hitTestResult.VisualHit);
+                    var textBox = FindParentTextBox(hitTestResult3.VisualHit);
                     if (textBox != null)
                     {
                         textBox.Focus();
@@ -419,7 +427,48 @@ namespace WhiteSpace.Pages
                     // Кликнули на пустое место - создаём новый TextBox
                     PlaceTextAt(world);
                 }
+
+                // ВАЖНО: Прерываем выполнение
                 return;
+            }
+        }
+
+        private void BoardCanvas_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // ПРОВЕРЯЕМ: Если мы в режиме создания фигур (не Hand), то блокируем обработку
+            if (_tool != ToolMode.Hand)
+            {
+                e.Handled = true; // Блокируем дальнейшую обработку
+                return;
+            }
+
+            // Только для режима Hand показываем рамку выделения
+            var screen = e.GetPosition(BoardCanvas);
+            var world = ScreenToWorld(screen);
+
+            var hitTestResult = VisualTreeHelper.HitTest(BoardCanvas, screen);
+            if (hitTestResult != null)
+            {
+                var hitElement = hitTestResult.VisualHit;
+
+                while (hitElement != null && !(hitElement is UIElement))
+                    hitElement = VisualTreeHelper.GetParent(hitElement);
+
+                var uiElement = hitElement as UIElement;
+
+                if (uiElement != null && uiElement != BoardCanvas)
+                {
+                    if (_tool == ToolMode.Hand)
+                    {
+                        if (uiElement is Shape || uiElement is TextBox)
+                        {
+                            ShowResizeFrame(uiElement);
+
+                            // Блокируем дальнейшую обработку, чтобы Viewport_MouseDown не создал новую фигуру
+                            e.Handled = true;
+                        }
+                    }
+                }
             }
         }
 
@@ -435,6 +484,13 @@ namespace WhiteSpace.Pages
         {
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
+
+            // Если изменяем размер - только обрабатываем ресайз
+            if (_isResizing && _resizeTarget != null)
+            {
+                ResizeElement(world);
+                return; // Выходим раньше
+            }
 
             // Призрак фигуры следует за мышью
             UpdatePreview(world);
@@ -462,22 +518,25 @@ namespace WhiteSpace.Pages
                 BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
                 BoardTranslate.Y = _panStartY + (screen.Y - _panStartScreen.Y);
             }
-
-            if (_isResizing && _resizeTarget != null)
-            {
-                ResizeElement(world);
-                return;
-            }
         }
 
         private void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
+            if (_isResizing)
+            {
+                SaveResizedShape();
+                _isResizing = false;
+                _resizeDirection = null;
+                Viewport.ReleaseMouseCapture();
+                return;
+            }
+
             // Завершаем перетаскивание не-TexBox элементов
             if (_isDraggingElement && !(_dragElement is TextBox))
             {
                 if (_dragElement != null)
                 {
-                    SaveElementPosition(_dragElement);  // Сохраняем новое положение
+                    SaveElementPosition(_dragElement);
                 }
                 _isDraggingElement = false;
                 _dragElement = null;
@@ -499,17 +558,9 @@ namespace WhiteSpace.Pages
                 _currentStroke = null;
             }
 
-            if (_isResizing)
-            {
-                SaveResizedShape();
-                _isResizing = false;
-                Viewport.ReleaseMouseCapture();
-            }
-
             _isPanning = false;
             Viewport.ReleaseMouseCapture();
         }
-
 
         // === Перемещение элементов ===
         private void MoveElementTo(Point world)
@@ -523,28 +574,73 @@ namespace WhiteSpace.Pages
             Canvas.SetLeft(_dragElement, offsetX);
             Canvas.SetTop(_dragElement, offsetY);
 
+            // Если элемент выделен, перемещаем и рамку с ручками
+            if (_resizeTarget == _dragElement && _resizeBorder != null)
+            {
+                // Обновляем рамку
+                Canvas.SetLeft(_resizeBorder, offsetX);
+                Canvas.SetTop(_resizeBorder, offsetY);
+
+                // Обновляем ручки
+                double width, height;
+
+                if (_dragElement is Polyline polyline)
+                {
+                    // Для линии вычисляем bounding box
+                    if (polyline.Points.Count > 0)
+                    {
+                        double minX = polyline.Points.Min(p => p.X);
+                        double maxX = polyline.Points.Max(p => p.X);
+                        double minY = polyline.Points.Min(p => p.Y);
+                        double maxY = polyline.Points.Max(p => p.Y);
+
+                        width = maxX - minX;
+                        height = maxY - minY;
+                    }
+                    else
+                    {
+                        width = 0;
+                        height = 0;
+                    }
+                }
+                else
+                {
+                    width = ((FrameworkElement)_dragElement).ActualWidth;
+                    height = ((FrameworkElement)_dragElement).ActualHeight;
+                }
+
+                UpdateResizeHandles(offsetX, offsetY, width, height);
+            }
+
+
             // Обновляем координаты в объекте BoardShape
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
             if (shape != null)
             {
-                shape.X = offsetX;
-                shape.Y = offsetY;
-
-                // Если это линия (Polyline), обновляем все точки
-                if (_dragElement is Polyline polyline)
+                // Для фигур (Rectangle, Ellipse) центрируем координаты
+                if (_dragElement is Shape visualShape)
                 {
-                    // Обновляем список точек для полилинии
+                    shape.X = offsetX + shape.Width / 2;
+                    shape.Y = offsetY + shape.Height / 2;
+                }
+                // Для TextBox используем верхний левый угол
+                else if (_dragElement is TextBox textBox)
+                {
+                    shape.X = offsetX;
+                    shape.Y = offsetY;
+                }
+                // Для Polyline обновляем все точки
+                else if (_dragElement is Polyline polyline)
+                {
+                    shape.X = offsetX;
+                    shape.Y = offsetY;
+
                     var newPoints = new List<Point>();
                     foreach (var point in polyline.Points)
                     {
-                        // Сдвигаем каждую точку с учетом новой позиции
                         newPoints.Add(new Point(point.X + offsetX, point.Y + offsetY));
                     }
-
-                    // Обновляем DeserializedPoints
                     shape.DeserializedPoints = newPoints;
-
-                    // Сериализуем обновленные точки в строку JSON
                     shape.Points = JsonConvert.SerializeObject(newPoints);
                 }
             }
@@ -715,76 +811,90 @@ namespace WhiteSpace.Pages
 
         private async void PlaceShapeAt(Point world)
         {
-            int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+            if (_isCreatingShape) return; // Защита от повторного создания
 
-            BoardShape shape = _tool switch
+            _isCreatingShape = true;
+            try
             {
-                ToolMode.Rect => new BoardShape
-                {
-                    BoardId = _boardId,
-                    Type = "rectangle",
-                    X = world.X,
-                    Y = world.Y,
-                    Width = DefaultRectW,
-                    Height = DefaultRectH,
-                    Color = "black",
-                    Text = "",
-                    Id = uniqueId
-                },
-                ToolMode.Ellipse => new BoardShape
-                {
-                    BoardId = _boardId,
-                    Type = "ellipse",
-                    X = world.X,
-                    Y = world.Y,
-                    Width = DefaultEllipse,
-                    Height = DefaultEllipse,
-                    Color = "black",
-                    Text = "",
-                    Id = uniqueId
-                },
-                _ => null
-            };
+                int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
-            if (shape != null)
-            {
-                _shapesOnBoard.Add(shape);
-
-                UIElement element = shape.Type switch
+                BoardShape shape = _tool switch
                 {
-                    "rectangle" => new Rectangle
+                    ToolMode.Rect => new BoardShape
                     {
-                        Width = shape.Width,
-                        Height = shape.Height,
-                        Stroke = Brushes.Black,
-                        StrokeThickness = 2,
-                        Fill = Brushes.Transparent,
-                        Uid = shape.Id.ToString()
+                        BoardId = _boardId,
+                        Type = "rectangle",
+                        X = world.X,
+                        Y = world.Y,
+                        Width = DefaultRectW,
+                        Height = DefaultRectH,
+                        Color = "black",
+                        Text = "",
+                        Id = uniqueId
                     },
-                    "ellipse" => new Ellipse
+                    ToolMode.Ellipse => new BoardShape
                     {
-                        Width = shape.Width,
-                        Height = shape.Height,
-                        Stroke = Brushes.Black,
-                        StrokeThickness = 2,
-                        Fill = Brushes.Transparent,
-                        Uid = shape.Id.ToString()
+                        BoardId = _boardId,
+                        Type = "ellipse",
+                        X = world.X,
+                        Y = world.Y,
+                        Width = DefaultEllipse,
+                        Height = DefaultEllipse,
+                        Color = "black",
+                        Text = "",
+                        Id = uniqueId
                     },
                     _ => null
                 };
 
-                if (element != null)
+                if (shape != null)
                 {
-                    Canvas.SetLeft(element, shape.X - shape.Width / 2);
-                    Canvas.SetTop(element, shape.Y - shape.Height / 2);
-                    BoardCanvas.Children.Add(element);
-                    await _supabaseService.SaveShapeAsync(shape);
+                    _shapesOnBoard.Add(shape);
+
+                    UIElement element = shape.Type switch
+                    {
+                        "rectangle" => new Rectangle
+                        {
+                            Width = shape.Width,
+                            Height = shape.Height,
+                            Stroke = Brushes.Black,
+                            StrokeThickness = 2,
+                            Fill = Brushes.Transparent,
+                            Uid = shape.Id.ToString()
+                        },
+                        "ellipse" => new Ellipse
+                        {
+                            Width = shape.Width,
+                            Height = shape.Height,
+                            Stroke = Brushes.Black,
+                            StrokeThickness = 2,
+                            Fill = Brushes.Transparent,
+                            Uid = shape.Id.ToString()
+                        },
+                        _ => null
+                    };
+
+                    if (element != null)
+                    {
+                        Canvas.SetLeft(element, shape.X - shape.Width / 2);
+                        Canvas.SetTop(element, shape.Y - shape.Height / 2);
+                        BoardCanvas.Children.Add(element);
+                        await _supabaseService.SaveShapeAsync(shape);
+                    }
                 }
+            }
+            finally
+            {
+                _isCreatingShape = false;
             }
         }
 
         private async void PlaceTextAt(Point world)
         {
+            if (_isCreatingShape) return; // Защита от повторного создания
+
+            _isCreatingShape = true;
+
             var tb = new TextBox
             {
                 Text = "Текст",
@@ -828,44 +938,11 @@ namespace WhiteSpace.Pages
 
             tb.Focus();
             tb.SelectAll();
+
+            _isCreatingShape = false;
         }
 
-        //Ручки для изменения размеров фигуры
-        private void AddHandle(double x, double y, string dir)
-        {
-            var handle = new Rectangle
-            {
-                Width = 8,
-                Height = 8,
-                Fill = Brushes.White,
-                Stroke = Brushes.DodgerBlue,
-                StrokeThickness = 1,
-                Cursor = GetResizeCursor(dir),
-                Tag = dir
-            };
-
-            handle.MouseDown += ResizeHandle_MouseDown;
-
-            Canvas.SetLeft(handle, x - 4);
-            Canvas.SetTop(handle, y - 4);
-
-            BoardCanvas.Children.Add(handle);
-        }
-
-        private void AddResizeHandles(double x, double y, double w, double h)
-        {
-            AddHandle(x, y, "nw");
-            AddHandle(x + w / 2, y, "n");
-            AddHandle(x + w, y, "ne");
-
-            AddHandle(x + w, y + h / 2, "e");
-
-            AddHandle(x + w, y + h, "se");
-            AddHandle(x + w / 2, y + h, "s");
-            AddHandle(x, y + h, "sw");
-
-            AddHandle(x, y + h / 2, "w");
-        }
+        // ===== РУЧКИ ИЗМЕНЕНИЯ РАЗМЕРА =====
 
         private void ShowResizeFrame(UIElement element)
         {
@@ -873,11 +950,49 @@ namespace WhiteSpace.Pages
 
             _resizeTarget = element;
 
-            double left = Canvas.GetLeft(element);
-            double top = Canvas.GetTop(element);
-            double width = ((FrameworkElement)element).ActualWidth;
-            double height = ((FrameworkElement)element).ActualHeight;
+            double left, top, width, height;
 
+            if (element is Polyline polyline)
+            {
+                // Для линии вычисляем bounding box
+                if (polyline.Points.Count > 0)
+                {
+                    double minX = polyline.Points.Min(p => p.X);
+                    double maxX = polyline.Points.Max(p => p.X);
+                    double minY = polyline.Points.Min(p => p.Y);
+                    double maxY = polyline.Points.Max(p => p.Y);
+
+                    left = minX;
+                    top = minY;
+                    width = Math.Max(maxX - minX, 1); // Убедимся, что ширина хотя бы 1
+                    height = Math.Max(maxY - minY, 1); // Убедимся, что высота хотя бы 1
+                }
+                else
+                {
+                    left = Canvas.GetLeft(element);
+                    top = Canvas.GetTop(element);
+                    width = 1;
+                    height = 1;
+                }
+            }
+            else
+            {
+                // Для других элементов
+                left = Canvas.GetLeft(element);
+                top = Canvas.GetTop(element);
+                width = ((FrameworkElement)element).ActualWidth;
+                height = ((FrameworkElement)element).ActualHeight;
+
+                // Убедимся, что размеры не слишком маленькие
+                if (width < 1) width = 1;
+                if (height < 1) height = 1;
+            }
+
+            // Если значения NaN, используем 0
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+
+            // Создаем рамку выделения
             _resizeBorder = new Rectangle
             {
                 Width = width,
@@ -893,7 +1008,8 @@ namespace WhiteSpace.Pages
 
             BoardCanvas.Children.Add(_resizeBorder);
 
-            AddResizeHandles(left, top, width, height);
+            // Создаем ручки
+            CreateResizeHandles(left, top, width, height);
         }
 
         private void RemoveResizeFrame()
@@ -904,16 +1020,112 @@ namespace WhiteSpace.Pages
                 _resizeBorder = null;
             }
 
-            // удаляем все хэндлы
-            var handles = BoardCanvas.Children
-                .OfType<Rectangle>()
-                .Where(r => r.Tag is string s && s.Length <= 2)
-                .ToList();
-
-            foreach (var h in handles)
-                BoardCanvas.Children.Remove(h);
-
+            // Удаляем все ручки
+            RemoveAllHandles();
             _resizeTarget = null;
+        }
+
+        private void RemoveAllHandles()
+        {
+            foreach (var handle in _resizeHandles.Values.ToList())
+            {
+                if (handle != null)
+                {
+                    handle.MouseDown -= ResizeHandle_MouseDown;
+                    BoardCanvas.Children.Remove(handle);
+                }
+            }
+            _resizeHandles.Clear();
+        }
+
+        private void CreateResizeHandles(double x, double y, double w, double h)
+        {
+            RemoveAllHandles();
+
+            // Позиции для 8 ручек
+            var handlePositions = new Dictionary<string, (double X, double Y)>
+            {
+                { "nw", (x, y) },
+                { "n", (x + w / 2, y) },
+                { "ne", (x + w, y) },
+                { "e", (x + w, y + h / 2) },
+                { "se", (x + w, y + h) },
+                { "s", (x + w / 2, y + h) },
+                { "sw", (x, y + h) },
+                { "w", (x, y + h / 2) }
+            };
+
+            foreach (var kvp in handlePositions)
+            {
+                var handle = CreateHandle(kvp.Key, kvp.Value.X, kvp.Value.Y);
+                _resizeHandles[kvp.Key] = handle;
+                BoardCanvas.Children.Add(handle);
+            }
+        }
+
+        private void UpdateResizeFrame(double x, double y, double w, double h)
+        {
+            if (_resizeBorder == null) return;
+
+            // Обновляем рамку
+            _resizeBorder.Width = w;
+            _resizeBorder.Height = h;
+            Canvas.SetLeft(_resizeBorder, x);
+            Canvas.SetTop(_resizeBorder, y);
+
+            // Обновляем позиции ручек
+            UpdateResizeHandles(x, y, w, h);
+        }
+
+        private void UpdateResizeHandles(double x, double y, double w, double h)
+        {
+            if (_resizeHandles.Count == 0) return;
+
+            var handlePositions = new Dictionary<string, (double X, double Y)>
+            {
+                { "nw", (x, y) },
+                { "n", (x + w / 2, y) },
+                { "ne", (x + w, y) },
+                { "e", (x + w, y + h / 2) },
+                { "se", (x + w, y + h) },
+                { "s", (x + w / 2, y + h) },
+                { "sw", (x, y + h) },
+                { "w", (x, y + h / 2) }
+            };
+
+            foreach (var kvp in handlePositions)
+            {
+                if (_resizeHandles.TryGetValue(kvp.Key, out var handle))
+                {
+                    // Центрируем ручку относительно точки
+                    Canvas.SetLeft(handle, kvp.Value.X - 4);
+                    Canvas.SetTop(handle, kvp.Value.Y - 4);
+                }
+            }
+        }
+
+        private Rectangle CreateHandle(string direction, double x, double y)
+        {
+            var handle = new Rectangle
+            {
+                Width = 8,
+                Height = 8,
+                Fill = Brushes.White,
+                Stroke = Brushes.DodgerBlue,
+                StrokeThickness = 1,
+                Cursor = GetResizeCursor(direction),
+                Tag = direction,
+                IsHitTestVisible = true
+            };
+
+            // Центрируем ручку относительно точки
+            Canvas.SetLeft(handle, x - 4);
+            Canvas.SetTop(handle, y - 4);
+
+            // Обработчик для перетаскивания
+            handle.MouseDown += ResizeHandle_MouseDown;
+
+            return handle;
         }
 
         private Cursor GetResizeCursor(string dir)
@@ -928,43 +1140,58 @@ namespace WhiteSpace.Pages
             };
         }
 
-        private void UpdateResizeFrame(double x, double y, double w, double h)
-        {
-            if (_resizeBorder == null) return;
-
-            _resizeBorder.Width = w;
-            _resizeBorder.Height = h;
-
-            Canvas.SetLeft(_resizeBorder, x);
-            Canvas.SetTop(_resizeBorder, y);
-
-            // пересоздаём хэндлы
-            var oldHandles = BoardCanvas.Children
-                .OfType<Rectangle>()
-                .Where(r => r.Tag is string s && s.Length <= 2)
-                .ToList();
-
-            foreach (var hnd in oldHandles)
-                BoardCanvas.Children.Remove(hnd);
-
-            AddResizeHandles(x, y, w, h);
-        }
-
         private void ResizeHandle_MouseDown(object sender, MouseButtonEventArgs e)
         {
             if (_resizeTarget == null) return;
 
-            var handle = sender as FrameworkElement;
+            var handle = sender as Rectangle;
+            if (handle == null) return;
+
             _resizeDirection = handle.Tag.ToString();
             _isResizing = true;
 
-            var world = ScreenToWorld(e.GetPosition(Viewport));
-            _resizeStartWorld = world;
+            // Используем позицию мыши относительно Viewport
+            var screenPos = e.GetPosition(Viewport);
+            _resizeStartWorld = ScreenToWorld(screenPos);
 
-            _startX = Canvas.GetLeft(_resizeTarget);
-            _startY = Canvas.GetTop(_resizeTarget);
-            _startW = ((FrameworkElement)_resizeTarget).ActualWidth;
-            _startH = ((FrameworkElement)_resizeTarget).ActualHeight;
+            if (_resizeTarget is Polyline polyline)
+            {
+                // Для линии вычисляем bounding box и запоминаем точку, за которую тянем
+                if (polyline.Points.Count > 0)
+                {
+                    // Получаем текущий bounding box
+                    double minX = polyline.Points.Min(p => p.X);
+                    double maxX = polyline.Points.Max(p => p.X);
+                    double minY = polyline.Points.Min(p => p.Y);
+                    double maxY = polyline.Points.Max(p => p.Y);
+
+                    // Запоминаем не только размеры, но и положение
+                    _startX = minX;
+                    _startY = minY;
+                    _startW = Math.Max(maxX - minX, 0.1); // Минимум 0.1
+                    _startH = Math.Max(maxY - minY, 0.1);
+
+                    // Запоминаем координаты углов
+                    _originalCorners = new Dictionary<string, Point>
+            {
+                { "nw", new Point(minX, minY) },
+                { "ne", new Point(maxX, minY) },
+                { "sw", new Point(minX, maxY) },
+                { "se", new Point(maxX, maxY) }
+            };
+                }
+            }
+            else
+            {
+                // Для других элементов
+                _startX = Canvas.GetLeft(_resizeTarget);
+                _startY = Canvas.GetTop(_resizeTarget);
+                _startW = ((FrameworkElement)_resizeTarget).ActualWidth;
+                _startH = ((FrameworkElement)_resizeTarget).ActualHeight;
+
+                if (double.IsNaN(_startX)) _startX = 0;
+                if (double.IsNaN(_startY)) _startY = 0;
+            }
 
             Viewport.CaptureMouse();
             e.Handled = true;
@@ -972,6 +1199,9 @@ namespace WhiteSpace.Pages
 
         private void ResizeElement(Point world)
         {
+            if (_resizeTarget == null || string.IsNullOrEmpty(_resizeDirection)) return;
+
+            // Просто используем разницу в мировых координатах
             double dx = world.X - _resizeStartWorld.X;
             double dy = world.Y - _resizeStartWorld.Y;
 
@@ -980,42 +1210,132 @@ namespace WhiteSpace.Pages
             double newW = _startW;
             double newH = _startH;
 
-            if (_resizeDirection.Contains("e")) newW += dx;
-            if (_resizeDirection.Contains("s")) newH += dy;
+            // Прямое изменение размеров - 1:1 с движением мыши
+            if (_resizeDirection.Contains("e"))
+            {
+                newW = Math.Max(1, _startW + dx);
+            }
+            if (_resizeDirection.Contains("s"))
+            {
+                newH = Math.Max(1, _startH + dy);
+            }
             if (_resizeDirection.Contains("w"))
             {
-                newW -= dx;
-                newX += dx;
+                double delta = dx;
+                newW = Math.Max(1, _startW - delta);
+                newX = _startX + delta;
             }
             if (_resizeDirection.Contains("n"))
             {
-                newH -= dy;
-                newY += dy;
+                double delta = dy;
+                newH = Math.Max(1, _startH - delta);
+                newY = _startY + delta;
             }
 
-            if (newW < 20 || newH < 20) return;
+            // Применяем изменения к фигуре
+            if (_resizeTarget is Polyline polyline)
+            {
+                // Для линии используем правильное масштабирование
+                ResizePolyline(polyline, newX, newY, newW, newH);
+            }
+            else
+            {
+                // Для других фигур (Rectangle, Ellipse)
+                var fe = (FrameworkElement)_resizeTarget;
+                fe.Width = newW;
+                fe.Height = newH;
+                Canvas.SetLeft(fe, newX);
+                Canvas.SetTop(fe, newY);
+            }
 
-            var fe = (FrameworkElement)_resizeTarget;
-            fe.Width = newW;
-            fe.Height = newH;
-
-            Canvas.SetLeft(fe, newX);
-            Canvas.SetTop(fe, newY);
-
+            // Обновляем рамку и ручки
             UpdateResizeFrame(newX, newY, newW, newH);
+        }
+
+        private void ResizePolyline(Polyline polyline, double newX, double newY, double newW, double newH)
+        {
+            if (polyline == null || polyline.Points.Count == 0 || _originalCorners == null) return;
+
+            // Определяем, какой угол изменяется
+            string cornerKey = "";
+            if (_resizeDirection.Contains("n") && _resizeDirection.Contains("w")) cornerKey = "nw";
+            else if (_resizeDirection.Contains("n") && _resizeDirection.Contains("e")) cornerKey = "ne";
+            else if (_resizeDirection.Contains("s") && _resizeDirection.Contains("w")) cornerKey = "sw";
+            else if (_resizeDirection.Contains("s") && _resizeDirection.Contains("e")) cornerKey = "se";
+            else if (_resizeDirection.Contains("n")) cornerKey = "n";
+            else if (_resizeDirection.Contains("s")) cornerKey = "s";
+            else if (_resizeDirection.Contains("w")) cornerKey = "w";
+            else if (_resizeDirection.Contains("e")) cornerKey = "e";
+
+            if (string.IsNullOrEmpty(cornerKey)) return;
+
+            // Получаем текущие границы
+            double currentMinX = polyline.Points.Min(p => p.X);
+            double currentMaxX = polyline.Points.Max(p => p.X);
+            double currentMinY = polyline.Points.Min(p => p.Y);
+            double currentMaxY = polyline.Points.Max(p => p.Y);
+
+            double currentWidth = currentMaxX - currentMinX;
+            double currentHeight = currentMaxY - currentMinY;
+
+            if (currentWidth <= 0) currentWidth = 0.1;
+            if (currentHeight <= 0) currentHeight = 0.1;
+
+            // Создаем новые точки
+            PointCollection newPoints = new PointCollection();
+
+            foreach (var point in polyline.Points)
+            {
+                // Нормализуем координату точки (0-1)
+                double normalizedX = (point.X - currentMinX) / currentWidth;
+                double normalizedY = (point.Y - currentMinY) / currentHeight;
+
+                // Преобразуем в новые координаты
+                double newPointX = newX + normalizedX * newW;
+                double newPointY = newY + normalizedY * newH;
+
+                newPoints.Add(new Point(newPointX, newPointY));
+            }
+
+            // Обновляем точки
+            polyline.Points = newPoints;
         }
 
         private async void SaveResizedShape()
         {
-            var shape = _shapesOnBoard
-                .FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (_resizeTarget == null) return;
 
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
             if (shape == null) return;
 
-            shape.Width = ((FrameworkElement)_resizeTarget).ActualWidth;
-            shape.Height = ((FrameworkElement)_resizeTarget).ActualHeight;
-            shape.X = Canvas.GetLeft(_resizeTarget) + shape.Width / 2;
-            shape.Y = Canvas.GetTop(_resizeTarget) + shape.Height / 2;
+            if (_resizeTarget is Polyline polyline)
+            {
+                // Для линии сохраняем все точки
+                shape.DeserializedPoints = new List<Point>(polyline.Points);
+                shape.Points = JsonConvert.SerializeObject(polyline.Points);
+
+                // Вычисляем новые границы
+                if (polyline.Points.Count > 0)
+                {
+                    double minX = polyline.Points.Min(p => p.X);
+                    double maxX = polyline.Points.Max(p => p.X);
+                    double minY = polyline.Points.Min(p => p.Y);
+                    double maxY = polyline.Points.Max(p => p.Y);
+
+                    shape.X = (minX + maxX) / 2;
+                    shape.Y = (minY + maxY) / 2;
+                    shape.Width = maxX - minX;
+                    shape.Height = maxY - minY;
+                }
+            }
+            else
+            {
+                // Для других фигур
+                shape.Width = ((FrameworkElement)_resizeTarget).ActualWidth;
+                shape.Height = ((FrameworkElement)_resizeTarget).ActualHeight;
+                shape.X = Canvas.GetLeft(_resizeTarget) + shape.Width / 2;
+                shape.Y = Canvas.GetTop(_resizeTarget) + shape.Height / 2;
+            }
 
             await _supabaseService.SaveShapeAsync(shape);
         }
