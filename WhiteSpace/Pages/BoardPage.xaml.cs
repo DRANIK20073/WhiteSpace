@@ -32,6 +32,10 @@ namespace WhiteSpace.Pages
         private bool _isDrawing;
         private Polyline _currentStroke;
 
+        //Выбор цвета
+        private Brush _currentBrush = Brushes.Black;
+        private string _currentColorString = "black";
+
         // Призрак фигуры
         private Shape _previewShape;
         private const double DefaultRectW = 140;
@@ -49,6 +53,7 @@ namespace WhiteSpace.Pages
         // Перетаскивание объектов
         private bool _isDraggingElement;
         private UIElement _dragElement;
+        private UIElement _selectedElement;
         private Point _dragOffsetWorld;
         private Point _dragStartWorld;
         private bool _wasTextEditingEnabled;
@@ -92,11 +97,26 @@ namespace WhiteSpace.Pages
         //Загрузка фигур на доску из бд
         private void AddShapeToCanvas(BoardShape shape)
         {
+            // Получаем цвет из shape.Color
+            Brush brush = Brushes.Black;
+
+            if (!string.IsNullOrEmpty(shape.Color))
+            {
+                try
+                {
+                    brush = (Brush)new BrushConverter().ConvertFromString(shape.Color);
+                }
+                catch
+                {
+                    brush = Brushes.Black;
+                }
+            }
+
             if (shape.Type == "line")
             {
                 var polyline = new Polyline
                 {
-                    Stroke = Brushes.Black,
+                    Stroke = brush,   // ✅ используем сохранённый цвет
                     StrokeThickness = 2,
                     StrokeLineJoin = PenLineJoin.Round,
                     StrokeStartLineCap = PenLineCap.Round,
@@ -105,6 +125,7 @@ namespace WhiteSpace.Pages
                 };
 
                 var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+
                 foreach (var point in points)
                 {
                     polyline.Points.Add(new Point(point.X, point.Y));
@@ -123,12 +144,12 @@ namespace WhiteSpace.Pages
                     Background = Brushes.Transparent,
                     BorderBrush = Brushes.Black,
                     BorderThickness = new Thickness(1),
+                    Foreground = brush,  // ✅ цвет текста
                     Uid = shape.Id.ToString(),
                     IsReadOnly = false,
                     Focusable = true
                 };
 
-                // Обработчики событий для TextBox
                 textBox.PreviewMouseDown += TextBox_PreviewMouseDown;
                 textBox.PreviewMouseUp += TextBox_PreviewMouseUp;
                 textBox.LostFocus += TextBox_LostFocus;
@@ -148,7 +169,7 @@ namespace WhiteSpace.Pages
                     {
                         Width = shape.Width,
                         Height = shape.Height,
-                        Stroke = Brushes.Black,
+                        Stroke = brush,      // ✅ цвет фигуры
                         StrokeThickness = 2,
                         Fill = Brushes.Transparent,
                         Uid = shape.Id.ToString()
@@ -157,7 +178,7 @@ namespace WhiteSpace.Pages
                     {
                         Width = shape.Width,
                         Height = shape.Height,
-                        Stroke = Brushes.Black,
+                        Stroke = brush,      // ✅
                         StrokeThickness = 2,
                         Fill = Brushes.Transparent,
                         Uid = shape.Id.ToString()
@@ -175,6 +196,7 @@ namespace WhiteSpace.Pages
                 }
             }
         }
+
 
         //Обработчики событий для TextBox
         private void TextBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -252,7 +274,28 @@ namespace WhiteSpace.Pages
         {
             _tool = tool;
 
-            // Сброс состояний
+            // ===== Панель цветов =====
+            if (_tool == ToolMode.Pen ||
+                _tool == ToolMode.Rect ||
+                _tool == ToolMode.Ellipse ||
+                _tool == ToolMode.Text)
+            {
+                ColorPanel.Visibility = Visibility.Visible;
+            }
+            else if (_tool == ToolMode.Hand)
+            {
+                // В режиме перемещения показываем только если есть выделение
+                ColorPanel.Visibility =
+                    _selectedElement != null
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+            else
+            {
+                ColorPanel.Visibility = Visibility.Collapsed;
+            }
+
+            // ===== Сброс состояний =====
             _isDrawing = false;
             _currentStroke = null;
             _isPanning = false;
@@ -271,7 +314,7 @@ namespace WhiteSpace.Pages
                 EnsurePreviewShape();
             }
 
-            // Курсор для Viewport
+            // ===== Курсор =====
             Viewport.Cursor = _tool switch
             {
                 ToolMode.Hand => Cursors.Hand,
@@ -280,7 +323,7 @@ namespace WhiteSpace.Pages
                 _ => Cursors.Cross
             };
 
-            // Настройка TextBox в зависимости от режима
+            // ===== Настройка существующих TextBox =====
             foreach (var child in BoardCanvas.Children)
             {
                 if (child is TextBox textBox)
@@ -732,12 +775,13 @@ namespace WhiteSpace.Pages
 
             _currentStroke = new Polyline
             {
-                Stroke = Brushes.Black,
+                Stroke = _currentBrush,              // ✅ выбранный цвет
                 StrokeThickness = 2,
                 StrokeLineJoin = PenLineJoin.Round,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round
             };
+
             _currentStroke.Points.Add(startWorld);
             BoardCanvas.Children.Add(_currentStroke);
 
@@ -750,9 +794,10 @@ namespace WhiteSpace.Pages
                 Type = "line",
                 X = startWorld.X,
                 Y = startWorld.Y,
-                Color = "black",
+                Color = _currentColorString,   // ✅ сохраняем цвет
                 Id = uniqueId
             };
+
             shape.DeserializedPoints.Add(startWorld);
 
             _shapesOnBoard.Add(shape);
@@ -811,7 +856,7 @@ namespace WhiteSpace.Pages
 
         private async void PlaceShapeAt(Point world)
         {
-            if (_isCreatingShape) return; // Защита от повторного создания
+            if (_isCreatingShape) return;
 
             _isCreatingShape = true;
             try
@@ -828,7 +873,7 @@ namespace WhiteSpace.Pages
                         Y = world.Y,
                         Width = DefaultRectW,
                         Height = DefaultRectH,
-                        Color = "black",
+                        Color = _currentColorString,   // ✅ сохраняем выбранный цвет
                         Text = "",
                         Id = uniqueId
                     },
@@ -840,7 +885,7 @@ namespace WhiteSpace.Pages
                         Y = world.Y,
                         Width = DefaultEllipse,
                         Height = DefaultEllipse,
-                        Color = "black",
+                        Color = _currentColorString,   // ✅
                         Text = "",
                         Id = uniqueId
                     },
@@ -857,7 +902,7 @@ namespace WhiteSpace.Pages
                         {
                             Width = shape.Width,
                             Height = shape.Height,
-                            Stroke = Brushes.Black,
+                            Stroke = _currentBrush,     // ✅ используем выбранный цвет
                             StrokeThickness = 2,
                             Fill = Brushes.Transparent,
                             Uid = shape.Id.ToString()
@@ -866,7 +911,7 @@ namespace WhiteSpace.Pages
                         {
                             Width = shape.Width,
                             Height = shape.Height,
-                            Stroke = Brushes.Black,
+                            Stroke = _currentBrush,     // ✅
                             StrokeThickness = 2,
                             Fill = Brushes.Transparent,
                             Uid = shape.Id.ToString()
@@ -878,8 +923,11 @@ namespace WhiteSpace.Pages
                     {
                         Canvas.SetLeft(element, shape.X - shape.Width / 2);
                         Canvas.SetTop(element, shape.Y - shape.Height / 2);
+
                         BoardCanvas.Children.Add(element);
                         await _supabaseService.SaveShapeAsync(shape);
+                        ResetToolColorToDefault();
+
                     }
                 }
             }
@@ -891,7 +939,7 @@ namespace WhiteSpace.Pages
 
         private async void PlaceTextAt(Point world)
         {
-            if (_isCreatingShape) return; // Защита от повторного создания
+            if (_isCreatingShape) return;
 
             _isCreatingShape = true;
 
@@ -903,12 +951,12 @@ namespace WhiteSpace.Pages
                 Background = Brushes.White,
                 BorderBrush = Brushes.Black,
                 BorderThickness = new Thickness(1),
+                Foreground = _currentBrush,   // ✅ цвет текста
                 IsReadOnly = false,
                 Focusable = true,
                 Cursor = Cursors.IBeam
             };
 
-            // Добавляем обработчики
             tb.PreviewMouseDown += TextBox_PreviewMouseDown;
             tb.PreviewMouseUp += TextBox_PreviewMouseUp;
             tb.LostFocus += TextBox_LostFocus;
@@ -930,11 +978,13 @@ namespace WhiteSpace.Pages
                 Width = 120,
                 Height = 30,
                 Text = tb.Text,
+                Color = _currentColorString,   // ✅ сохраняем цвет
                 Id = uniqueId
             };
 
             _shapesOnBoard.Add(shape);
             await _supabaseService.SaveShapeAsync(shape);
+            ResetToolColorToDefault();
 
             tb.Focus();
             tb.SelectAll();
@@ -947,6 +997,7 @@ namespace WhiteSpace.Pages
         private void ShowResizeFrame(UIElement element)
         {
             RemoveResizeFrame();
+            ColorPanel.Visibility = Visibility.Visible;
 
             _resizeTarget = element;
 
@@ -1023,6 +1074,7 @@ namespace WhiteSpace.Pages
             // Удаляем все ручки
             RemoveAllHandles();
             _resizeTarget = null;
+            ColorPanel.Visibility = Visibility.Collapsed;
         }
 
         private void RemoveAllHandles()
@@ -1339,5 +1391,55 @@ namespace WhiteSpace.Pages
 
             await _supabaseService.SaveShapeAsync(shape);
         }
+        private async void Color_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn)
+            {
+                var selectedBrush = btn.Background;
+                var selectedColorString = btn.Background.ToString();
+
+                // Если есть выделенная фигура — меняем только её цвет
+                if (_resizeTarget != null)
+                {
+                    await ApplyColorToElement(_resizeTarget, selectedBrush, selectedColorString);
+                }
+                else
+                {
+                    // Иначе меняем цвет инструмента
+                    _currentBrush = selectedBrush;
+                    _currentColorString = selectedColorString;
+                }
+            }
+        }
+        private async Task ApplyColorToElement(
+            UIElement element,
+            Brush brush,
+            string colorString)
+        {
+            if (element is Shape shapeElement)
+                shapeElement.Stroke = brush;
+
+            else if (element is Polyline polyline)
+                polyline.Stroke = brush;
+
+            else if (element is TextBox tb)
+                tb.Foreground = brush;
+
+            var shape = _shapesOnBoard
+                .FirstOrDefault(s => s.Id.ToString() == element.Uid);
+
+            if (shape != null)
+            {
+                shape.Color = colorString;
+                await _supabaseService.SaveShapeAsync(shape);
+            }
+        }
+        private void ResetToolColorToDefault()
+        {
+            _currentBrush = Brushes.Black;
+            _currentColorString = Brushes.Black.ToString();
+        }
+
+
     }
 }
