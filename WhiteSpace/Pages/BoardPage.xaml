@@ -19,10 +19,8 @@
                   MouseUp="Viewport_MouseUp"
                   MouseWheel="Viewport_MouseWheel">
 
-                <!-- Без сетки, только однотонный фон -->
                 <Grid.Background>
                     <SolidColorBrush Color="#FFFFFF"/>
-                    <!-- Белый фон, можно заменить на любой другой -->
                 </Grid.Background>
 
                 <!-- Большой Canvas (условно бесконечный) -->
@@ -40,14 +38,15 @@
         <!-- Панель инструментов снизу -->
         <Border Grid.Row="1" Background="White" Padding="10" BorderBrush="#22000000" BorderThickness="1">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                <Button Content="🖐 Рука" Width="90" Margin="4" Click="Hand_Click"/>
-                <Button Content="✏ Карандаш" Width="110" Margin="4" Click="Pen_Click"/>
-                <Button Content="⬛ Прямоуг." Width="110" Margin="4" Click="Rect_Click"/>
-                <Button Content="🔵 Круг" Width="90" Margin="4" Click="Ellipse_Click"/>
-                <Button Content="🅣 Текст" Width="90" Margin="4" Click="Text_Click"/>
+                <Button x:Name="HandButton" Content="🖐 Рука" Width="90" Margin="4" Click="Hand_Click"/>
+                <Button x:Name="PenButton" Content="✏ Карандаш" Width="110" Margin="4" Click="Pen_Click"/>
+                <Button x:Name="RectButton" Content="⬛ Прямоуг." Width="110" Margin="4" Click="Rect_Click"/>
+                <Button x:Name="EllipseButton" Content="🔵 Круг" Width="90" Margin="4" Click="Ellipse_Click"/>
+                <Button x:Name="TextButton" Content="🅣 Текст" Width="90" Margin="4" Click="Text_Click"/>
             </StackPanel>
         </Border>
 
+        <!-- Панель цветов -->
         <StackPanel x:Name="ColorPanel"
             Orientation="Horizontal"
             Visibility="Collapsed"

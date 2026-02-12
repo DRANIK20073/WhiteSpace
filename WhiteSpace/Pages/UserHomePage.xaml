@@ -28,9 +28,10 @@
                 Click="CreateBoard_Click"/>
 
             <Button Content="🔗 Подключиться по коду"
-                Width="220"
-                Height="40"
-                Margin="10,0,0,0"/>
+                    Width="220"
+                    Height="40"
+                    Margin="10,0,0,0"
+                    Click="JoinByCode_Click"/>
 
             <Button Content="🚪 Выход"
             Width="180"

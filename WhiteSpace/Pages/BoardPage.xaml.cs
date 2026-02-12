@@ -17,6 +17,8 @@ namespace WhiteSpace.Pages
         private readonly Guid _boardId;
         private SupabaseService _supabaseService;
 
+
+
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
 
@@ -86,6 +88,15 @@ namespace WhiteSpace.Pages
 
             SetTool(ToolMode.Hand);
 
+            // Получаем роль пользователя
+            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+
+            // Если роль "viewer", ограничиваем возможности
+            if (userRole == "viewer")
+            {
+                DisableEditingTools();  // Отключаем все инструменты редактирования
+            }
+
             var shapes = await _supabaseService.LoadBoardShapesAsync(_boardId);
 
             foreach (var shape in shapes)
@@ -93,6 +104,17 @@ namespace WhiteSpace.Pages
                 AddShapeToCanvas(shape);
             }
         }
+
+        private void DisableEditingTools()
+        {
+            // Отключаем инструменты рисования и редактирования
+            PenButton.IsEnabled = false;
+            RectButton.IsEnabled = false;
+            EllipseButton.IsEnabled = false;
+            TextButton.IsEnabled = false;
+            ColorPanel.Visibility = Visibility.Collapsed;  // Скрываем панель выбора цвета
+        }
+
 
         //Загрузка фигур на доску из бд
         private void AddShapeToCanvas(BoardShape shape)
@@ -361,8 +383,19 @@ namespace WhiteSpace.Pages
         }
 
         // === Viewport events ===
-        private void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
+        private async void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+            if (userRole == "viewer")
+            {
+                // Режим только просмотра — никаких изменений, только панорамирование
+                if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
+                {
+                    StartPan(e.GetPosition(Viewport));
+                }
+                return;
+            }
+
             // Проверяем, не кликнули ли по ручке
             var hitTestResult = VisualTreeHelper.HitTest(Viewport, e.GetPosition(Viewport));
             if (hitTestResult != null)

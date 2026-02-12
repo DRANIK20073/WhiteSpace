@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Linq;
 using System.Windows.Controls;
 
 namespace WhiteSpace.Pages
@@ -57,8 +58,8 @@ namespace WhiteSpace.Pages
         private async void LoadBoards()
         {
             var service = new SupabaseService();
-            var boards = await service.GetBoardsAsync();
-            Boards = boards;
+            var boardsWithRoles = await service.GetAllAccessibleBoardsWithRoleAsync();
+            Boards = boardsWithRoles.Select(x => x.Board).ToList();
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -115,6 +116,32 @@ namespace WhiteSpace.Pages
             SupabaseService.Client.Auth.SignOut();
 
             this.NavigationService.Navigate(new LoginPage());
+        }
+
+        private async void JoinByCode_Click(object sender, RoutedEventArgs e)
+        {
+            string accessCode = Microsoft.VisualBasic.Interaction.InputBox(
+                "Введите код доступа к доске:",
+                "Подключение по коду",
+                "",
+                -1, -1);
+
+            if (string.IsNullOrWhiteSpace(accessCode))
+            {
+                MessageBox.Show("Код доступа не может быть пустым.");
+                return;
+            }
+
+            accessCode = accessCode.Trim().ToUpperInvariant();
+
+            var service = new SupabaseService();
+            var board = await service.JoinBoardAsync(accessCode); // ← теперь вызывает правильный метод из сервиса
+
+            if (board != null)
+            {
+                MessageBox.Show($"✅ Вы успешно присоединились к доске \"{board.Title}\".");
+                LoadBoards(); // обновить список
+            }
         }
 
     }

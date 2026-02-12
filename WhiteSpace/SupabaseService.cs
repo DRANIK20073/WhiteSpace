@@ -1,5 +1,6 @@
 ﻿using Supabase;
 using System.Windows;
+using System.Threading.Tasks;
 using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
 using System.Text.RegularExpressions;
@@ -14,7 +15,7 @@ using Microsoft.IdentityModel.Tokens;
 public class SupabaseService
 {
     private static Client _client;
-
+    
     public static Client Client => _client;
 
     public static async Task InitAsync()
@@ -22,7 +23,7 @@ public class SupabaseService
         var url = "https://ceqnfiznaanuzojjgdcs.supabase.co";  //URL Supabase
         var key = "sb_publishable_GpGetyC36F_fZ2rLWEgSBg_UJ7ptd9G";  //ключ
 
-        _client = new Client(url, key); 
+        _client = new Client(url, key);
         await _client.InitializeAsync();
     }
 
@@ -242,6 +243,31 @@ public class SupabaseService
         }
     }
 
+    // Метод для получения роли пользователя на доске
+    public async Task<string> GetUserRoleForBoardAsync(Guid boardId)
+    {
+        try
+        {
+            var user = _client.Auth.CurrentUser;
+            if (user == null) return null;
+
+            var userId = Guid.Parse(user.Id);
+
+            // Получаем роль пользователя для доски, используя метод Get()
+            var memberships = await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId && m.UserId == userId)
+                .Get();
+
+            var membership = memberships.Models?.FirstOrDefault();  // Получаем первый элемент, если он есть
+            return membership?.Role;  // Возвращаем роль пользователя (например, "viewer", "editor")
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при получении роли пользователя: {ex.Message}");
+            return null;
+        }
+    }
+
     //Профиль текущего пользователя
     public async Task<Profile?> GetMyProfileAsync()
     {
@@ -315,30 +341,48 @@ public class SupabaseService
     }
 
     //Получить список досок
-    public async Task<List<Board>> GetBoardsAsync()
+    public async Task<List<(Board Board, string Role)>> GetAllAccessibleBoardsWithRoleAsync()
     {
+        var result = new List<(Board, string)>();
         try
         {
             var user = _client.Auth.CurrentUser;
-            if (user == null)
-            {
-                MessageBox.Show("Пользователь не авторизован.");
-                return new List<Board>();
-            }
+            if (user == null) return result;
 
             var userId = Guid.Parse(user.Id);
 
-            var result = await _client.From<Board>()
+            // 1. Свои доски (владелец)
+            var ownedBoards = await _client.From<Board>()
                 .Where(b => b.OwnerId == userId)
                 .Get();
+            if (ownedBoards.Models != null)
+            {
+                foreach (var board in ownedBoards.Models)
+                    result.Add((board, "owner"));
+            }
 
-            return result.Models?.ToList() ?? new List<Board>();
+            // 2. Доски, где пользователь участник
+            var memberships = await _client.From<BoardMember>()
+                .Where(m => m.UserId == userId)
+                .Get();
+
+            if (memberships.Models != null)
+            {
+                foreach (var member in memberships.Models)
+                {
+                    var board = await _client.From<Board>()
+                        .Where(b => b.Id == member.BoardId)
+                        .Single();
+                    if (board != null)
+                        result.Add((board, member.Role));
+                }
+            }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при получении досок: {ex.Message}");
-            return new List<Board>();
+            MessageBox.Show($"Ошибка получения досок: {ex.Message}");
         }
+        return result;
     }
 
     //Сохранить изменения на доске
@@ -446,5 +490,149 @@ public class SupabaseService
         return newId;
     }
 
-}
+    // Присоединение к доске по коду доступа (роль по умолчанию "viewer")
+    public async Task<Board> JoinBoardAsync(string accessCode)
+    {
+        try
+        {
+            var user = _client.Auth.CurrentUser;
+            if (user == null)
+            {
+                MessageBox.Show("Пользователь не авторизован.");
+                return null;
+            }
 
+            var boardResult = await _client.From<Board>()
+                .Where(b => b.AccessCode == accessCode)
+                .Single();
+
+            if (boardResult == null)
+            {
+                MessageBox.Show("Доска с таким кодом не найдена.");
+                return null;
+            }
+
+            var boardId = boardResult.Id;
+            var userId = Guid.Parse(user.Id);
+
+            // Владелец уже имеет доступ
+            if (boardResult.OwnerId == userId)
+            {
+                MessageBox.Show("Вы владелец этой доски.");
+                return boardResult;
+            }
+
+            // Проверяем, не участник ли уже (без исключения!)
+            var existingMember = await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId && m.UserId == userId)
+                .Single();
+
+            if (existingMember != null)
+            {
+                MessageBox.Show("Вы уже присоединились к этой доске.");
+                return boardResult;
+            }
+
+            // Добавляем с ролью "viewer"
+            var newMember = new BoardMember
+            {
+                BoardId = boardId,
+                UserId = userId,
+                Role = "viewer",
+                JoinedAt = DateTime.UtcNow
+            };
+
+            var insertResult = await _client.From<BoardMember>().Insert(newMember);
+
+            if (insertResult.Models?.Count > 0)
+            {
+                MessageBox.Show($"✅ Вы успешно присоединились к доске \"{boardResult.Title}\" (режим просмотра).");
+                return boardResult;
+            }
+            else
+            {
+                MessageBox.Show("❌ Не удалось добавить запись в таблицу участников. Проверьте политики RLS.");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"❌ Ошибка присоединения к доске: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Проверка прав редактирования доски для текущего пользователя
+    public async Task<bool> CanEditBoardAsync(Guid boardId)
+    {
+        try
+        {
+            var user = _client.Auth.CurrentUser;
+            if (user == null) return false;
+
+            var userId = Guid.Parse(user.Id);
+
+            // Владелец может редактировать
+            var board = await _client.From<Board>()
+                .Where(b => b.Id == boardId)
+                .Single();
+            if (board != null && board.OwnerId == userId)
+                return true;
+
+            // Проверяем роль в board_members
+            var member = await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId && m.UserId == userId)
+                .Single();
+
+            return member != null && member.Role == "editor";
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // (Опционально) Изменение роли участника (только для владельца)
+    public async Task<bool> UpdateBoardMemberRoleAsync(Guid boardId, Guid userId, string newRole)
+    {
+        try
+        {
+            var currentUser = _client.Auth.CurrentUser;
+            if (currentUser == null) return false;
+
+            var currentUserId = Guid.Parse(currentUser.Id);
+
+            // Проверяем, что текущий пользователь — владелец доски
+            var board = await _client.From<Board>()
+                .Where(b => b.Id == boardId && b.OwnerId == currentUserId)
+                .Single();
+
+            if (board == null)
+            {
+                MessageBox.Show("Только владелец может изменять права участников.");
+                return false;
+            }
+
+            var member = await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId && m.UserId == userId)
+                .Single();
+
+            if (member == null)
+            {
+                MessageBox.Show("Пользователь не является участником этой доски.");
+                return false;
+            }
+
+            member.Role = newRole;
+            var updateResult = await _client.From<BoardMember>().Update(member);
+
+            return updateResult.Models?.Any() == true;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка изменения роли: {ex.Message}");
+            return false;
+        }
+    }
+
+}
