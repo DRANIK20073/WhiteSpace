@@ -14,14 +14,22 @@ using Microsoft.IdentityModel.Tokens;
 
 public class SupabaseService
 {
+
     private static Client _client;
-    
     public static Client Client => _client;
+
+    // Добавляем публичные статические свойства для URL и ключа
+    public static string SupabaseUrl { get; private set; }
+    public static string SupabaseKey { get; private set; }
 
     public static async Task InitAsync()
     {
-        var url = "https://ceqnfiznaanuzojjgdcs.supabase.co";  //URL Supabase
-        var key = "sb_publishable_GpGetyC36F_fZ2rLWEgSBg_UJ7ptd9G";  //ключ
+        var url = "https://ceqnfiznaanuzojjgdcs.supabase.co";
+        var key = "sb_publishable_GpGetyC36F_fZ2rLWEgSBg_UJ7ptd9G";
+
+        // Сохраняем их в свойствах
+        SupabaseUrl = url;
+        SupabaseKey = key;
 
         _client = new Client(url, key);
         await _client.InitializeAsync();
@@ -205,6 +213,18 @@ public class SupabaseService
             MessageBox.Show($"Неизвестная ошибка: {ex.Message}");
             return false;
         }
+    }
+
+    //Получение токена сессии пользователя
+    public static string GetSessionToken()
+    {
+        var session = _client.Auth.CurrentSession;
+        if (session == null)
+        {
+            MessageBox.Show("Пользователь не авторизован.");
+            return null;
+        }
+        return session.AccessToken;  // Токен сессии
     }
 
     //Получить текущего пользователя (отобразить имя)
@@ -634,5 +654,7 @@ public class SupabaseService
             return false;
         }
     }
+
+
 
 }

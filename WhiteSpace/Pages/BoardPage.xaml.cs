@@ -8,6 +8,8 @@ using System.Windows.Media;
 using System.Windows.Shapes;
 using Supabase;
 using Newtonsoft.Json;
+using System.Linq;
+using System.Windows.Threading;
 
 namespace WhiteSpace.Pages
 {
@@ -76,6 +78,7 @@ namespace WhiteSpace.Pages
             Viewport.MouseWheel += Viewport_MouseWheel;
 
             Loaded += Page_Loaded;
+            Unloaded += Page_Unloaded;
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
@@ -102,6 +105,122 @@ namespace WhiteSpace.Pages
             foreach (var shape in shapes)
             {
                 AddShapeToCanvas(shape);
+            }
+
+            await ConnectToRealtime();
+        }
+
+        private void Page_Unloaded(object sender, RoutedEventArgs e)
+        {
+            SupabaseRealtimeService.Disconnect();
+        }
+
+        private async Task ConnectToRealtime()
+        {
+            try
+            {
+                await SupabaseRealtimeService.ConnectAndSubscribe(
+                    SupabaseService.SupabaseUrl,
+                    SupabaseService.SupabaseKey,
+                    _boardId,
+                    OnShapeInserted,
+                    OnShapeUpdated,
+                    OnShapeDeleted
+                );
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка подключения к Realtime: {ex.Message}");
+            }
+        }
+
+        private void OnShapeInserted(BoardShape shape)
+        {
+            if (_shapesOnBoard.Any(s => s.Id == shape.Id))
+                return;
+
+            AddShapeToCanvas(shape); // уже существующий метод
+        }
+
+        private void OnShapeUpdated(BoardShape updatedShape)
+        {
+            var existingElement = BoardCanvas.Children
+                .OfType<UIElement>()
+                .FirstOrDefault(el => el.Uid == updatedShape.Id.ToString());
+
+            if (existingElement != null)
+            {
+                // Обновляем свойства
+                if (existingElement is Shape shapeElement)
+                {
+                    shapeElement.Stroke = GetBrushFromColor(updatedShape.Color);
+                    shapeElement.Width = updatedShape.Width;
+                    shapeElement.Height = updatedShape.Height;
+                    Canvas.SetLeft(shapeElement, updatedShape.X - updatedShape.Width / 2);
+                    Canvas.SetTop(shapeElement, updatedShape.Y - updatedShape.Height / 2);
+                }
+                else if (existingElement is Polyline polyline)
+                {
+                    polyline.Stroke = GetBrushFromColor(updatedShape.Color);
+                    if (!string.IsNullOrEmpty(updatedShape.Points))
+                    {
+                        var points = JsonConvert.DeserializeObject<List<Point>>(updatedShape.Points);
+                        polyline.Points.Clear();
+                        foreach (var p in points) polyline.Points.Add(p);
+                    }
+                }
+                else if (existingElement is TextBox textBox)
+                {
+                    textBox.Foreground = GetBrushFromColor(updatedShape.Color);
+                    textBox.Text = updatedShape.Text;
+                    Canvas.SetLeft(textBox, updatedShape.X);
+                    Canvas.SetTop(textBox, updatedShape.Y);
+                }
+
+                // Обновляем данные в _shapesOnBoard
+                var shapeInList = _shapesOnBoard.FirstOrDefault(s => s.Id == updatedShape.Id);
+                if (shapeInList != null)
+                {
+                    shapeInList.X = updatedShape.X;
+                    shapeInList.Y = updatedShape.Y;
+                    shapeInList.Width = updatedShape.Width;
+                    shapeInList.Height = updatedShape.Height;
+                    shapeInList.Color = updatedShape.Color;
+                    shapeInList.Text = updatedShape.Text;
+                    shapeInList.Points = updatedShape.Points;
+                    shapeInList.DeserializedPoints = string.IsNullOrEmpty(updatedShape.Points)
+                        ? new List<Point>()
+                        : JsonConvert.DeserializeObject<List<Point>>(updatedShape.Points);
+                }
+            }
+        }
+
+        private void OnShapeDeleted(BoardShape deletedShape)
+        {
+            var element = BoardCanvas.Children
+                .OfType<UIElement>()
+                .FirstOrDefault(el => el.Uid == deletedShape.Id.ToString());
+
+            if (element != null)
+            {
+                BoardCanvas.Children.Remove(element);
+                var shapeInList = _shapesOnBoard.FirstOrDefault(s => s.Id == deletedShape.Id);
+                if (shapeInList != null)
+                    _shapesOnBoard.Remove(shapeInList);
+            }
+        }
+
+        private Brush GetBrushFromColor(string colorString)
+        {
+            if (string.IsNullOrEmpty(colorString))
+                return Brushes.Black;
+            try
+            {
+                return (Brush)new BrushConverter().ConvertFromString(colorString);
+            }
+            catch
+            {
+                return Brushes.Black;
             }
         }
 
