@@ -19,8 +19,6 @@ namespace WhiteSpace.Pages
         private readonly Guid _boardId;
         private SupabaseService _supabaseService;
 
-
-
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
 
@@ -120,95 +118,70 @@ namespace WhiteSpace.Pages
             try
             {
                 await SupabaseRealtimeService.ConnectAndSubscribe(
-                    SupabaseService.SupabaseUrl,
-                    SupabaseService.SupabaseKey,
+                    SupabaseService.Client,
                     _boardId,
                     OnShapeInserted,
                     OnShapeUpdated,
                     OnShapeDeleted
                 );
+                Console.WriteLine($"[Realtime] Подключение к каналу для доски {_boardId} успешно.");
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка подключения к Realtime: {ex.Message}");
+                Console.WriteLine($"Ошибка подключения: {ex.Message}");
             }
         }
 
         private void OnShapeInserted(BoardShape shape)
         {
-            if (_shapesOnBoard.Any(s => s.Id == shape.Id))
-                return;
-
-            AddShapeToCanvas(shape); // уже существующий метод
+            Console.WriteLine($"[Realtime] Фигура вставлена: {shape.Id}");
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                AddShapeToCanvas(shape); // Добавляем фигуру на канвас
+            });
         }
 
         private void OnShapeUpdated(BoardShape updatedShape)
         {
-            var existingElement = BoardCanvas.Children
-                .OfType<UIElement>()
-                .FirstOrDefault(el => el.Uid == updatedShape.Id.ToString());
-
-            if (existingElement != null)
+            Console.WriteLine($"[Realtime] Фигура обновлена: {updatedShape.Id}");
+            Application.Current.Dispatcher.Invoke(() =>
             {
-                // Обновляем свойства
-                if (existingElement is Shape shapeElement)
+                // Обновляем фигуру на канвасе
+                var existingElement = BoardCanvas.Children
+                    .OfType<UIElement>()
+                    .FirstOrDefault(el => el.Uid == updatedShape.Id.ToString());
+
+                if (existingElement != null)
                 {
-                    shapeElement.Stroke = GetBrushFromColor(updatedShape.Color);
-                    shapeElement.Width = updatedShape.Width;
-                    shapeElement.Height = updatedShape.Height;
-                    Canvas.SetLeft(shapeElement, updatedShape.X - updatedShape.Width / 2);
-                    Canvas.SetTop(shapeElement, updatedShape.Y - updatedShape.Height / 2);
-                }
-                else if (existingElement is Polyline polyline)
-                {
-                    polyline.Stroke = GetBrushFromColor(updatedShape.Color);
-                    if (!string.IsNullOrEmpty(updatedShape.Points))
+                    if (existingElement is Shape shapeElement)
                     {
-                        var points = JsonConvert.DeserializeObject<List<Point>>(updatedShape.Points);
-                        polyline.Points.Clear();
-                        foreach (var p in points) polyline.Points.Add(p);
+                        shapeElement.Stroke = GetBrushFromColor(updatedShape.Color);
+                        shapeElement.Width = updatedShape.Width;
+                        shapeElement.Height = updatedShape.Height;
+                        Canvas.SetLeft(shapeElement, updatedShape.X - updatedShape.Width / 2);
+                        Canvas.SetTop(shapeElement, updatedShape.Y - updatedShape.Height / 2);
                     }
                 }
-                else if (existingElement is TextBox textBox)
-                {
-                    textBox.Foreground = GetBrushFromColor(updatedShape.Color);
-                    textBox.Text = updatedShape.Text;
-                    Canvas.SetLeft(textBox, updatedShape.X);
-                    Canvas.SetTop(textBox, updatedShape.Y);
-                }
-
-                // Обновляем данные в _shapesOnBoard
-                var shapeInList = _shapesOnBoard.FirstOrDefault(s => s.Id == updatedShape.Id);
-                if (shapeInList != null)
-                {
-                    shapeInList.X = updatedShape.X;
-                    shapeInList.Y = updatedShape.Y;
-                    shapeInList.Width = updatedShape.Width;
-                    shapeInList.Height = updatedShape.Height;
-                    shapeInList.Color = updatedShape.Color;
-                    shapeInList.Text = updatedShape.Text;
-                    shapeInList.Points = updatedShape.Points;
-                    shapeInList.DeserializedPoints = string.IsNullOrEmpty(updatedShape.Points)
-                        ? new List<Point>()
-                        : JsonConvert.DeserializeObject<List<Point>>(updatedShape.Points);
-                }
-            }
+            });
         }
 
         private void OnShapeDeleted(BoardShape deletedShape)
         {
-            var element = BoardCanvas.Children
-                .OfType<UIElement>()
-                .FirstOrDefault(el => el.Uid == deletedShape.Id.ToString());
-
-            if (element != null)
+            Console.WriteLine($"[Realtime] Фигура удалена: {deletedShape.Id}");
+            Application.Current.Dispatcher.Invoke(() =>
             {
-                BoardCanvas.Children.Remove(element);
-                var shapeInList = _shapesOnBoard.FirstOrDefault(s => s.Id == deletedShape.Id);
-                if (shapeInList != null)
-                    _shapesOnBoard.Remove(shapeInList);
-            }
+                var element = BoardCanvas.Children
+                    .OfType<UIElement>()
+                    .FirstOrDefault(el => el.Uid == deletedShape.Id.ToString());
+
+                if (element != null)
+                {
+                    BoardCanvas.Children.Remove(element);
+                }
+            });
         }
+
 
         private Brush GetBrushFromColor(string colorString)
         {
@@ -1015,6 +988,7 @@ namespace WhiteSpace.Pages
             {
                 int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
+                // Создаем фигуру в зависимости от инструмента
                 BoardShape shape = _tool switch
                 {
                     ToolMode.Rect => new BoardShape
@@ -1025,7 +999,7 @@ namespace WhiteSpace.Pages
                         Y = world.Y,
                         Width = DefaultRectW,
                         Height = DefaultRectH,
-                        Color = _currentColorString,   // ✅ сохраняем выбранный цвет
+                        Color = _currentColorString,   // Сохраняем выбранный цвет
                         Text = "",
                         Id = uniqueId
                     },
@@ -1037,7 +1011,7 @@ namespace WhiteSpace.Pages
                         Y = world.Y,
                         Width = DefaultEllipse,
                         Height = DefaultEllipse,
-                        Color = _currentColorString,   // ✅
+                        Color = _currentColorString,   // Сохраняем выбранный цвет
                         Text = "",
                         Id = uniqueId
                     },
@@ -1046,15 +1020,17 @@ namespace WhiteSpace.Pages
 
                 if (shape != null)
                 {
+                    // Добавляем фигуру в локальный список
                     _shapesOnBoard.Add(shape);
 
+                    // Создаем UI элемент для фигуры (Rectangle или Ellipse)
                     UIElement element = shape.Type switch
                     {
                         "rectangle" => new Rectangle
                         {
                             Width = shape.Width,
                             Height = shape.Height,
-                            Stroke = _currentBrush,     // ✅ используем выбранный цвет
+                            Stroke = _currentBrush,     // Используем выбранный цвет
                             StrokeThickness = 2,
                             Fill = Brushes.Transparent,
                             Uid = shape.Id.ToString()
@@ -1063,7 +1039,7 @@ namespace WhiteSpace.Pages
                         {
                             Width = shape.Width,
                             Height = shape.Height,
-                            Stroke = _currentBrush,     // ✅
+                            Stroke = _currentBrush,     // Используем выбранный цвет
                             StrokeThickness = 2,
                             Fill = Brushes.Transparent,
                             Uid = shape.Id.ToString()
@@ -1073,18 +1049,24 @@ namespace WhiteSpace.Pages
 
                     if (element != null)
                     {
+                        // Устанавливаем позицию фигуры на канвасе
                         Canvas.SetLeft(element, shape.X - shape.Width / 2);
                         Canvas.SetTop(element, shape.Y - shape.Height / 2);
 
+                        // Добавляем фигуру на канвас
                         BoardCanvas.Children.Add(element);
-                        await _supabaseService.SaveShapeAsync(shape);
-                        ResetToolColorToDefault();
 
+                        // Сохраняем фигуру в базу данных Supabase
+                        await _supabaseService.SaveShapeAsync(shape);
+
+                        // Сбросим цвет инструмента на дефолтный
+                        ResetToolColorToDefault();
                     }
                 }
             }
             finally
             {
+                // Разрешаем создание новых фигур
                 _isCreatingShape = false;
             }
         }
