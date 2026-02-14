@@ -81,6 +81,26 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+
+            // Если роль "viewer" или "editor", показываем список участников
+            if (userRole == "viewer" || userRole == "editor")
+            {
+                await LoadBoardMembers();  // Загружаем участников
+                UsersListView.IsEnabled = false; // Делаем ListView только для просмотра, без возможности изменения
+            }
+            // Если роль владельца
+            else if (userRole == "owner")
+            {
+                await LoadBoardMembers();  // Загружаем участников для владельца
+                UsersListView.IsEnabled = true;
+            }
+            else
+            {
+                // Скрываем список для других пользователей
+                UsersListView.Visibility = Visibility.Collapsed;
+            }
+
             var viewportCenter = new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2);
             var canvasCenter = new Point(BoardCanvas.Width / 2, BoardCanvas.Height / 2);
 
@@ -88,15 +108,6 @@ namespace WhiteSpace.Pages
             BoardTranslate.Y = viewportCenter.Y - canvasCenter.Y;
 
             SetTool(ToolMode.Hand);
-
-            // Получаем роль пользователя
-            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
-
-            // Если роль "viewer", ограничиваем возможности
-            if (userRole == "viewer")
-            {
-                DisableEditingTools();  // Отключаем все инструменты редактирования
-            }
 
             var shapes = await _supabaseService.LoadBoardShapesAsync(_boardId);
 
@@ -220,6 +231,67 @@ namespace WhiteSpace.Pages
                     _shapesOnBoard.RemoveAll(s => s.Id == deletedShape.Id);
                 }
             });
+        }
+
+        private async Task LoadBoardMembers()
+        {
+            try
+            {
+                // Получаем список участников доски
+                var boardMembers = await _supabaseService.GetBoardMembersAsync(_boardId);
+
+                if (boardMembers != null && boardMembers.Any())
+                {
+                    // Привязываем список участников к ListView
+                    UsersListView.ItemsSource = boardMembers;
+                }
+                else
+                {
+                    // Если участников нет, показываем сообщение или скрываем ListView
+                    UsersListView.Visibility = Visibility.Collapsed;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при загрузке участников: {ex.Message}");
+            }
+        }
+
+
+        // Click event handler to change the role of a selected user
+        private async void ChangeRole_Click(object sender, RoutedEventArgs e)
+        {
+            // Получаем данные о текущем участнике
+            var button = sender as Button;
+            var boardMember = button?.DataContext as BoardMember;
+
+            if (boardMember == null)
+            {
+                MessageBox.Show("Ошибка: участник не выбран.");
+                return;
+            }
+            if(boardMember.Role == "owner")
+            {
+                MessageBox.Show("Вы являетесь владельцем доски.");
+                return;
+            }
+
+            // Переключаем роль между "viewer" и "editor"
+            string newRole = boardMember.Role == "viewer" ? "editor" : "viewer";
+
+            // Обновляем роль в базе данных
+            var result = await _supabaseService.UpdateBoardMemberRoleAsync(_boardId, boardMember.UserId, newRole);
+
+            if (result)
+            {
+                // Обновляем роль в UI
+                boardMember.Role = newRole;
+                MessageBox.Show($"Роль пользователя {boardMember.UserId} изменена на {newRole}.");
+            }
+            else
+            {
+                MessageBox.Show("Не удалось изменить роль.");
+            }
         }
 
         private Brush GetBrushFromColor(string colorString)

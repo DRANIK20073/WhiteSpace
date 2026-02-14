@@ -339,7 +339,7 @@ public class SupabaseService
             var board = new Board
             {
                 Title = title,
-                OwnerId = Guid.Parse(user.Id),
+                OwnerId = Guid.Parse(user.Id),  // Устанавливаем владельца доски
                 AccessCode = Guid.NewGuid().ToString("N")[..6].ToUpper(),
                 CreatedAt = DateTime.UtcNow
             };
@@ -348,8 +348,21 @@ public class SupabaseService
 
             if (result.Models?.Any() == true)
             {
+                // Добавляем владельца в таблицу board_members с ролью "owner"
+                var boardId = result.Models.First().Id;
+                var newBoardMember = new BoardMember
+                {
+                    BoardId = boardId,
+                    UserId = Guid.Parse(user.Id),
+                    Role = "owner",  // Роль владельца
+                    JoinedAt = DateTime.UtcNow
+                };
+
+                // Вставляем владельца в таблицу board_members
+                await _client.From<BoardMember>().Insert(newBoardMember);
+
                 MessageBox.Show("Доска успешно создана 🎉");
-                return result.Models.First(); // Возвращаем объект доски, который содержит ID
+                return result.Models.First(); // Возвращаем объект доски с ID
             }
 
             MessageBox.Show("Не удалось создать доску");
@@ -396,7 +409,13 @@ public class SupabaseService
                         .Where(b => b.Id == member.BoardId)
                         .Single();
                     if (board != null)
-                        result.Add((board, member.Role));
+                    {
+                        // Добавляем только тех, кто не является владельцем
+                        if (board.OwnerId != userId) // Проверка: если это не доска владельца, добавляем
+                        {
+                            result.Add((board, member.Role));
+                        }
+                    }
                 }
             }
         }
@@ -619,41 +638,46 @@ public class SupabaseService
     {
         try
         {
-            var currentUser = _client.Auth.CurrentUser;
-            if (currentUser == null) return false;
-
-            var currentUserId = Guid.Parse(currentUser.Id);
-
-            // Проверяем, что текущий пользователь — владелец доски
-            var board = await _client.From<Board>()
-                .Where(b => b.Id == boardId && b.OwnerId == currentUserId)
-                .Single();
-
-            if (board == null)
-            {
-                MessageBox.Show("Только владелец может изменять права участников.");
-                return false;
-            }
-
+            // Получаем текущего члена доски
             var member = await _client.From<BoardMember>()
                 .Where(m => m.BoardId == boardId && m.UserId == userId)
                 .Single();
 
             if (member == null)
             {
-                MessageBox.Show("Пользователь не является участником этой доски.");
+                MessageBox.Show("Пользователь не найден.");
                 return false;
             }
 
+            // Обновляем роль
             member.Role = newRole;
-            var updateResult = await _client.From<BoardMember>().Update(member);
+            var result = await _client.From<BoardMember>().Update(member);
 
-            return updateResult.Models?.Any() == true;
+            return result.Models?.Any() == true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка изменения роли: {ex.Message}");
+            MessageBox.Show($"Ошибка при изменении роли: {ex.Message}");
             return false;
+        }
+    }
+
+
+    public async Task<List<BoardMember>> GetBoardMembersAsync(Guid boardId)
+    {
+        try
+        {
+            var result = await _client
+                .From<BoardMember>()
+                .Where(m => m.BoardId == boardId)
+                .Get();
+
+            return result.Models ?? new List<BoardMember>();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка при получении списка участников: {ex.Message}");
+            return new List<BoardMember>();
         }
     }
 

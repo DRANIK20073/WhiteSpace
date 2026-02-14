@@ -34,6 +34,31 @@
             </Grid>
         </Border>
 
+
+        <!-- Панель для отображения участников доски (верхний левый угол) -->
+        <Grid Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10">
+            <StackPanel>
+                <TextBlock Text="Список участников" FontSize="18" Margin="10"/>
+
+                <!-- List of Users with Roles -->
+                <ListView x:Name="UsersListView" Width="300" Height="200" Margin="10">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Пользователь" DisplayMemberBinding="{Binding UserId}" Width="200"/>
+                            <GridViewColumn Header="Роль" DisplayMemberBinding="{Binding Role}" Width="100"/>
+                            <GridViewColumn Width="100">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Изменить Роль" Click="ChangeRole_Click"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </StackPanel>
+        </Grid>
+
         <!-- Панель инструментов снизу -->
         <Border Grid.Row="1" Background="White" Padding="10" BorderBrush="#22000000" BorderThickness="1">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
