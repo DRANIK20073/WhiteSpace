@@ -2,78 +2,82 @@
 using Supabase.Realtime;
 using Supabase.Realtime.PostgresChanges;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
-using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
 
 public static class SupabaseRealtimeService
 {
     private static Supabase.Client _supabaseClient;
-    private static RealtimeChannel _channel; // Канал для работы с событиями
-    private static Guid _currentBoardId;
+    private static readonly Dictionary<Guid, RealtimeChannel> _channels = new Dictionary<Guid, RealtimeChannel>();
 
-    // Метод для подключения и подписки на события
-    public static async Task ConnectAndSubscribe(
-        Supabase.Client client,
-        Guid boardId,
-        Action<BoardShape> onInsert,
-        Action<BoardShape> onUpdate,
-        Action<BoardShape> onDelete)
+    public static Task ConnectAndSubscribe(
+    Supabase.Client client,
+    Guid boardId,
+    Action<BoardShape> onInsert,
+    Action<BoardShape> onUpdate,
+    Action<BoardShape> onDelete)
     {
-        if (_supabaseClient != null && _supabaseClient != client)
-            Disconnect();
-
-        _supabaseClient = client;
-
         if (client.Auth.CurrentUser == null)
         {
             MessageBox.Show("Ошибка: клиент не аутентифицирован");
-            return;
+            return Task.CompletedTask;
         }
 
-        _currentBoardId = boardId;
+        if (_channels.TryGetValue(boardId, out var existingChannel))
+        {
+            existingChannel.Unsubscribe(); // если Unsubscribe синхронный, иначе await
+            _channels.Remove(boardId);
+        }
 
-        // Подключаемся к Supabase Realtime
+        _supabaseClient = client;
         _supabaseClient.Realtime.Connect();
-        await Task.Delay(5000); // Ожидаем 5 секунд для подключения
 
-        // Создаем канал с фильтром по ID доски
-        _channel = _supabaseClient.Realtime.Channel($"public:boardshape:board_id=eq.{boardId}");
+        var channel = _supabaseClient.Realtime.Channel("realtime:public:boardshape");
 
-        // Обрабатываем события INSERT, UPDATE, DELETE
-        _channel.AddPostgresChangeHandler(ListenType.Inserts, (sender, change) =>
+        channel.AddPostgresChangeHandler(PostgresChangesOptions.ListenType.Inserts, (sender, change) =>
         {
             var shape = change.Model<BoardShape>();
-            if (onInsert != null)
-                Application.Current.Dispatcher.Invoke(() => onInsert(shape)); // Обновляем UI на главном потоке
+            if (shape.BoardId == boardId)
+                Application.Current.Dispatcher.Invoke(() => onInsert?.Invoke(shape));
         });
 
-        _channel.AddPostgresChangeHandler(ListenType.Updates, (sender, change) =>
+        channel.AddPostgresChangeHandler(PostgresChangesOptions.ListenType.Updates, (sender, change) =>
         {
             var shape = change.Model<BoardShape>();
-            if (onUpdate != null)
-                Application.Current.Dispatcher.Invoke(() => onUpdate(shape)); // Обновляем UI
+            if (shape.BoardId == boardId)
+                Application.Current.Dispatcher.Invoke(() => onUpdate?.Invoke(shape));
         });
 
-        _channel.AddPostgresChangeHandler(ListenType.Deletes, (sender, change) =>
+        channel.AddPostgresChangeHandler(PostgresChangesOptions.ListenType.Deletes, (sender, change) =>
         {
             var shape = change.OldModel<BoardShape>();
-            if (onDelete != null)
-                Application.Current.Dispatcher.Invoke(() => onDelete(shape)); // Обновляем UI
+            if (shape.BoardId == boardId)
+                Application.Current.Dispatcher.Invoke(() => onDelete?.Invoke(shape));
         });
 
-        // Подписываемся на канал
-        await _channel.Subscribe();
-        Console.WriteLine($"[Realtime] Подписка на канал {_channel.Topic} завершена");
+        channel.Subscribe(); // синхронный вызов
+        _channels[boardId] = channel;
+
+        Console.WriteLine($"[Realtime] Подписка на доску {boardId} завершена");
+        return Task.CompletedTask;
     }
 
-    // Метод для отключения от канала
-    public static void Disconnect()
+    public static void Disconnect(Guid? boardId = null)
     {
-        if (_channel != null)
+        if (boardId.HasValue)
         {
-            _channel.Unsubscribe();
-            _channel = null;
+            if (_channels.TryGetValue(boardId.Value, out var channel))
+            {
+                channel.Unsubscribe(); // синхронно
+                _channels.Remove(boardId.Value);
+            }
+        }
+        else
+        {
+            foreach (var channel in _channels.Values)
+                channel.Unsubscribe();
+            _channels.Clear();
         }
     }
 }

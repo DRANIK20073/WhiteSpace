@@ -1,16 +1,18 @@
-﻿using Supabase;
-using System.Windows;
-using System.Threading.Tasks;
+﻿using Microsoft.IdentityModel.Tokens;
+using Newtonsoft.Json;
+using Supabase;
+using Supabase.Interfaces;
 using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
 using System.Text.RegularExpressions;
-using System.Windows.Navigation;
-using WhiteSpace.Pages;
+using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Navigation;
 using System.Windows.Shapes;
-using Newtonsoft.Json;
-using Microsoft.IdentityModel.Tokens;
+using WhiteSpace.Pages;
+using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
 
 public class SupabaseService
 {
@@ -654,7 +656,5 @@ public class SupabaseService
             return false;
         }
     }
-
-
 
 }

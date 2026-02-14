@@ -110,7 +110,7 @@ namespace WhiteSpace.Pages
 
         private void Page_Unloaded(object sender, RoutedEventArgs e)
         {
-            SupabaseRealtimeService.Disconnect();
+            SupabaseRealtimeService.Disconnect(_boardId);
         }
 
         private async Task ConnectToRealtime()
@@ -138,30 +138,69 @@ namespace WhiteSpace.Pages
             Console.WriteLine($"[Realtime] Фигура вставлена: {shape.Id}");
             Application.Current.Dispatcher.Invoke(() =>
             {
-                AddShapeToCanvas(shape); // Добавляем фигуру на канвас
+                // Проверяем, есть ли уже элемент с таким Uid
+                var existing = BoardCanvas.Children
+                    .OfType<UIElement>()
+                    .FirstOrDefault(el => el.Uid == shape.Id.ToString());
+
+                if (existing == null)
+                {
+                    AddShapeToCanvas(shape); // Добавляем только если ещё нет
+                }
             });
         }
 
         private void OnShapeUpdated(BoardShape updatedShape)
         {
-            Console.WriteLine($"[Realtime] Фигура обновлена: {updatedShape.Id}");
             Application.Current.Dispatcher.Invoke(() =>
             {
-                // Обновляем фигуру на канвасе
-                var existingElement = BoardCanvas.Children
+                var existing = BoardCanvas.Children
                     .OfType<UIElement>()
                     .FirstOrDefault(el => el.Uid == updatedShape.Id.ToString());
 
-                if (existingElement != null)
+                if (existing == null) return;
+
+                switch (existing)
                 {
-                    if (existingElement is Shape shapeElement)
-                    {
-                        shapeElement.Stroke = GetBrushFromColor(updatedShape.Color);
-                        shapeElement.Width = updatedShape.Width;
-                        shapeElement.Height = updatedShape.Height;
-                        Canvas.SetLeft(shapeElement, updatedShape.X - updatedShape.Width / 2);
-                        Canvas.SetTop(shapeElement, updatedShape.Y - updatedShape.Height / 2);
-                    }
+                    case Rectangle rect:
+                    case Ellipse ell:
+                        var shape = (Shape)existing;
+                        shape.Stroke = GetBrushFromColor(updatedShape.Color);
+                        shape.Width = updatedShape.Width;
+                        shape.Height = updatedShape.Height;
+                        Canvas.SetLeft(shape, updatedShape.X - updatedShape.Width / 2);
+                        Canvas.SetTop(shape, updatedShape.Y - updatedShape.Height / 2);
+                        break;
+
+                    case Polyline polyline:
+                        polyline.Stroke = GetBrushFromColor(updatedShape.Color);
+                        if (!string.IsNullOrEmpty(updatedShape.Points))
+                        {
+                            var points = JsonConvert.DeserializeObject<List<Point>>(updatedShape.Points);
+                            polyline.Points.Clear();
+                            foreach (var p in points) polyline.Points.Add(p);
+                        }
+                        break;
+
+                    case TextBox textBox:
+                        textBox.Foreground = GetBrushFromColor(updatedShape.Color);
+                        textBox.Text = updatedShape.Text;
+                        Canvas.SetLeft(textBox, updatedShape.X);
+                        Canvas.SetTop(textBox, updatedShape.Y);
+                        break;
+                }
+
+                // Обновить локальный список
+                var local = _shapesOnBoard.FirstOrDefault(s => s.Id == updatedShape.Id);
+                if (local != null)
+                {
+                    local.Color = updatedShape.Color;
+                    local.X = updatedShape.X;
+                    local.Y = updatedShape.Y;
+                    local.Width = updatedShape.Width;
+                    local.Height = updatedShape.Height;
+                    local.Text = updatedShape.Text;
+                    local.Points = updatedShape.Points;
                 }
             });
         }
@@ -178,10 +217,10 @@ namespace WhiteSpace.Pages
                 if (element != null)
                 {
                     BoardCanvas.Children.Remove(element);
+                    _shapesOnBoard.RemoveAll(s => s.Id == deletedShape.Id);
                 }
             });
         }
-
 
         private Brush GetBrushFromColor(string colorString)
         {
@@ -514,6 +553,8 @@ namespace WhiteSpace.Pages
             // 1) Если клик по объекту — начинаем перетаскивание (в режиме Hand)
             if (_tool == ToolMode.Hand)
             {
+                RemoveResizeFrame();
+
                 // Проверяем клик по не-TexBox элементам
                 var hitTestResult2 = VisualTreeHelper.HitTest(Viewport, screen);
                 if (hitTestResult2 != null)
