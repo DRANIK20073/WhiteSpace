@@ -1,20 +1,26 @@
-﻿using System;
+﻿using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Newtonsoft.Json;
+using Supabase;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq;
+using System.Net;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
-using Supabase;
-using Newtonsoft.Json;
-using System.Linq;
 using System.Windows.Threading;
+using WhiteSpace.Models;
 
 namespace WhiteSpace.Pages
 {
     public partial class BoardPage : Page
     {
+        private HubConnection _connection;
         private List<BoardShape> _shapesOnBoard = new List<BoardShape>();
         private readonly Guid _boardId;
         private SupabaseService _supabaseService;
@@ -68,6 +74,7 @@ namespace WhiteSpace.Pages
             InitializeComponent();
             _boardId = boardId;
             _supabaseService = new SupabaseService();
+            InitializeSignalR();
 
             // Добавляем обработчики событий для Viewport
             Viewport.MouseDown += Viewport_MouseDown;
@@ -79,25 +86,95 @@ namespace WhiteSpace.Pages
             Unloaded += Page_Unloaded;
         }
 
+        private async void InitializeSignalR()
+        {
+            // Отключаем проверку сертификатов (только для разработки)
+            ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
+
+            // Настраиваем опции сериализации JSON
+            var jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+
+            // Создаем подключение к SignalR Hub с настроенными опциями
+            _connection = new HubConnectionBuilder()
+                .WithUrl("https://localhost:7174/boardhub") // URL сервера SignalR
+                .AddJsonProtocol(options =>
+                {
+                    options.PayloadSerializerOptions = jsonOptions;
+                })
+                .Build();
+
+            // Подписка на получение обновлений фигуры
+            _connection.On<BoardShapeDto>("ReceiveShapeUpdate", (shapeDto) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    // Преобразуем DTO обратно в BoardShape
+                    var shape = new BoardShape
+                    {
+                        Id = shapeDto.Id,
+                        BoardId = shapeDto.BoardId,
+                        Type = shapeDto.Type,
+                        X = shapeDto.X,
+                        Y = shapeDto.Y,
+                        Width = shapeDto.Width,
+                        Height = shapeDto.Height,
+                        Color = shapeDto.Color,
+                        Text = shapeDto.Text,
+                        Points = shapeDto.Points
+                    };
+
+                    // Десериализуем точки, если они есть
+                    if (!string.IsNullOrEmpty(shape.Points))
+                    {
+                        try
+                        {
+                            shape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                        }
+                        catch
+                        {
+                            shape.DeserializedPoints = new List<Point>();
+                        }
+                    }
+
+                    // Обновляем фигуру на доске
+                    UpdateShapeOnBoard(shape);
+                });
+            });
+
+            // Подключаемся к SignalR серверу
+            try
+            {
+                await _connection.StartAsync();
+                Console.WriteLine("SignalR connected successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error starting SignalR connection: {ex.Message}");
+            }
+        }
+
+
+
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
 
-            // Если роль "viewer" или "editor", показываем список участников
             if (userRole == "viewer" || userRole == "editor")
             {
-                await LoadBoardMembers();  // Загружаем участников
-                UsersListView.IsEnabled = false; // Делаем ListView только для просмотра, без возможности изменения
+                await LoadBoardMembers();
+                UsersListView.IsEnabled = false; 
             }
-            // Если роль владельца
             else if (userRole == "owner")
             {
-                await LoadBoardMembers();  // Загружаем участников для владельца
+                await LoadBoardMembers();
                 UsersListView.IsEnabled = true;
             }
             else
             {
-                // Скрываем список для других пользователей
                 UsersListView.Visibility = Visibility.Collapsed;
             }
 
@@ -115,122 +192,80 @@ namespace WhiteSpace.Pages
             {
                 AddShapeToCanvas(shape);
             }
-
-            await ConnectToRealtime();
         }
 
         private void Page_Unloaded(object sender, RoutedEventArgs e)
         {
-            SupabaseRealtimeService.Disconnect(_boardId);
+
         }
 
-        private async Task ConnectToRealtime()
+        private void UpdateShapeOnBoard(BoardShape shape)
+        {
+            // Проверяем, существует ли фигура в списке
+            var existingShape = _shapesOnBoard.FirstOrDefault(s => s.Id == shape.Id);
+
+            if (existingShape != null)
+            {
+                // Если фигура существует, обновляем ее
+                existingShape.X = shape.X;
+                existingShape.Y = shape.Y;
+                existingShape.Width = shape.Width;
+                existingShape.Height = shape.Height;
+                existingShape.Color = shape.Color;
+                existingShape.Text = shape.Text;
+                existingShape.Points = shape.Points;
+                existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+
+                // Обновляем UI
+                RedrawShape(existingShape);
+            }
+            else
+            {
+                // Если фигуры нет, добавляем новую
+                _shapesOnBoard.Add(shape);
+                AddShapeToCanvas(shape);
+            }
+        }
+
+        private void RedrawShape(BoardShape shape)
+        {
+            // Метод для перерисовки фигуры на доске
+            // Здесь будет логика для перерисовки объекта в зависимости от типа (Rectangle, Ellipse и т.д.)
+        }
+
+        // Метод для отправки изменений о фигуре на сервер
+        private async void SendShapeUpdate(BoardShape shape)
         {
             try
             {
-                await SupabaseRealtimeService.ConnectAndSubscribe(
-                    SupabaseService.Client,
-                    _boardId,
-                    OnShapeInserted,
-                    OnShapeUpdated,
-                    OnShapeDeleted
-                );
-                Console.WriteLine($"[Realtime] Подключение к каналу для доски {_boardId} успешно.");
+                // Убедитесь, что соединение активно
+                if (_connection.State == HubConnectionState.Disconnected)
+                {
+                    Console.WriteLine("SignalR connection is not active.");
+                    return;
+                }
+
+                // Создаем простой объект для передачи через SignalR
+                var shapeDto = new
+                {
+                    Id = shape.Id,
+                    BoardId = shape.BoardId,
+                    Type = shape.Type,
+                    X = shape.X,
+                    Y = shape.Y,
+                    Width = shape.Width,
+                    Height = shape.Height,
+                    Color = shape.Color,
+                    Text = shape.Text,
+                    Points = shape.Points
+                };
+
+                await _connection.SendAsync("SendShapeUpdate", shapeDto);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка подключения к Realtime: {ex.Message}");
-                Console.WriteLine($"Ошибка подключения: {ex.Message}");
+                Console.WriteLine($"Error sending shape update: {ex.Message}");
             }
-        }
-
-        private void OnShapeInserted(BoardShape shape)
-        {
-            Console.WriteLine($"[Realtime] Фигура вставлена: {shape.Id}");
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                // Проверяем, есть ли уже элемент с таким Uid
-                var existing = BoardCanvas.Children
-                    .OfType<UIElement>()
-                    .FirstOrDefault(el => el.Uid == shape.Id.ToString());
-
-                if (existing == null)
-                {
-                    AddShapeToCanvas(shape); // Добавляем только если ещё нет
-                }
-            });
-        }
-
-        private void OnShapeUpdated(BoardShape updatedShape)
-        {
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                var existing = BoardCanvas.Children
-                    .OfType<UIElement>()
-                    .FirstOrDefault(el => el.Uid == updatedShape.Id.ToString());
-
-                if (existing == null) return;
-
-                switch (existing)
-                {
-                    case Rectangle rect:
-                    case Ellipse ell:
-                        var shape = (Shape)existing;
-                        shape.Stroke = GetBrushFromColor(updatedShape.Color);
-                        shape.Width = updatedShape.Width;
-                        shape.Height = updatedShape.Height;
-                        Canvas.SetLeft(shape, updatedShape.X - updatedShape.Width / 2);
-                        Canvas.SetTop(shape, updatedShape.Y - updatedShape.Height / 2);
-                        break;
-
-                    case Polyline polyline:
-                        polyline.Stroke = GetBrushFromColor(updatedShape.Color);
-                        if (!string.IsNullOrEmpty(updatedShape.Points))
-                        {
-                            var points = JsonConvert.DeserializeObject<List<Point>>(updatedShape.Points);
-                            polyline.Points.Clear();
-                            foreach (var p in points) polyline.Points.Add(p);
-                        }
-                        break;
-
-                    case TextBox textBox:
-                        textBox.Foreground = GetBrushFromColor(updatedShape.Color);
-                        textBox.Text = updatedShape.Text;
-                        Canvas.SetLeft(textBox, updatedShape.X);
-                        Canvas.SetTop(textBox, updatedShape.Y);
-                        break;
-                }
-
-                // Обновить локальный список
-                var local = _shapesOnBoard.FirstOrDefault(s => s.Id == updatedShape.Id);
-                if (local != null)
-                {
-                    local.Color = updatedShape.Color;
-                    local.X = updatedShape.X;
-                    local.Y = updatedShape.Y;
-                    local.Width = updatedShape.Width;
-                    local.Height = updatedShape.Height;
-                    local.Text = updatedShape.Text;
-                    local.Points = updatedShape.Points;
-                }
-            });
-        }
-
-        private void OnShapeDeleted(BoardShape deletedShape)
-        {
-            Console.WriteLine($"[Realtime] Фигура удалена: {deletedShape.Id}");
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                var element = BoardCanvas.Children
-                    .OfType<UIElement>()
-                    .FirstOrDefault(el => el.Uid == deletedShape.Id.ToString());
-
-                if (element != null)
-                {
-                    BoardCanvas.Children.Remove(element);
-                    _shapesOnBoard.RemoveAll(s => s.Id == deletedShape.Id);
-                }
-            });
         }
 
         private async Task LoadBoardMembers()
@@ -294,6 +329,11 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private async void OnBoardMembersChanged()
+        {
+            // Загружаем актуальный список участников
+            await LoadBoardMembers();
+        }
         private Brush GetBrushFromColor(string colorString)
         {
             if (string.IsNullOrEmpty(colorString))
@@ -844,12 +884,48 @@ namespace WhiteSpace.Pages
         }
 
         // === Перемещение элементов ===
+        // === Перемещение элементов ===
         private void MoveElementTo(Point world)
         {
             if (_dragElement == null) return;
 
             double offsetX = world.X - _dragOffsetWorld.X;
             double offsetY = world.Y - _dragOffsetWorld.Y;
+
+            // Обновляем координаты в объекте BoardShape
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
+            if (shape != null)
+            {
+                // Для фигур (Rectangle, Ellipse) центрируем координаты
+                if (_dragElement is Shape visualShape)
+                {
+                    shape.X = offsetX + shape.Width / 2;
+                    shape.Y = offsetY + shape.Height / 2;
+                }
+                // Для TextBox используем верхний левый угол
+                else if (_dragElement is TextBox textBox)
+                {
+                    shape.X = offsetX;
+                    shape.Y = offsetY;
+                }
+                // Для Polyline обновляем все точки
+                else if (_dragElement is Polyline polyline)
+                {
+                    shape.X = offsetX;
+                    shape.Y = offsetY;
+
+                    var newPoints = new List<Point>();
+                    foreach (var point in polyline.Points)
+                    {
+                        newPoints.Add(new Point(point.X + offsetX, point.Y + offsetY));
+                    }
+                    shape.DeserializedPoints = newPoints;
+                    shape.Points = JsonConvert.SerializeObject(newPoints);
+                }
+
+                // Отправляем обновленную фигуру на сервер
+                SendShapeUpdate(shape);  // Отправка обновления
+            }
 
             // Перемещаем элемент на канвасе
             Canvas.SetLeft(_dragElement, offsetX);
@@ -892,40 +968,8 @@ namespace WhiteSpace.Pages
 
                 UpdateResizeHandles(offsetX, offsetY, width, height);
             }
-
-
-            // Обновляем координаты в объекте BoardShape
-            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
-            if (shape != null)
-            {
-                // Для фигур (Rectangle, Ellipse) центрируем координаты
-                if (_dragElement is Shape visualShape)
-                {
-                    shape.X = offsetX + shape.Width / 2;
-                    shape.Y = offsetY + shape.Height / 2;
-                }
-                // Для TextBox используем верхний левый угол
-                else if (_dragElement is TextBox textBox)
-                {
-                    shape.X = offsetX;
-                    shape.Y = offsetY;
-                }
-                // Для Polyline обновляем все точки
-                else if (_dragElement is Polyline polyline)
-                {
-                    shape.X = offsetX;
-                    shape.Y = offsetY;
-
-                    var newPoints = new List<Point>();
-                    foreach (var point in polyline.Points)
-                    {
-                        newPoints.Add(new Point(point.X + offsetX, point.Y + offsetY));
-                    }
-                    shape.DeserializedPoints = newPoints;
-                    shape.Points = JsonConvert.SerializeObject(newPoints);
-                }
-            }
         }
+
 
         private async void SaveElementPosition(UIElement element)
         {
@@ -964,6 +1008,7 @@ namespace WhiteSpace.Pages
                 shape.Y = Canvas.GetTop(textBox);
                 await _supabaseService.SaveShapeAsync(shape);
             }
+            SendShapeUpdate(shape);
         }
 
         private async void SaveTextBoxText(TextBox textBox)
@@ -974,6 +1019,7 @@ namespace WhiteSpace.Pages
                 shape.Text = textBox.Text;
                 await _supabaseService.SaveShapeAsync(shape);
             }
+            SendShapeUpdate(shape);
         }
 
 
@@ -1039,6 +1085,7 @@ namespace WhiteSpace.Pages
             shape.DeserializedPoints.Add(startWorld);
 
             _shapesOnBoard.Add(shape);
+            SendShapeUpdate(shape);
             Viewport.CaptureMouse();
         }
 
@@ -1107,24 +1154,24 @@ namespace WhiteSpace.Pages
                     ToolMode.Rect => new BoardShape
                     {
                         BoardId = _boardId,
-                        Type = "rectangle",
+                        Type = "rectangle",  // Тип "rectangle" для прямоугольника
                         X = world.X,
                         Y = world.Y,
                         Width = DefaultRectW,
                         Height = DefaultRectH,
-                        Color = _currentColorString,   // Сохраняем выбранный цвет
+                        Color = _currentColorString,
                         Text = "",
                         Id = uniqueId
                     },
                     ToolMode.Ellipse => new BoardShape
                     {
                         BoardId = _boardId,
-                        Type = "ellipse",
+                        Type = "ellipse",    // Тип "ellipse" для круга
                         X = world.X,
                         Y = world.Y,
                         Width = DefaultEllipse,
                         Height = DefaultEllipse,
-                        Color = _currentColorString,   // Сохраняем выбранный цвет
+                        Color = _currentColorString,
                         Text = "",
                         Id = uniqueId
                     },
@@ -1172,6 +1219,9 @@ namespace WhiteSpace.Pages
                         // Сохраняем фигуру в базу данных Supabase
                         await _supabaseService.SaveShapeAsync(shape);
 
+                        // Отправляем обновление на сервер для всех подключенных пользователей
+                        SendShapeUpdate(shape);  // Отправка изменений на сервер
+
                         // Сбросим цвет инструмента на дефолтный
                         ResetToolColorToDefault();
                     }
@@ -1183,6 +1233,7 @@ namespace WhiteSpace.Pages
                 _isCreatingShape = false;
             }
         }
+
 
         private async void PlaceTextAt(Point world)
         {
@@ -1230,7 +1281,11 @@ namespace WhiteSpace.Pages
             };
 
             _shapesOnBoard.Add(shape);
-            await _supabaseService.SaveShapeAsync(shape);
+            await _supabaseService.SaveShapeAsync(shape);  // Сохраняем текстовый блок в базу данных
+
+            // Отправляем обновление на сервер для всех подключенных пользователей
+            SendShapeUpdate(shape);  // Отправка изменений на сервер
+
             ResetToolColorToDefault();
 
             tb.Focus();
@@ -1238,6 +1293,7 @@ namespace WhiteSpace.Pages
 
             _isCreatingShape = false;
         }
+
 
         // ===== РУЧКИ ИЗМЕНЕНИЯ РАЗМЕРА =====
 

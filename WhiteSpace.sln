@@ -5,6 +5,8 @@ VisualStudioVersion = 17.9.34728.123
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WhiteSpace", "WhiteSpace\WhiteSpace.csproj", "{5D3AA953-D1DF-4B5A-926E-BD67631722C3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BoardRealtimeServer", "BoardRealtimeServer\BoardRealtimeServer.csproj", "{ED2DF0D0-8617-48C4-88B9-DB21E2846684}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{5D3AA953-D1DF-4B5A-926E-BD67631722C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5D3AA953-D1DF-4B5A-926E-BD67631722C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5D3AA953-D1DF-4B5A-926E-BD67631722C3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{ED2DF0D0-8617-48C4-88B9-DB21E2846684}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{ED2DF0D0-8617-48C4-88B9-DB21E2846684}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{ED2DF0D0-8617-48C4-88B9-DB21E2846684}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{ED2DF0D0-8617-48C4-88B9-DB21E2846684}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
