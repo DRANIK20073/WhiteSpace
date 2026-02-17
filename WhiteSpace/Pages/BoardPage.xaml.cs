@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq;
 using System.Net;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -20,10 +21,10 @@ namespace WhiteSpace.Pages
 {
     public partial class BoardPage : Page
     {
-        private HubConnection _connection;
         private List<BoardShape> _shapesOnBoard = new List<BoardShape>();
         private readonly Guid _boardId;
         private SupabaseService _supabaseService;
+        private FirebaseService _firebaseService;
 
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
@@ -74,90 +75,20 @@ namespace WhiteSpace.Pages
             InitializeComponent();
             _boardId = boardId;
             _supabaseService = new SupabaseService();
-            InitializeSignalR();
 
             // Добавляем обработчики событий для Viewport
             Viewport.MouseDown += Viewport_MouseDown;
             Viewport.MouseMove += Viewport_MouseMove;
             Viewport.MouseUp += Viewport_MouseUp;
             Viewport.MouseWheel += Viewport_MouseWheel;
+            _firebaseService = new FirebaseService();  // Инициализируем FirebaseService
+
+            // Подписываемся на изменения фигур
+            SubscribeToShapes();
 
             Loaded += Page_Loaded;
             Unloaded += Page_Unloaded;
         }
-
-        private async void InitializeSignalR()
-        {
-            // Отключаем проверку сертификатов (только для разработки)
-            ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
-
-            // Настраиваем опции сериализации JSON
-            var jsonOptions = new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-            };
-
-            // Создаем подключение к SignalR Hub с настроенными опциями
-            _connection = new HubConnectionBuilder()
-                .WithUrl("https://localhost:7174/boardhub") // URL сервера SignalR
-                .AddJsonProtocol(options =>
-                {
-                    options.PayloadSerializerOptions = jsonOptions;
-                })
-                .Build();
-
-            // Подписка на получение обновлений фигуры
-            _connection.On<BoardShapeDto>("ReceiveShapeUpdate", (shapeDto) =>
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    // Преобразуем DTO обратно в BoardShape
-                    var shape = new BoardShape
-                    {
-                        Id = shapeDto.Id,
-                        BoardId = shapeDto.BoardId,
-                        Type = shapeDto.Type,
-                        X = shapeDto.X,
-                        Y = shapeDto.Y,
-                        Width = shapeDto.Width,
-                        Height = shapeDto.Height,
-                        Color = shapeDto.Color,
-                        Text = shapeDto.Text,
-                        Points = shapeDto.Points
-                    };
-
-                    // Десериализуем точки, если они есть
-                    if (!string.IsNullOrEmpty(shape.Points))
-                    {
-                        try
-                        {
-                            shape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-                        }
-                        catch
-                        {
-                            shape.DeserializedPoints = new List<Point>();
-                        }
-                    }
-
-                    // Обновляем фигуру на доске
-                    UpdateShapeOnBoard(shape);
-                });
-            });
-
-            // Подключаемся к SignalR серверу
-            try
-            {
-                await _connection.StartAsync();
-                Console.WriteLine("SignalR connected successfully");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error starting SignalR connection: {ex.Message}");
-            }
-        }
-
-
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
@@ -199,73 +130,57 @@ namespace WhiteSpace.Pages
 
         }
 
-        private void UpdateShapeOnBoard(BoardShape shape)
+        private void SubscribeToShapes()
         {
-            // Проверяем, существует ли фигура в списке
-            var existingShape = _shapesOnBoard.FirstOrDefault(s => s.Id == shape.Id);
-
-            if (existingShape != null)
+            try
             {
-                // Если фигура существует, обновляем ее
+                // Подписка на обновления фигур в реальном времени
+                _firebaseService
+                    .GetShapesObservable(_boardId.ToString())  // boardId как строка
+                    .Where(shape => shape != null)  // Игнорируем пустые данные
+                    .DistinctUntilChanged()  // Убираем повторяющиеся данные
+                    .Subscribe(async shape =>
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            UpdateOrAddShape(shape);  // Обновляем или добавляем фигуру
+                        });
+                    });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка подписки: {ex.Message}");
+            }
+        }
+
+        // Метод для обновления или добавления фигуры
+        private void UpdateOrAddShape(BoardShape shape)
+        {
+            if (_shapesOnBoard.Any(s => s.Id == shape.Id))
+            {
+                // Если фигура уже существует, обновляем её
+                var existingShape = _shapesOnBoard.First(s => s.Id == shape.Id);
                 existingShape.X = shape.X;
                 existingShape.Y = shape.Y;
                 existingShape.Width = shape.Width;
                 existingShape.Height = shape.Height;
                 existingShape.Color = shape.Color;
                 existingShape.Text = shape.Text;
-                existingShape.Points = shape.Points;
-                existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
 
-                // Обновляем UI
-                RedrawShape(existingShape);
+                // Здесь добавьте логику обновления UI для фигуры
             }
             else
             {
-                // Если фигуры нет, добавляем новую
+                // Добавляем новую фигуру
                 _shapesOnBoard.Add(shape);
-                AddShapeToCanvas(shape);
+                AddShapeToCanvas(shape);  // Рисуем фигуру на канвасе
             }
         }
 
-        private void RedrawShape(BoardShape shape)
+        // Метод для отправки новой фигуры в Firebase
+        private async void AddNewShape(BoardShape shape)
         {
-            // Метод для перерисовки фигуры на доске
-            // Здесь будет логика для перерисовки объекта в зависимости от типа (Rectangle, Ellipse и т.д.)
-        }
-
-        // Метод для отправки изменений о фигуре на сервер
-        private async void SendShapeUpdate(BoardShape shape)
-        {
-            try
-            {
-                // Убедитесь, что соединение активно
-                if (_connection.State == HubConnectionState.Disconnected)
-                {
-                    Console.WriteLine("SignalR connection is not active.");
-                    return;
-                }
-
-                // Создаем простой объект для передачи через SignalR
-                var shapeDto = new
-                {
-                    Id = shape.Id,
-                    BoardId = shape.BoardId,
-                    Type = shape.Type,
-                    X = shape.X,
-                    Y = shape.Y,
-                    Width = shape.Width,
-                    Height = shape.Height,
-                    Color = shape.Color,
-                    Text = shape.Text,
-                    Points = shape.Points
-                };
-
-                await _connection.SendAsync("SendShapeUpdate", shapeDto);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error sending shape update: {ex.Message}");
-            }
+            await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);  // Отправляем фигуру в Firebase
         }
 
         private async Task LoadBoardMembers()
@@ -923,8 +838,6 @@ namespace WhiteSpace.Pages
                     shape.Points = JsonConvert.SerializeObject(newPoints);
                 }
 
-                // Отправляем обновленную фигуру на сервер
-                SendShapeUpdate(shape);  // Отправка обновления
             }
 
             // Перемещаем элемент на канвасе
@@ -995,6 +908,7 @@ namespace WhiteSpace.Pages
                 }
 
                 // Сохраняем в базу данных
+                await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
                 await _supabaseService.SaveShapeAsync(shape);
             }
         }
@@ -1008,7 +922,6 @@ namespace WhiteSpace.Pages
                 shape.Y = Canvas.GetTop(textBox);
                 await _supabaseService.SaveShapeAsync(shape);
             }
-            SendShapeUpdate(shape);
         }
 
         private async void SaveTextBoxText(TextBox textBox)
@@ -1019,7 +932,6 @@ namespace WhiteSpace.Pages
                 shape.Text = textBox.Text;
                 await _supabaseService.SaveShapeAsync(shape);
             }
-            SendShapeUpdate(shape);
         }
 
 
@@ -1085,7 +997,6 @@ namespace WhiteSpace.Pages
             shape.DeserializedPoints.Add(startWorld);
 
             _shapesOnBoard.Add(shape);
-            SendShapeUpdate(shape);
             Viewport.CaptureMouse();
         }
 
@@ -1219,8 +1130,7 @@ namespace WhiteSpace.Pages
                         // Сохраняем фигуру в базу данных Supabase
                         await _supabaseService.SaveShapeAsync(shape);
 
-                        // Отправляем обновление на сервер для всех подключенных пользователей
-                        SendShapeUpdate(shape);  // Отправка изменений на сервер
+                        AddNewShape(shape);
 
                         // Сбросим цвет инструмента на дефолтный
                         ResetToolColorToDefault();
@@ -1283,8 +1193,7 @@ namespace WhiteSpace.Pages
             _shapesOnBoard.Add(shape);
             await _supabaseService.SaveShapeAsync(shape);  // Сохраняем текстовый блок в базу данных
 
-            // Отправляем обновление на сервер для всех подключенных пользователей
-            SendShapeUpdate(shape);  // Отправка изменений на сервер
+            AddNewShape(shape);
 
             ResetToolColorToDefault();
 
@@ -1692,6 +1601,7 @@ namespace WhiteSpace.Pages
                 shape.Y = Canvas.GetTop(_resizeTarget) + shape.Height / 2;
             }
 
+            await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
             await _supabaseService.SaveShapeAsync(shape);
         }
         private async void Color_Click(object sender, RoutedEventArgs e)
@@ -1734,6 +1644,7 @@ namespace WhiteSpace.Pages
             if (shape != null)
             {
                 shape.Color = colorString;
+                await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
                 await _supabaseService.SaveShapeAsync(shape);
             }
         }
