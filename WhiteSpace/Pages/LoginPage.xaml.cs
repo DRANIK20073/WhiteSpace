@@ -1,8 +1,10 @@
-﻿using System.Windows;
-using System.Windows.Controls;
-using Supabase;
+﻿using Supabase;
 using Supabase.Gotrue;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media.Animation;
 
 namespace WhiteSpace.Pages
 {
@@ -52,6 +54,21 @@ namespace WhiteSpace.Pages
                 NavigationService.RemoveBackEntry();
             }
         }
+
+        private void Button_MouseEnter(object sender, MouseEventArgs e)
+        {
+            var button = sender as Button;
+            var animation = (Storyboard)FindResource("ButtonAnimation");
+            animation.Begin(button);
+        }
+
+        private void Button_MouseLeave(object sender, MouseEventArgs e)
+        {
+            var button = sender as Button;
+            var animation = (Storyboard)FindResource("ButtonAnimation");
+            animation.Stop(button);
+        }
+
 
         // Обработчик для кнопки Google
         private async void GoogleLogin_Click(object sender, RoutedEventArgs e)

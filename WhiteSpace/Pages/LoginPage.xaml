@@ -6,7 +6,7 @@
       MinHeight="800">
 
     <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
-        <Grid Width="700" Height="550" Background="White"
+        <Grid Width="700" Height="800" Background="White"
               HorizontalAlignment="Center" VerticalAlignment="Center">
 
             <Grid.RowDefinitions>
@@ -20,24 +20,38 @@
                        FontWeight="Black"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
-                       Margin="0,50,0,20"/>
+                       Margin="0,50,0,150"/>
 
             <!-- Форма входа -->
             <StackPanel Grid.Row="1" Margin="60,0,60,60">
-                <!-- Поле для Email -->
+                <!-- ЛОГИН -->
                 <Grid Margin="0,0,0,30">
-                    <TextBox x:Name="EmailBox"
+                    <TextBox x:Name="LoginBox"
                              FontSize="18"
                              Height="40"
                              BorderThickness="0,0,0,1"
-                             VerticalContentAlignment="Center"
-                             HorizontalAlignment="Stretch"/>
+                             VerticalContentAlignment="Center"/>
 
+                    <!-- Placeholder -->
                     <TextBlock Text="Email"
+                               x:Name="EmailBox"
                                Margin="5,0"
                                VerticalAlignment="Center"
                                Foreground="Gray"
-                               IsHitTestVisible="False"/>
+                               IsHitTestVisible="False">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="FontSize" Value="18"/>
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=LoginBox}"
+                                                 Value="">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </Grid>
 
                 <!-- Поле для пароля -->
@@ -63,17 +77,6 @@
                           Content="Оставаться в системе"
                           Margin="0,0,0,20"/>
 
-                <!-- Ссылка на регистрацию -->
-                <TextBlock Margin="0,10,0,40">
-                    <Run Text="У вас нет аккаунта? "/>
-                    <Hyperlink x:Name="RegisterLink"
-                               Foreground="Black"
-                               TextDecorations="Underline"
-                               Click="RegisterLink_Click">
-                        Зарегистрируйтесь
-                    </Hyperlink>
-                </TextBlock>
-
                 <!-- Кнопка Войти -->
                 <Button Content="Войти"
                         Height="50"
@@ -83,7 +86,15 @@
                         HorizontalAlignment="Stretch"
                         Click="Login_Click"/>
 
-                <!-- Кнопка Google -->
+                <!-- Разделитель "или" -->
+                <TextBlock Text="или"
+                           FontSize="18"
+                           FontWeight="Normal"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Margin="10,10,10,10"/>
+
+               <!-- Кнопка Google -->
                 <Button Content="Продолжить с Google"
                     Background="White"
                     BorderBrush="Black"
@@ -92,7 +103,18 @@
                     Height="50"
                     HorizontalAlignment="Stretch"
                     Click="GoogleLogin_Click"
-                    Margin="60,20,60,30"/>
+                    Margin="60,0,60,30"/>
+
+                <!-- Ссылка на регистрацию -->
+                <TextBlock Margin="0,0,0,40" HorizontalAlignment="Center">
+                    <Run Text="У вас нет аккаунта? "/>
+                    <Hyperlink x:Name="RegisterLink"
+                               Foreground="Black"
+                               TextDecorations="Underline"
+                               Click="RegisterLink_Click">
+                        Зарегистрируйтесь
+                    </Hyperlink>
+                </TextBlock>
             </StackPanel>
         </Grid>
     </Grid>

@@ -2,12 +2,12 @@
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Title="Регистрация"
-      MinHeight="800"
-      MinWidth="1280">
+      MinWidth="1280"
+      MinHeight="800">
 
-    <Grid Width="auto" Height="auto" Background="#80000000">
-
-        <Grid Background="#FFFFFF" Width="700" Height="450" Margin="0">
+    <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Grid Width="700" Height="800" Background="White"
+              HorizontalAlignment="Center" VerticalAlignment="Center">
 
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -15,32 +15,37 @@
             </Grid.RowDefinitions>
 
             <!-- Заголовок -->
-            <TextBlock Text="Регистрация"
+            <TextBlock Text="WHITESPACE"
                        FontSize="36"
-                       FontWeight="Bold"
-                       Margin="60,50,60,30"/>
+                       FontWeight="Black"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       Margin="0,50,0,150"/>
 
+            <!-- Форма регистрации -->
             <StackPanel Grid.Row="1" Margin="60,0,60,60">
-
-                <!-- EMAIL -->
+                <!-- Поле для Email -->
                 <Grid Margin="0,0,0,30">
-                    <TextBox x:Name="EmailBox"
-                             FontSize="18"
-                             Height="40"
-                             BorderThickness="0,0,0,1"
-                             VerticalContentAlignment="Center"/>
+                    <TextBox x:Name="LoginBox"
+                              FontSize="18"
+                              Height="40"
+                              BorderThickness="0,0,0,1"
+                              VerticalContentAlignment="Center"/>
 
+                    <!-- Placeholder -->
                     <TextBlock Text="Email"
-                               Margin="5,0"
-                               VerticalAlignment="Center"
-                               Foreground="Gray"
-                               IsHitTestVisible="False">
+                                x:Name="EmailBox"
+                                Margin="5,0"
+                                VerticalAlignment="Center"
+                                Foreground="Gray"
+                                IsHitTestVisible="False">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="FontSize" Value="18"/>
                                 <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Text, ElementName=EmailBox}" Value="">
+                                    <DataTrigger Binding="{Binding Text, ElementName=LoginBox}"
+                                                 Value="">
                                         <Setter Property="Visibility" Value="Visible"/>
                                     </DataTrigger>
                                 </Style.Triggers>
@@ -49,7 +54,8 @@
                     </TextBlock>
                 </Grid>
 
-                <!-- ПАРОЛЬ -->
+
+                <!-- Поле для пароля -->
                 <Grid Margin="0,0,0,20">
                     <PasswordBox x:Name="PasswordBox"
                                  FontSize="18"
@@ -67,27 +73,44 @@
                                IsHitTestVisible="False"/>
                 </Grid>
 
-                <!-- Текст со ссылкой -->
-                <TextBlock Margin="0,0,0,40">
-                    <Run Text="Уже есть аккаунт? "/>
-                    <Hyperlink Name="LoginLink"
-                               TextDecorations="Underline"
-                               Foreground="Black"
-                               NavigateUri="LoginPage.xaml">
-                        Войти
-                    </Hyperlink>
-                </TextBlock>
-
-                <!-- Кнопка -->
+                <!-- Кнопка Регистрации -->
                 <Button Content="Зарегистрироваться"
-                        Click="Register_Click"
                         Height="50"
                         FontSize="18"
                         BorderThickness="2"
                         Background="White"
-                        Width="260"
-                        HorizontalAlignment="Right"/>
+                        HorizontalAlignment="Stretch"
+                        Click="Register_Click"/>
 
+                <!-- Разделитель "или" -->
+                <TextBlock Text="или"
+                           FontSize="18"
+                           FontWeight="Normal"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Margin="10,10,10,10"/>
+
+                <!-- Кнопка для входа через Google -->
+                <Button Content="Зарегистрироваться с Google"
+                        Background="White"
+                        BorderBrush="Black"
+                        BorderThickness="1"
+                        FontSize="18"
+                        Height="50"
+                        HorizontalAlignment="Stretch"
+                        Click="GoogleLogin_Click"
+                        Margin="60,0,60,30"/>
+
+                <!-- Текстовая ссылка для уже имеющегося аккаунта -->
+                <TextBlock HorizontalAlignment="Center" Margin="10,0,10,0">
+                    <Run Text="Уже есть аккаунт? "/>
+                    <Hyperlink x:Name="LoginLink"
+                               Foreground="Black"
+                               TextDecorations="Underline"
+                               Click="LoginLink_Click">
+                        Войти
+                    </Hyperlink>
+                </TextBlock>
             </StackPanel>
         </Grid>
     </Grid>
