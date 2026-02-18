@@ -1,9 +1,13 @@
 ﻿using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using Supabase;
+using Supabase.Gotrue;
 using Supabase.Interfaces;
 using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
+using System.Diagnostics;
+using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -12,13 +16,15 @@ using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using WhiteSpace.Pages;
+using static Supabase.Gotrue.Constants;
 using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
 
 public class SupabaseService
 {
+    private static Supabase.Client _client; // для работы с основной клиентской логикой
+    private static Supabase.Gotrue.Client _authClient; // для работы с аутентификацией
 
-    private static Client _client;
-    public static Client Client => _client;
+    public static Supabase.Client Client => _client;
 
     // Добавляем публичные статические свойства для URL и ключа
     public static string SupabaseUrl { get; private set; }
@@ -29,11 +35,18 @@ public class SupabaseService
         var url = "https://ceqnfiznaanuzojjgdcs.supabase.co";
         var key = "sb_publishable_GpGetyC36F_fZ2rLWEgSBg_UJ7ptd9G";
 
-        // Сохраняем их в свойствах
         SupabaseUrl = url;
         SupabaseKey = key;
 
-        _client = new Client(url, key);
+        // Правильная инициализация клиента
+        var options = new SupabaseOptions
+        {
+            AutoConnectRealtime = true,
+            AutoRefreshToken = true
+        };
+
+        _client = new Supabase.Client(url, key, options);
+        _authClient = (Supabase.Gotrue.Client)_client.Auth;
         await _client.InitializeAsync();
     }
 
@@ -54,7 +67,6 @@ public class SupabaseService
             {
                 var userId = response.User.Id;
                 MessageBox.Show("Регистрация успешна 🎉");
-
                 return true;
             }
             else
@@ -175,7 +187,7 @@ public class SupabaseService
     {
         try
         {
-            var session = await Client.Auth.SignIn(email, password);
+            var session = await _client.Auth.SignIn(email, password);
 
             if (session == null)
             {
@@ -194,7 +206,6 @@ public class SupabaseService
         }
         catch (Supabase.Gotrue.Exceptions.GotrueException ex)
         {
-            // Перевод ошибок на русский
             if (ex.Message.Contains("missing email or phone"))
             {
                 MessageBox.Show("Ошибка входа: Не указан email.");
@@ -217,6 +228,268 @@ public class SupabaseService
         }
     }
 
+    public async Task<bool> GoogleSignInAsync(Page currentPage)
+    {
+        HttpListener listener = null;
+
+        try
+        {
+            // Запоминаем текущего пользователя
+            var previousUser = _client.Auth.CurrentUser;
+
+            // URL для нашего HTML файла (локальный сервер)
+            string callbackPageUrl = "http://127.0.0.1:54322/oauth-callback.html";
+
+            // Создаем URL для OAuth авторизации через Supabase
+            string oauthUrl = $"https://ceqnfiznaanuzojjgdcs.supabase.co/auth/v1/authorize" +
+                              $"?provider=google" +
+                              $"&redirect_to={Uri.EscapeDataString(callbackPageUrl)}";
+
+            // Информируем пользователя
+            MessageBox.Show(
+                "Сейчас откроется браузер для входа через Google.\n" +
+                "После авторизации данные будут автоматически отправлены в приложение.",
+                "Вход через Google",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            // Запускаем локальный сервер для HTML страницы
+            StartLocalServer();
+
+            // Создаем HTTP слушатель для получения данных от HTML страницы
+            listener = new HttpListener();
+            listener.Prefixes.Add("http://127.0.0.1:54322/auth/callback/");
+            listener.Start();
+
+            // Открываем браузер
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = oauthUrl,
+                UseShellExecute = true
+            });
+
+            // Ждем данные от HTML страницы (таймаут 120 секунд)
+            var timeoutTask = Task.Delay(120000);
+            var getContextTask = listener.GetContextAsync();
+            var completedTask = await Task.WhenAny(getContextTask, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                MessageBox.Show("Время ожидания авторизации истекло.");
+                listener.Stop();
+                return false;
+            }
+
+            var context = await getContextTask;
+
+            // Получаем данные из запроса
+            string data = context.Request.QueryString["data"];
+
+            // Отправляем ответ
+            string responseHtml = "<html><body style='font-family: Arial; text-align: center; margin-top: 50px;'><h2 style='color: #4CAF50;'>✅ Данные получены!</h2><p>Окно можно закрыть.</p><script>setTimeout(() => window.close(), 1500);</script></body></html>";
+            byte[] buffer = Encoding.UTF8.GetBytes(responseHtml);
+            context.Response.ContentType = "text/html; charset=utf-8";
+            context.Response.ContentLength64 = buffer.Length;
+            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+            context.Response.Close();
+
+            listener.Stop();
+
+            // Парсим полученные данные
+            if (!string.IsNullOrEmpty(data))
+            {
+                var userData = JsonConvert.DeserializeObject<Dictionary<string, object>>(data);
+
+                if (userData != null)
+                {
+                    string actorId = userData.ContainsKey("actorId") ? userData["actorId"]?.ToString() : null;
+                    string accessToken = userData.ContainsKey("accessToken") ? userData["accessToken"]?.ToString() : null;
+                    string refreshToken = userData.ContainsKey("refreshToken") ? userData["refreshToken"]?.ToString() : null;
+                    string email = userData.ContainsKey("email") ? userData["email"]?.ToString() : null;
+
+                    // Устанавливаем сессию
+                    if (!string.IsNullOrEmpty(accessToken))
+                    {
+                        await _client.Auth.SetSession(accessToken, refreshToken);
+
+                        // Даем время на установку сессии
+                        await Task.Delay(1000);
+
+                        if (_client.Auth.CurrentUser != null)
+                        {
+                            // Сохраняем сессию
+                            if (_client.Auth.CurrentSession != null)
+                            {
+                                SessionStorage.SaveSession(_client.Auth.CurrentSession);
+                            }
+
+                            // Получаем профиль
+                            var profile = await GetProfileByActorIdAsync(_client.Auth.CurrentUser.Id);
+
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                if (profile != null && !string.IsNullOrEmpty(profile.Username))
+                                {
+                                    MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {profile.Username}");
+                                }
+                                else
+                                {
+                                    MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}");
+                                }
+
+                                currentPage.NavigationService.Navigate(new UserHomePage());
+                            });
+
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            MessageBox.Show("Не удалось получить данные авторизации.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка при входе через Google: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                listener?.Stop();
+                listener?.Close();
+            }
+            catch { }
+        }
+    }
+
+    // ДОБАВЬТЕ ЭТОТ МЕТОД ЗДЕСЬ
+    public async Task<Profile?> GetProfileByActorIdAsync(string actorId)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(actorId)) return null;
+
+            var userId = Guid.Parse(actorId);
+
+            var result = await _client
+                .From<Profile>()
+                .Where(p => p.Id == userId)
+                .Single();
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка при получении профиля: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Добавьте этот метод в класс SupabaseService
+    private void StartLocalServer()
+    {
+        try
+        {
+            // Создаем HTTP слушатель для HTML страницы
+            var htmlListener = new HttpListener();
+            htmlListener.Prefixes.Add("http://127.0.0.1:54322/");
+
+            try
+            {
+                htmlListener.Start();
+            }
+            catch (HttpListenerException)
+            {
+                // Сервер уже запущен, игнорируем
+                return;
+            }
+
+            Console.WriteLine("Локальный сервер запущен на http://127.0.0.1:54322");
+
+            // Запускаем обработку запросов в фоновом потоке
+            Task.Run(async () =>
+            {
+                while (htmlListener.IsListening)
+                {
+                    try
+                    {
+                        var context = await htmlListener.GetContextAsync();
+
+                        // Обрабатываем только GET запросы
+                        if (context.Request.HttpMethod != "GET")
+                        {
+                            context.Response.StatusCode = 405;
+                            context.Response.Close();
+                            continue;
+                        }
+
+                        // Если запрашивают наш HTML файл
+                        if (context.Request.Url.AbsolutePath == "/oauth-callback.html")
+                        {
+                            try
+                            {
+                                // Получаем путь к HTML файлу (рядом с EXE)
+                                string htmlPath = System.IO.Path.Combine(
+                                    AppDomain.CurrentDomain.BaseDirectory,
+                                    "oauth-callback.html");
+
+                                // Проверяем, существует ли файл
+                                if (System.IO.File.Exists(htmlPath))
+                                {
+                                    string html = System.IO.File.ReadAllText(htmlPath);
+                                    byte[] buffer = Encoding.UTF8.GetBytes(html);
+
+                                    context.Response.ContentType = "text/html; charset=utf-8";
+                                    context.Response.ContentLength64 = buffer.Length;
+                                    await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+                                }
+                                else
+                                {
+                                    // Файл не найден, отправляем ошибку
+                                    string errorHtml = $"<html><body><h2>Ошибка: файл oauth-callback.html не найден</h2><p>Путь: {htmlPath}</p></body></html>";
+                                    byte[] buffer = Encoding.UTF8.GetBytes(errorHtml);
+                                    context.Response.ContentType = "text/html; charset=utf-8";
+                                    context.Response.ContentLength64 = buffer.Length;
+                                    await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Ошибка при чтении HTML файла: {ex.Message}");
+                                context.Response.StatusCode = 500;
+                            }
+                        }
+                        else
+                        {
+                            // Для всех других запросов отправляем 404
+                            context.Response.StatusCode = 404;
+                        }
+
+                        context.Response.Close();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Ошибка в локальном сервере: {ex.Message}");
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка запуска сервера: {ex.Message}");
+        }
+    }
+
+
+    // МЕТОД ДЛЯ ПРОВЕРКИ АВТОРИЗАЦИИ
+    public bool IsUserAuthenticated()
+    {
+        return _client.Auth.CurrentUser != null;
+    }
+
     //Получение токена сессии пользователя
     public static string GetSessionToken()
     {
@@ -226,7 +499,7 @@ public class SupabaseService
             MessageBox.Show("Пользователь не авторизован.");
             return null;
         }
-        return session.AccessToken;  // Токен сессии
+        return session.AccessToken;
     }
 
     //Получить текущего пользователя (отобразить имя)
@@ -238,7 +511,6 @@ public class SupabaseService
 
             if (user != null)
             {
-
                 var profile = await GetMyProfileAsync();
 
                 if (profile != null && !string.IsNullOrEmpty(profile.Username))
@@ -275,13 +547,12 @@ public class SupabaseService
 
             var userId = Guid.Parse(user.Id);
 
-            // Получаем роль пользователя для доски, используя метод Get()
             var memberships = await _client.From<BoardMember>()
                 .Where(m => m.BoardId == boardId && m.UserId == userId)
                 .Get();
 
-            var membership = memberships.Models?.FirstOrDefault();  // Получаем первый элемент, если он есть
-            return membership?.Role;  // Возвращаем роль пользователя (например, "viewer", "editor")
+            var membership = memberships.Models?.FirstOrDefault();
+            return membership?.Role;
         }
         catch (Exception ex)
         {
@@ -339,7 +610,7 @@ public class SupabaseService
             var board = new Board
             {
                 Title = title,
-                OwnerId = Guid.Parse(user.Id),  // Устанавливаем владельца доски
+                OwnerId = Guid.Parse(user.Id),
                 AccessCode = Guid.NewGuid().ToString("N")[..6].ToUpper(),
                 CreatedAt = DateTime.UtcNow
             };
@@ -348,21 +619,19 @@ public class SupabaseService
 
             if (result.Models?.Any() == true)
             {
-                // Добавляем владельца в таблицу board_members с ролью "owner"
                 var boardId = result.Models.First().Id;
                 var newBoardMember = new BoardMember
                 {
                     BoardId = boardId,
                     UserId = Guid.Parse(user.Id),
-                    Role = "owner",  // Роль владельца
+                    Role = "owner",
                     JoinedAt = DateTime.UtcNow
                 };
 
-                // Вставляем владельца в таблицу board_members
                 await _client.From<BoardMember>().Insert(newBoardMember);
 
                 MessageBox.Show("Доска успешно создана 🎉");
-                return result.Models.First(); // Возвращаем объект доски с ID
+                return result.Models.First();
             }
 
             MessageBox.Show("Не удалось создать доску");
@@ -386,7 +655,6 @@ public class SupabaseService
 
             var userId = Guid.Parse(user.Id);
 
-            // 1. Свои доски (владелец)
             var ownedBoards = await _client.From<Board>()
                 .Where(b => b.OwnerId == userId)
                 .Get();
@@ -396,7 +664,6 @@ public class SupabaseService
                     result.Add((board, "owner"));
             }
 
-            // 2. Доски, где пользователь участник
             var memberships = await _client.From<BoardMember>()
                 .Where(m => m.UserId == userId)
                 .Get();
@@ -408,13 +675,9 @@ public class SupabaseService
                     var board = await _client.From<Board>()
                         .Where(b => b.Id == member.BoardId)
                         .Single();
-                    if (board != null)
+                    if (board != null && board.OwnerId != userId)
                     {
-                        // Добавляем только тех, кто не является владельцем
-                        if (board.OwnerId != userId) // Проверка: если это не доска владельца, добавляем
-                        {
-                            result.Add((board, member.Role));
-                        }
+                        result.Add((board, member.Role));
                     }
                 }
             }
@@ -431,18 +694,15 @@ public class SupabaseService
     {
         try
         {
-            // Сериализация списка точек в строку JSON
             string pointsJson = null;
             if (shape.DeserializedPoints != null && shape.DeserializedPoints.Count > 0)
             {
-                pointsJson = JsonConvert.SerializeObject(shape.DeserializedPoints); // Преобразуем List<Point> в JSON строку
+                pointsJson = JsonConvert.SerializeObject(shape.DeserializedPoints);
             }
 
-            // Используем Upsert для добавления или обновления фигуры
             var result = await _client.From<BoardShape>().Upsert(new BoardShape
             {
-                // Передаем все данные, включая Id
-                Id = shape.Id,  // Это важно для обновления существующей фигуры
+                Id = shape.Id,
                 BoardId = shape.BoardId,
                 Type = shape.Type,
                 X = shape.X,
@@ -472,7 +732,6 @@ public class SupabaseService
         }
     }
 
-    // Метод для загрузки фигур с базы данных
     public async Task<List<BoardShape>> LoadBoardShapesAsync(Guid boardId)
     {
         try
@@ -488,12 +747,10 @@ public class SupabaseService
             {
                 foreach (var model in result.Models)
                 {
-                    // Десериализация строки JSON в List<Point> и сохранение в коллекцию
                     if (!string.IsNullOrEmpty(model.Points))
                     {
-                        model.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(model.Points); // Десериализуем строку JSON в List<Point>
+                        model.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(model.Points);
                     }
-
                     shapes.Add(model);
                 }
             }
@@ -507,7 +764,6 @@ public class SupabaseService
         }
     }
 
-    // Метод для генерации уникального Id
     public async Task<int> GenerateUniqueIdAsync(Guid boardId)
     {
         int newId;
@@ -515,23 +771,19 @@ public class SupabaseService
 
         do
         {
-            // Генерируем новый уникальный Id
-            newId = Guid.NewGuid().GetHashCode(); // Генерация случайного int
-
-            // Проверяем, существует ли уже такой id
+            newId = Guid.NewGuid().GetHashCode();
             var existingShape = await _client
                 .From<BoardShape>()
                 .Where(s => s.BoardId == boardId && s.Id == newId)
                 .Get();
 
-            idExists = existingShape.Models?.Count > 0; // Если фигура с таким id существует, генерируем новый
+            idExists = existingShape.Models?.Count > 0;
         }
         while (idExists);
 
         return newId;
     }
 
-    // Присоединение к доске по коду доступа (роль по умолчанию "viewer")
     public async Task<Board> JoinBoardAsync(string accessCode)
     {
         try
@@ -556,14 +808,12 @@ public class SupabaseService
             var boardId = boardResult.Id;
             var userId = Guid.Parse(user.Id);
 
-            // Владелец уже имеет доступ
             if (boardResult.OwnerId == userId)
             {
                 MessageBox.Show("Вы владелец этой доски.");
                 return boardResult;
             }
 
-            // Проверяем, не участник ли уже (без исключения!)
             var existingMember = await _client.From<BoardMember>()
                 .Where(m => m.BoardId == boardId && m.UserId == userId)
                 .Single();
@@ -574,7 +824,6 @@ public class SupabaseService
                 return boardResult;
             }
 
-            // Добавляем с ролью "viewer"
             var newMember = new BoardMember
             {
                 BoardId = boardId,
@@ -603,7 +852,6 @@ public class SupabaseService
         }
     }
 
-    // Проверка прав редактирования доски для текущего пользователя
     public async Task<bool> CanEditBoardAsync(Guid boardId)
     {
         try
@@ -613,14 +861,12 @@ public class SupabaseService
 
             var userId = Guid.Parse(user.Id);
 
-            // Владелец может редактировать
             var board = await _client.From<Board>()
                 .Where(b => b.Id == boardId)
                 .Single();
             if (board != null && board.OwnerId == userId)
                 return true;
 
-            // Проверяем роль в board_members
             var member = await _client.From<BoardMember>()
                 .Where(m => m.BoardId == boardId && m.UserId == userId)
                 .Single();
@@ -633,12 +879,10 @@ public class SupabaseService
         }
     }
 
-    // (Опционально) Изменение роли участника (только для владельца)
     public async Task<bool> UpdateBoardMemberRoleAsync(Guid boardId, Guid userId, string newRole)
     {
         try
         {
-            // Получаем текущего члена доски
             var member = await _client.From<BoardMember>()
                 .Where(m => m.BoardId == boardId && m.UserId == userId)
                 .Single();
@@ -649,7 +893,6 @@ public class SupabaseService
                 return false;
             }
 
-            // Обновляем роль
             member.Role = newRole;
             var result = await _client.From<BoardMember>().Update(member);
 
@@ -661,7 +904,6 @@ public class SupabaseService
             return false;
         }
     }
-
 
     public async Task<List<BoardMember>> GetBoardMembersAsync(Guid boardId)
     {
@@ -680,5 +922,4 @@ public class SupabaseService
             return new List<BoardMember>();
         }
     }
-
 }

@@ -1,0 +1,290 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>Авторизация через Google</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+            animation: slideIn 0.5s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        h2 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+
+        .success-icon {
+            font-size: 80px;
+            color: #4CAF50;
+            margin-bottom: 20px;
+        }
+
+        .info {
+            background: #f5f5f5;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+        }
+
+        .info-item {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            border-left: 4px solid #4CAF50;
+            word-break: break-all;
+        }
+
+        .info-label {
+            font-weight: bold;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            color: #333;
+            font-size: 16px;
+        }
+
+        .button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.3s;
+            margin-top: 20px;
+            width: 100%;
+            font-weight: bold;
+        }
+
+            .button:hover {
+                background: #45a049;
+            }
+
+            .button.secondary {
+                background: #2196F3;
+            }
+
+                .button.secondary:hover {
+                    background: #1976D2;
+                }
+
+        .loading {
+            display: none;
+            margin-top: 20px;
+        }
+
+            .loading.show {
+                display: block;
+            }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #4CAF50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="mainContainer">
+        <div class="success-icon">✅</div>
+        <h2>Авторизация через Google завершена!</h2>
+
+        <div id="loadingData" class="loading show">
+            <div class="spinner"></div>
+            <p style="margin-top: 20px;">Обработка данных авторизации...</p>
+        </div>
+
+        <div id="dataContainer" style="display: none;">
+            <div class="info">
+                <h3 style="margin-top: 0; color: #333;">Данные пользователя:</h3>
+                <div class="info-item">
+                    <div class="info-label">Email:</div>
+                    <div class="info-value" id="userEmail">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Actor ID (User ID):</div>
+                    <div class="info-value" id="actorId">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Access Token:</div>
+                    <div class="info-value" id="accessToken" style="font-size: 12px;">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Refresh Token:</div>
+                    <div class="info-value" id="refreshToken" style="font-size: 12px;">-</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Expires In:</div>
+                    <div class="info-value" id="expiresIn">-</div>
+                </div>
+            </div>
+
+            <button class="button" onclick="sendToApp()">📱 Отправить данные в приложение</button>
+            <button class="button secondary" onclick="window.close()" style="margin-top: 10px;">❌ Закрыть окно</button>
+        </div>
+    </div>
+
+    <script>
+        // Функция для извлечения параметров из URL
+        function getUrlParams() {
+            const params = {};
+
+            // Параметры из query string
+            const queryString = window.location.search.substring(1);
+            if (queryString) {
+                const queryPairs = queryString.split('&');
+                queryPairs.forEach(pair => {
+                    const [key, value] = pair.split('=');
+                    if (key && value) {
+                        params[key] = decodeURIComponent(value);
+                    }
+                });
+            }
+
+            // Параметры из фрагмента (после #)
+            const fragment = window.location.hash.substring(1);
+            if (fragment) {
+                const fragmentPairs = fragment.split('&');
+                fragmentPairs.forEach(pair => {
+                    const [key, value] = pair.split('=');
+                    if (key && value) {
+                        params[key] = decodeURIComponent(value);
+                    }
+                });
+            }
+
+            return params;
+        }
+
+        // Функция для отправки данных в WPF приложение
+        function sendToApp() {
+            const params = getUrlParams();
+
+            // Создаем объект с данными
+            const data = {
+                actorId: params.actor_id || params.user_id || params.sub || null,
+                email: params.email || null,
+                accessToken: params.access_token || null,
+                refreshToken: params.refresh_token || null,
+                expiresIn: params.expires_in || null,
+                tokenType: params.token_type || null,
+                fullResponse: params
+            };
+
+            // Если нет actorId, но есть access_token, пытаемся получить из JWT
+            if (!data.actorId && data.accessToken) {
+                try {
+                    const parts = data.accessToken.split('.');
+                    if (parts.length === 3) {
+                        const payload = JSON.parse(atob(parts[1]));
+                        data.actorId = payload.sub || payload.user_id;
+                        data.email = payload.email || data.email;
+                    }
+                } catch (e) {
+                    console.error('Ошибка парсинга JWT:', e);
+                }
+            }
+
+            // Отправляем данные в приложение через специальный URL
+            const callbackUrl = `http://127.0.0.1:54322/auth/callback?data=${encodeURIComponent(JSON.stringify(data))}`;
+
+            // Показываем загрузку
+            document.getElementById('loadingData').classList.add('show');
+            document.getElementById('dataContainer').style.display = 'none';
+
+            // Отправляем данные
+            fetch(callbackUrl)
+                .then(response => response.text())
+                .then(result => {
+                    alert('Данные успешно отправлены в приложение!');
+                    setTimeout(() => window.close(), 1500);
+                })
+                .catch(error => {
+                    console.error('Ошибка отправки:', error);
+                    alert('Ошибка при отправке данных. Закройте окно и вернитесь в приложение.');
+
+                    // Показываем кнопку для ручного закрытия
+                    document.getElementById('loadingData').classList.remove('show');
+                    document.getElementById('dataContainer').style.display = 'block';
+                });
+        }
+
+        // Инициализация при загрузке страницы
+        window.onload = function() {
+            const params = getUrlParams();
+
+            // Отображаем данные
+            if (Object.keys(params).length > 0) {
+                document.getElementById('loadingData').classList.remove('show');
+                document.getElementById('dataContainer').style.display = 'block';
+
+                // Заполняем поля
+                document.getElementById('actorId').textContent = params.actor_id || params.user_id || params.sub || 'Не найдено';
+                document.getElementById('userEmail').textContent = params.email || 'Не найдено';
+                document.getElementById('accessToken').textContent = params.access_token ? params.access_token.substring(0, 50) + '...' : 'Не найдено';
+                document.getElementById('refreshToken').textContent = params.refresh_token ? params.refresh_token.substring(0, 50) + '...' : 'Не найдено';
+                document.getElementById('expiresIn').textContent = params.expires_in || '3600';
+
+                // Автоматически отправляем данные через 2 секунды
+                setTimeout(sendToApp, 2000);
+            } else {
+                document.getElementById('loadingData').classList.remove('show');
+                document.getElementById('dataContainer').style.display = 'block';
+                document.querySelector('.info').innerHTML = '<p style="color: red;">❌ Не удалось получить данные авторизации</p>';
+            }
+        };
+    </script>
+</body>
+</html>
