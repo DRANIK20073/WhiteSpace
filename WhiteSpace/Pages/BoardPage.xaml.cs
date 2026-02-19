@@ -5,7 +5,6 @@ using Supabase;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Linq;
 using System.Net;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -24,7 +23,10 @@ namespace WhiteSpace.Pages
         private readonly Guid _boardId;
         private SupabaseService _supabaseService;
         private FirebaseService _firebaseService;
+        private bool _isLoadingShapes = false; // Флаг для предотвращения двойной загрузки
 
+        private IDisposable _shapesSubscription;
+        private IDisposable _membersSubscription;
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
 
@@ -74,16 +76,13 @@ namespace WhiteSpace.Pages
             InitializeComponent();
             _boardId = boardId;
             _supabaseService = new SupabaseService();
+            _firebaseService = new FirebaseService();
 
             // Добавляем обработчики событий для Viewport
             Viewport.MouseDown += Viewport_MouseDown;
             Viewport.MouseMove += Viewport_MouseMove;
             Viewport.MouseUp += Viewport_MouseUp;
             Viewport.MouseWheel += Viewport_MouseWheel;
-            _firebaseService = new FirebaseService();  // Инициализируем FirebaseService
-
-            // Подписываемся на изменения фигур
-            SubscribeToShapes();
 
             Loaded += Page_Loaded;
             Unloaded += Page_Unloaded;
@@ -91,12 +90,16 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            // Загружаем фигуры из Supabase
+            await LoadShapesFromSupabase();
+
+            // Определяем роль пользователя
             var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
 
             if (userRole == "viewer" || userRole == "editor")
             {
                 await LoadBoardMembers();
-                UsersListView.IsEnabled = false; 
+                UsersListView.IsEnabled = false;
             }
             else if (userRole == "owner")
             {
@@ -108,95 +111,349 @@ namespace WhiteSpace.Pages
                 UsersListView.Visibility = Visibility.Collapsed;
             }
 
+            // Центрируем камеру
+            CenterViewport();
+
+            // Устанавливаем начальный инструмент
+            SetTool(ToolMode.Hand);
+
+            // Подписываемся на изменения фигур из Firebase (только для получения обновлений)
+            SubscribeToShapes();
+            SubscribeToBoardMembers();
+        }
+
+        private void CenterViewport()
+        {
             var viewportCenter = new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2);
             var canvasCenter = new Point(BoardCanvas.Width / 2, BoardCanvas.Height / 2);
 
             BoardTranslate.X = viewportCenter.X - canvasCenter.X;
             BoardTranslate.Y = viewportCenter.Y - canvasCenter.Y;
-
-            SetTool(ToolMode.Hand);
-
-            var shapes = await _supabaseService.LoadBoardShapesAsync(_boardId);
-
-            foreach (var shape in shapes)
-            {
-                AddShapeToCanvas(shape);
-            }
         }
 
         private void Page_Unloaded(object sender, RoutedEventArgs e)
         {
-
+            // Отписываемся от событий при выходе
+            _shapesSubscription?.Dispose();
+            _membersSubscription?.Dispose();
         }
 
+        // Загрузка фигур из Supabase
+        private async System.Threading.Tasks.Task LoadShapesFromSupabase()
+        {
+            try
+            {
+                _isLoadingShapes = true;
+                var shapes = await _supabaseService.LoadBoardShapesAsync(_boardId);
+
+                foreach (var shape in shapes)
+                {
+                    AddShapeToCanvas(shape);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки фигур: {ex.Message}");
+            }
+            finally
+            {
+                _isLoadingShapes = false;
+            }
+        }
+
+        // Подписка на изменения из Firebase (только для получения обновлений от других пользователей)
+        // Подписка на изменения из Firebase (только для получения обновлений от других пользователей)
         private void SubscribeToShapes()
         {
             try
             {
-                // Подписка на обновления фигур в реальном времени
-                _firebaseService
-                    .GetShapesObservable(_boardId.ToString())  // boardId как строка
-                    .Where(shape => shape != null)  // Игнорируем пустые данные
-                    .DistinctUntilChanged()  // Убираем повторяющиеся данные
+                _shapesSubscription = _firebaseService
+                    .GetShapesObservable(_boardId.ToString())
+                    .Where(shape => shape != null)
+                    .DistinctUntilChanged()
                     .Subscribe(async shape =>
                     {
+                        // Игнорируем обновления, если идет загрузка из Supabase
+                        if (_isLoadingShapes)
+                            return;
+
                         await Application.Current.Dispatcher.InvokeAsync(() =>
                         {
-                            UpdateOrAddShape(shape);  // Обновляем или добавляем фигуру
+                            UpdateOrAddShapeFromFirebase(shape);
                         });
                     });
+
+                // Подписываемся на изменения участников
+                SubscribeToBoardMembers();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка подписки: {ex.Message}");
+                MessageBox.Show($"Ошибка подписки на Firebase: {ex.Message}");
             }
         }
 
-        // Метод для обновления или добавления фигуры
-        private void UpdateOrAddShape(BoardShape shape)
+        // Обновление или добавление фигуры из Firebase (от других пользователей)
+        private void UpdateOrAddShapeFromFirebase(BoardShape shape)
         {
-            if (_shapesOnBoard.Any(s => s.Id == shape.Id))
+            var existingShapeIndex = _shapesOnBoard.FindIndex(s => s.Id == shape.Id);
+
+            if (existingShapeIndex >= 0)
             {
                 // Если фигура уже существует, обновляем её
-                var existingShape = _shapesOnBoard.First(s => s.Id == shape.Id);
-                existingShape.X = shape.X;
-                existingShape.Y = shape.Y;
-                existingShape.Width = shape.Width;
-                existingShape.Height = shape.Height;
-                existingShape.Color = shape.Color;
-                existingShape.Text = shape.Text;
+                var existingShape = _shapesOnBoard[existingShapeIndex];
+                var uiElement = FindUIElementByUid(shape.Id.ToString());
 
-                // Здесь добавьте логику обновления UI для фигуры
+                if (uiElement != null)
+                {
+                    Console.WriteLine($"Получено обновление для фигуры {shape.Id}: цвет {shape.Color}");
+
+                    // Сначала обновляем данные фигуры
+                    existingShape.Color = shape.Color;
+                    existingShape.X = shape.X;
+                    existingShape.Y = shape.Y;
+                    existingShape.Width = shape.Width;
+                    existingShape.Height = shape.Height;
+                    existingShape.Text = shape.Text;
+
+                    // Обновляем UI элемент (включая цвет)
+                    UpdateUIElementFromShape(uiElement, shape);
+
+                    if (shape.Type == "line" && !string.IsNullOrEmpty(shape.Points))
+                    {
+                        existingShape.Points = shape.Points;
+                        existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+
+                        if (uiElement is Polyline targetPolyline)
+                        {
+                            targetPolyline.Points.Clear();
+                            foreach (var point in existingShape.DeserializedPoints)
+                            {
+                                targetPolyline.Points.Add(point);
+                            }
+                        }
+                    }
+                }
             }
             else
             {
-                // Добавляем новую фигуру
+                // Добавляем новую фигуру (созданную другим пользователем)
+                Console.WriteLine($"Получена новая фигура из Firebase: {shape.Id}, цвет {shape.Color}");
                 _shapesOnBoard.Add(shape);
-                AddShapeToCanvas(shape);  // Рисуем фигуру на канвасе
+                AddShapeToCanvas(shape);
             }
         }
 
-        // Метод для отправки новой фигуры в Firebase
-        private async void AddNewShape(BoardShape shape)
+        // Обновление UI элемента из данных фигуры
+        private void UpdateUIElementFromShape(UIElement element, BoardShape shape)
         {
-            await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);  // Отправляем фигуру в Firebase
+            var brush = GetBrushFromColor(shape.Color);
+
+            if (element is Shape shapeElement)
+            {
+                shapeElement.Stroke = brush;
+            }
+            else if (element is Polyline polyline)
+            {
+                polyline.Stroke = brush;
+            }
+            else if (element is TextBox textBox)
+            {
+                textBox.Foreground = brush;
+                textBox.Text = shape.Text;
+            }
+
+            // Обновляем позицию и размеры
+            if (shape.Type == "text")
+            {
+                Canvas.SetLeft(element, shape.X);
+                Canvas.SetTop(element, shape.Y);
+
+                if (element is TextBox tb)
+                {
+                    tb.Width = shape.Width;
+                    tb.Height = shape.Height;
+                }
+            }
+            else if (shape.Type == "line")
+            {
+                if (element is Polyline targetPolyline && !string.IsNullOrEmpty(shape.Points))
+                {
+                    var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                    targetPolyline.Points.Clear();
+                    foreach (var point in points)
+                    {
+                        targetPolyline.Points.Add(point);
+                    }
+                }
+            }
+            else
+            {
+                Canvas.SetLeft(element, shape.X - shape.Width / 2);
+                Canvas.SetTop(element, shape.Y - shape.Height / 2);
+
+                if (element is FrameworkElement fe)
+                {
+                    fe.Width = shape.Width;
+                    fe.Height = shape.Height;
+                }
+            }
+        }
+
+        // Отправка изменений в Firebase (для реалтайм обновлений)
+        private async void PushShapeToFirebase(BoardShape shape)
+        {
+            try
+            {
+                await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
+            }
+            catch (Exception ex)
+            {
+                // Логируем ошибку, но не показываем пользователю
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки в Firebase: {ex.Message}");
+            }
+        }
+
+        private UIElement FindUIElementByUid(string uid)
+        {
+            foreach (var child in BoardCanvas.Children)
+            {
+                if (child is UIElement element && element.Uid == uid)
+                {
+                    return element;
+                }
+            }
+            return null;
+        }
+
+        // Подписка на изменения участников доски
+        private void SubscribeToBoardMembers()
+        {
+            try
+            {
+                _membersSubscription = _firebaseService
+                    .GetBoardMembersObservable(_boardId.ToString())
+                    .Where(members => members != null)
+                    .Subscribe(async members =>
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(async () =>
+                        {
+                            await UpdateBoardMembersFromFirebase(members);
+                        });
+                    });
+
+                Console.WriteLine("Подписка на участников успешно создана");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка подписки на участников: {ex.Message}");
+            }
+        }
+
+        // Обновление списка участников из Firebase
+        // Обновление списка участников из Firebase
+        private async Task UpdateBoardMembersFromFirebase(List<FirebaseBoardMember> members)
+        {
+            try
+            {
+                Console.WriteLine($"Получено обновление участников из Firebase. Количество: {members?.Count ?? 0}");
+
+                // Получаем текущего пользователя
+                var currentUser = await _supabaseService.GetMyProfileAsync();
+
+                if (members != null && members.Any())
+                {
+                    // Получаем полные данные из Supabase для отображения
+                    var supabaseMembers = await _supabaseService.GetBoardMembersAsync(_boardId);
+                    Console.WriteLine($"Загружено участников из Supabase: {supabaseMembers.Count}");
+
+                    // Сопоставляем Firebase данные с Supabase
+                    var displayMembers = new List<BoardMember>();
+
+                    foreach (var fbMember in members)
+                    {
+                        var supabaseMember = supabaseMembers.FirstOrDefault(m => m.UserId.ToString() == fbMember.UserId);
+                        if (supabaseMember != null)
+                        {
+                            displayMembers.Add(supabaseMember);
+                        }
+                    }
+
+                    // Фильтруем, чтобы не показывать текущего пользователя
+                    var otherMembers = displayMembers.Where(m => m.UserId != currentUser?.Id).ToList();
+
+                    Console.WriteLine($"Отображаем участников: {otherMembers.Count}");
+
+                    UsersListView.ItemsSource = null; // Сбрасываем для принудительного обновления
+                    UsersListView.ItemsSource = otherMembers;
+                    UsersListView.Visibility = Visibility.Visible;
+
+                    // Обновляем доступность кнопок в зависимости от роли
+                    var currentUserMember = displayMembers.FirstOrDefault(m => m.UserId == currentUser?.Id);
+                    if (currentUserMember != null)
+                    {
+                        UsersListView.IsEnabled = currentUserMember.Role == "owner";
+                        Console.WriteLine($"Текущий пользователь имеет роль: {currentUserMember.Role}");
+                    }
+                }
+                else
+                {
+                    UsersListView.ItemsSource = null;
+                    UsersListView.Visibility = Visibility.Collapsed;
+                    Console.WriteLine("Нет участников для отображения");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка обновления списка участников: {ex.Message}");
+                Console.WriteLine($"Ошибка: {ex.Message}");
+            }
+        }
+
+        private async void PushBoardMembersToFirebase()
+        {
+            try
+            {
+                var members = await _supabaseService.GetBoardMembersAsync(_boardId);
+
+                // Преобразуем в формат Firebase
+                var firebaseMembers = members.Select(m => new FirebaseBoardMember
+                {
+                    UserId = m.UserId.ToString(),
+                    Role = m.Role,
+                    JoinedAt = m.JoinedAt
+                }).ToList();
+
+                await _firebaseService.PushBoardMembersAsync(_boardId.ToString(), firebaseMembers);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки участников в Firebase: {ex.Message}");
+            }
         }
 
         private async Task LoadBoardMembers()
         {
             try
             {
-                // Получаем список участников доски
                 var boardMembers = await _supabaseService.GetBoardMembersAsync(_boardId);
+
+                // Получаем текущего пользователя
+                var currentUser = await _supabaseService.GetMyProfileAsync();
 
                 if (boardMembers != null && boardMembers.Any())
                 {
-                    // Привязываем список участников к ListView
-                    UsersListView.ItemsSource = boardMembers;
+                    // Фильтруем, чтобы не показывать текущего пользователя
+                    var otherMembers = boardMembers.Where(m => m.UserId != currentUser?.Id).ToList();
+
+                    UsersListView.ItemsSource = otherMembers;
+                    UsersListView.Visibility = Visibility.Visible;
+
+                    // Отправляем начальный список в Firebase
+                    PushBoardMembersToFirebase();
                 }
                 else
                 {
-                    // Если участников нет, показываем сообщение или скрываем ListView
+                    UsersListView.ItemsSource = null;
                     UsersListView.Visibility = Visibility.Collapsed;
                 }
             }
@@ -206,11 +463,8 @@ namespace WhiteSpace.Pages
             }
         }
 
-
-        // Click event handler to change the role of a selected user
         private async void ChangeRole_Click(object sender, RoutedEventArgs e)
         {
-            // Получаем данные о текущем участнике
             var button = sender as Button;
             var boardMember = button?.DataContext as BoardMember;
 
@@ -219,23 +473,22 @@ namespace WhiteSpace.Pages
                 MessageBox.Show("Ошибка: участник не выбран.");
                 return;
             }
-            if(boardMember.Role == "owner")
+
+            if (boardMember.Role == "owner")
             {
-                MessageBox.Show("Вы являетесь владельцем доски.");
+                MessageBox.Show("Вы не можете изменить роль владельца.");
                 return;
             }
 
-            // Переключаем роль между "viewer" и "editor"
             string newRole = boardMember.Role == "viewer" ? "editor" : "viewer";
-
-            // Обновляем роль в базе данных
             var result = await _supabaseService.UpdateBoardMemberRoleAsync(_boardId, boardMember.UserId, newRole);
 
             if (result)
             {
-                // Обновляем роль в UI
-                boardMember.Role = newRole;
-                MessageBox.Show($"Роль пользователя {boardMember.UserId} изменена на {newRole}.");
+                // Отправляем обновление в Firebase
+                PushBoardMembersToFirebase();
+
+                MessageBox.Show($"Роль пользователя изменена на {newRole}.");
             }
             else
             {
@@ -243,11 +496,6 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void OnBoardMembersChanged()
-        {
-            // Загружаем актуальный список участников
-            await LoadBoardMembers();
-        }
         private Brush GetBrushFromColor(string colorString)
         {
             if (string.IsNullOrEmpty(colorString))
@@ -264,38 +512,22 @@ namespace WhiteSpace.Pages
 
         private void DisableEditingTools()
         {
-            // Отключаем инструменты рисования и редактирования
             PenButton.IsEnabled = false;
             RectButton.IsEnabled = false;
             EllipseButton.IsEnabled = false;
             TextButton.IsEnabled = false;
-            ColorPanel.Visibility = Visibility.Collapsed;  // Скрываем панель выбора цвета
+            ColorPanel.Visibility = Visibility.Collapsed;
         }
 
-
-        //Загрузка фигур на доску из бд
         private void AddShapeToCanvas(BoardShape shape)
         {
-            // Получаем цвет из shape.Color
-            Brush brush = Brushes.Black;
-
-            if (!string.IsNullOrEmpty(shape.Color))
-            {
-                try
-                {
-                    brush = (Brush)new BrushConverter().ConvertFromString(shape.Color);
-                }
-                catch
-                {
-                    brush = Brushes.Black;
-                }
-            }
+            Brush brush = GetBrushFromColor(shape.Color);
 
             if (shape.Type == "line")
             {
                 var polyline = new Polyline
                 {
-                    Stroke = brush,   // ✅ используем сохранённый цвет
+                    Stroke = brush,
                     StrokeThickness = 2,
                     StrokeLineJoin = PenLineJoin.Round,
                     StrokeStartLineCap = PenLineCap.Round,
@@ -304,7 +536,6 @@ namespace WhiteSpace.Pages
                 };
 
                 var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-
                 foreach (var point in points)
                 {
                     polyline.Points.Add(new Point(point.X, point.Y));
@@ -323,7 +554,7 @@ namespace WhiteSpace.Pages
                     Background = Brushes.Transparent,
                     BorderBrush = Brushes.Black,
                     BorderThickness = new Thickness(1),
-                    Foreground = brush,  // ✅ цвет текста
+                    Foreground = brush,
                     Uid = shape.Id.ToString(),
                     IsReadOnly = false,
                     Focusable = true
@@ -348,7 +579,7 @@ namespace WhiteSpace.Pages
                     {
                         Width = shape.Width,
                         Height = shape.Height,
-                        Stroke = brush,      // ✅ цвет фигуры
+                        Stroke = brush,
                         StrokeThickness = 2,
                         Fill = Brushes.Transparent,
                         Uid = shape.Id.ToString()
@@ -357,7 +588,7 @@ namespace WhiteSpace.Pages
                     {
                         Width = shape.Width,
                         Height = shape.Height,
-                        Stroke = brush,      // ✅
+                        Stroke = brush,
                         StrokeThickness = 2,
                         Fill = Brushes.Transparent,
                         Uid = shape.Id.ToString()
@@ -376,8 +607,7 @@ namespace WhiteSpace.Pages
             }
         }
 
-
-        //Обработчики событий для TextBox
+        // Обработчики событий для TextBox
         private void TextBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
             var textBox = sender as TextBox;
@@ -439,10 +669,10 @@ namespace WhiteSpace.Pages
 
         private void TextBox_TextChanged(object sender, TextChangedEventArgs e)
         {
-            // Автосохранение можно добавить при необходимости
+            // Можно добавить автосохранение при необходимости
         }
 
-        //Инструменты
+        // Инструменты
         private void Hand_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Hand);
         private void Pen_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Pen);
         private void Rect_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Rect);
@@ -453,7 +683,6 @@ namespace WhiteSpace.Pages
         {
             _tool = tool;
 
-            // ===== Панель цветов =====
             if (_tool == ToolMode.Pen ||
                 _tool == ToolMode.Rect ||
                 _tool == ToolMode.Ellipse ||
@@ -463,37 +692,27 @@ namespace WhiteSpace.Pages
             }
             else if (_tool == ToolMode.Hand)
             {
-                // В режиме перемещения показываем только если есть выделение
-                ColorPanel.Visibility =
-                    _selectedElement != null
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
+                ColorPanel.Visibility = _selectedElement != null ? Visibility.Visible : Visibility.Collapsed;
             }
             else
             {
                 ColorPanel.Visibility = Visibility.Collapsed;
             }
 
-            // ===== Сброс состояний =====
             _isDrawing = false;
             _currentStroke = null;
             _isPanning = false;
             _isDraggingElement = false;
             _dragElement = null;
 
-            // Убираем ручки и рамку
             RemoveResizeFrame();
-
-            // Убираем старую фигуру-призрак
             RemovePreviewShape();
 
-            // Призрак включаем только для фигур
             if (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse)
             {
                 EnsurePreviewShape();
             }
 
-            // ===== Курсор =====
             Viewport.Cursor = _tool switch
             {
                 ToolMode.Hand => Cursors.Hand,
@@ -502,7 +721,6 @@ namespace WhiteSpace.Pages
                 _ => Cursors.Cross
             };
 
-            // ===== Настройка существующих TextBox =====
             foreach (var child in BoardCanvas.Children)
             {
                 if (child is TextBox textBox)
@@ -529,7 +747,6 @@ namespace WhiteSpace.Pages
             }
         }
 
-        // === Mouse helpers (Screen <-> World) ===
         private Point ScreenToWorld(Point screenPoint)
         {
             var s = BoardScale.ScaleX;
@@ -539,13 +756,11 @@ namespace WhiteSpace.Pages
             );
         }
 
-        // === Viewport events ===
         private async void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
             var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
             if (userRole == "viewer")
             {
-                // Режим только просмотра — никаких изменений, только панорамирование
                 if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
                 {
                     StartPan(e.GetPosition(Viewport));
@@ -553,7 +768,6 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            // Проверяем, не кликнули ли по ручке
             var hitTestResult = VisualTreeHelper.HitTest(Viewport, e.GetPosition(Viewport));
             if (hitTestResult != null)
             {
@@ -561,7 +775,6 @@ namespace WhiteSpace.Pages
                 while (hitElement != null && !(hitElement is Rectangle))
                     hitElement = VisualTreeHelper.GetParent(hitElement);
 
-                // Если кликнули по ручке, не обрабатываем дальше
                 if (hitElement is Rectangle rect && rect.Tag is string tag && tag.Length <= 2)
                 {
                     return;
@@ -572,22 +785,18 @@ namespace WhiteSpace.Pages
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
 
-            // Если уже перетаскиваем элемент, не начинаем панорамирование
             if (_isDraggingElement)
                 return;
 
-            // 1) Если клик по объекту — начинаем перетаскивание (в режиме Hand)
             if (_tool == ToolMode.Hand)
             {
                 RemoveResizeFrame();
 
-                // Проверяем клик по не-TexBox элементам
                 var hitTestResult2 = VisualTreeHelper.HitTest(Viewport, screen);
                 if (hitTestResult2 != null)
                 {
                     var hitElement = hitTestResult2.VisualHit;
 
-                    // Ищем родительский элемент
                     while (hitElement != null && !(hitElement is UIElement))
                         hitElement = VisualTreeHelper.GetParent(hitElement);
 
@@ -596,7 +805,6 @@ namespace WhiteSpace.Pages
                     if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
                         !(uiElement is TextBox) && uiElement != _previewShape)
                     {
-                        // Начинаем перетаскивание для не-TextBox элементов
                         if (uiElement is Polyline || uiElement is Rectangle || uiElement is Ellipse)
                         {
                             _isDraggingElement = true;
@@ -610,46 +818,33 @@ namespace WhiteSpace.Pages
                             _dragOffsetWorld = new Point(world.X - left, world.Y - top);
                             Viewport.CaptureMouse();
 
-                            // Показываем рамку для перемещаемого элемента
                             ShowResizeFrame(uiElement);
-
-                            // ВАЖНО: Прерываем выполнение, чтобы не создавать новую фигуру
                             return;
                         }
                     }
                 }
 
-                // 2) Если не было клика по объекту — начинаем панорамирование доски
                 StartPan(screen);
                 return;
             }
 
-            // 3) Pen — Начало рисования
             if (_tool == ToolMode.Pen && e.LeftButton == MouseButtonState.Pressed)
             {
                 StartStroke(world);
-
-                // ВАЖНО: Прерываем выполнение
                 return;
             }
 
-            // 4) Rect/Ellipse: клик фиксирует фигуру
             if ((_tool == ToolMode.Rect || _tool == ToolMode.Ellipse) && e.LeftButton == MouseButtonState.Pressed)
             {
                 PlaceShapeAt(world);
-
-                // ВАЖНО: Прерываем выполнение
                 return;
             }
 
-            // 5) Text: клик ставит textbox
             if (_tool == ToolMode.Text && e.LeftButton == MouseButtonState.Pressed)
             {
-                // Проверяем, не кликнули ли по существующему TextBox
                 var hitTestResult3 = VisualTreeHelper.HitTest(Viewport, screen);
                 if (hitTestResult3 != null && hitTestResult3.VisualHit is TextBox)
                 {
-                    // Кликнули по существующему TextBox - фокусируемся на нём
                     var textBox = FindParentTextBox(hitTestResult3.VisualHit);
                     if (textBox != null)
                     {
@@ -659,25 +854,20 @@ namespace WhiteSpace.Pages
                 }
                 else
                 {
-                    // Кликнули на пустое место - создаём новый TextBox
                     PlaceTextAt(world);
                 }
-
-                // ВАЖНО: Прерываем выполнение
                 return;
             }
         }
 
         private void BoardCanvas_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
-            // ПРОВЕРЯЕМ: Если мы в режиме создания фигур (не Hand), то блокируем обработку
             if (_tool != ToolMode.Hand)
             {
-                e.Handled = true; // Блокируем дальнейшую обработку
+                e.Handled = true;
                 return;
             }
 
-            // Только для режима Hand показываем рамку выделения
             var screen = e.GetPosition(BoardCanvas);
             var world = ScreenToWorld(screen);
 
@@ -695,11 +885,9 @@ namespace WhiteSpace.Pages
                 {
                     if (_tool == ToolMode.Hand)
                     {
-                        if (uiElement is Shape || uiElement is TextBox)
+                        if (uiElement is Shape || uiElement is TextBox || uiElement is Polyline)
                         {
                             ShowResizeFrame(uiElement);
-
-                            // Блокируем дальнейшую обработку, чтобы Viewport_MouseDown не создал новую фигуру
                             e.Handled = true;
                         }
                     }
@@ -720,17 +908,14 @@ namespace WhiteSpace.Pages
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
 
-            // Если изменяем размер - только обрабатываем ресайз
             if (_isResizing && _resizeTarget != null)
             {
                 ResizeElement(world);
-                return; // Выходим раньше
+                return;
             }
 
-            // Призрак фигуры следует за мышью
             UpdatePreview(world);
 
-            // Рисование линии
             if (_isDrawing && _currentStroke != null && e.LeftButton == MouseButtonState.Pressed)
             {
                 _currentStroke.Points.Add(world);
@@ -741,13 +926,11 @@ namespace WhiteSpace.Pages
                 }
             }
 
-            // Перемещение перетаскиваемого объекта
             if (_isDraggingElement && _dragElement != null)
             {
                 MoveElementTo(world);
             }
 
-            // Панорамирование
             if (_isPanning)
             {
                 BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
@@ -755,29 +938,27 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
+        private async void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
             if (_isResizing)
             {
-                SaveResizedShape();
+                await SaveResizedShapeAsync(); // Изменено на асинхронный метод
                 _isResizing = false;
                 _resizeDirection = null;
                 Viewport.ReleaseMouseCapture();
                 return;
             }
 
-            // Завершаем перетаскивание не-TexBox элементов
             if (_isDraggingElement && !(_dragElement is TextBox))
             {
                 if (_dragElement != null)
                 {
-                    SaveElementPosition(_dragElement);
+                    await SaveElementPositionAsync(_dragElement); // Изменено на асинхронный метод
                 }
                 _isDraggingElement = false;
                 _dragElement = null;
             }
 
-            // Для рисования (если фигура рисуется)
             if (_isDrawing)
             {
                 if (_currentStroke != null)
@@ -786,7 +967,10 @@ namespace WhiteSpace.Pages
                     if (shape != null)
                     {
                         shape.Points = JsonConvert.SerializeObject(_currentStroke.Points);
-                        _ = _supabaseService.SaveShapeAsync(shape);
+                        await _supabaseService.SaveShapeAsync(shape);
+
+                        // Отправляем в Firebase для реалтайм обновлений
+                        PushShapeToFirebase(shape); // Этот метод может остаться void, так как не требует await
                     }
                 }
                 _isDrawing = false;
@@ -797,8 +981,6 @@ namespace WhiteSpace.Pages
             Viewport.ReleaseMouseCapture();
         }
 
-        // === Перемещение элементов ===
-        // === Перемещение элементов ===
         private void MoveElementTo(Point world)
         {
             if (_dragElement == null) return;
@@ -806,23 +988,19 @@ namespace WhiteSpace.Pages
             double offsetX = world.X - _dragOffsetWorld.X;
             double offsetY = world.Y - _dragOffsetWorld.Y;
 
-            // Обновляем координаты в объекте BoardShape
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
             if (shape != null)
             {
-                // Для фигур (Rectangle, Ellipse) центрируем координаты
                 if (_dragElement is Shape visualShape)
                 {
                     shape.X = offsetX + shape.Width / 2;
                     shape.Y = offsetY + shape.Height / 2;
                 }
-                // Для TextBox используем верхний левый угол
                 else if (_dragElement is TextBox textBox)
                 {
                     shape.X = offsetX;
                     shape.Y = offsetY;
                 }
-                // Для Polyline обновляем все точки
                 else if (_dragElement is Polyline polyline)
                 {
                     shape.X = offsetX;
@@ -836,26 +1014,20 @@ namespace WhiteSpace.Pages
                     shape.DeserializedPoints = newPoints;
                     shape.Points = JsonConvert.SerializeObject(newPoints);
                 }
-
             }
 
-            // Перемещаем элемент на канвасе
             Canvas.SetLeft(_dragElement, offsetX);
             Canvas.SetTop(_dragElement, offsetY);
 
-            // Если элемент выделен, перемещаем и рамку с ручками
             if (_resizeTarget == _dragElement && _resizeBorder != null)
             {
-                // Обновляем рамку
                 Canvas.SetLeft(_resizeBorder, offsetX);
                 Canvas.SetTop(_resizeBorder, offsetY);
 
-                // Обновляем ручки
                 double width, height;
 
                 if (_dragElement is Polyline polyline)
                 {
-                    // Для линии вычисляем bounding box
                     if (polyline.Points.Count > 0)
                     {
                         double minX = polyline.Points.Min(p => p.X);
@@ -882,23 +1054,29 @@ namespace WhiteSpace.Pages
             }
         }
 
-
-        private async void SaveElementPosition(UIElement element)
+        private async Task SaveElementPositionAsync(UIElement element)
         {
             var shape = _shapesOnBoard.Find(s => s.Id.ToString() == element.Uid);
             if (shape != null)
             {
-                // Если это текстовое поле, сохраняем координаты
                 if (element is TextBox textBox)
                 {
                     shape.X = Canvas.GetLeft(textBox);
                     shape.Y = Canvas.GetTop(textBox);
                 }
-                // Для других фигур (например, прямоугольников или эллипсов)
                 else if (element is Polyline polyline)
                 {
                     shape.X = Canvas.GetLeft(element);
                     shape.Y = Canvas.GetTop(element);
+
+                    // Обновляем точки линии
+                    var newPoints = new List<Point>();
+                    foreach (var point in polyline.Points)
+                    {
+                        newPoints.Add(new Point(point.X, point.Y));
+                    }
+                    shape.DeserializedPoints = newPoints;
+                    shape.Points = JsonConvert.SerializeObject(newPoints);
                 }
                 else if (element is Shape visualShape)
                 {
@@ -906,9 +1084,11 @@ namespace WhiteSpace.Pages
                     shape.Y = Canvas.GetTop(element) + shape.Height / 2;
                 }
 
-                // Сохраняем в базу данных
-                await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
+                // Сохраняем в Supabase
                 await _supabaseService.SaveShapeAsync(shape);
+
+                // Отправляем в Firebase для реалтайм обновлений
+                PushShapeToFirebase(shape);
             }
         }
 
@@ -920,6 +1100,9 @@ namespace WhiteSpace.Pages
                 shape.X = Canvas.GetLeft(textBox);
                 shape.Y = Canvas.GetTop(textBox);
                 await _supabaseService.SaveShapeAsync(shape);
+
+                // Отправляем в Firebase для реалтайм обновлений
+                PushShapeToFirebase(shape);
             }
         }
 
@@ -930,9 +1113,11 @@ namespace WhiteSpace.Pages
             {
                 shape.Text = textBox.Text;
                 await _supabaseService.SaveShapeAsync(shape);
+
+                // Отправляем в Firebase для реалтайм обновлений
+                PushShapeToFirebase(shape);
             }
         }
-
 
         private void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
         {
@@ -970,7 +1155,7 @@ namespace WhiteSpace.Pages
 
             _currentStroke = new Polyline
             {
-                Stroke = _currentBrush,              // ✅ выбранный цвет
+                Stroke = _currentBrush,
                 StrokeThickness = 2,
                 StrokeLineJoin = PenLineJoin.Round,
                 StrokeStartLineCap = PenLineCap.Round,
@@ -989,7 +1174,7 @@ namespace WhiteSpace.Pages
                 Type = "line",
                 X = startWorld.X,
                 Y = startWorld.Y,
-                Color = _currentColorString,   // ✅ сохраняем цвет
+                Color = _currentColorString,
                 Id = uniqueId
             };
 
@@ -1058,13 +1243,12 @@ namespace WhiteSpace.Pages
             {
                 int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
-                // Создаем фигуру в зависимости от инструмента
                 BoardShape shape = _tool switch
                 {
                     ToolMode.Rect => new BoardShape
                     {
                         BoardId = _boardId,
-                        Type = "rectangle",  // Тип "rectangle" для прямоугольника
+                        Type = "rectangle",
                         X = world.X,
                         Y = world.Y,
                         Width = DefaultRectW,
@@ -1076,7 +1260,7 @@ namespace WhiteSpace.Pages
                     ToolMode.Ellipse => new BoardShape
                     {
                         BoardId = _boardId,
-                        Type = "ellipse",    // Тип "ellipse" для круга
+                        Type = "ellipse",
                         X = world.X,
                         Y = world.Y,
                         Width = DefaultEllipse,
@@ -1090,17 +1274,15 @@ namespace WhiteSpace.Pages
 
                 if (shape != null)
                 {
-                    // Добавляем фигуру в локальный список
                     _shapesOnBoard.Add(shape);
 
-                    // Создаем UI элемент для фигуры (Rectangle или Ellipse)
                     UIElement element = shape.Type switch
                     {
                         "rectangle" => new Rectangle
                         {
                             Width = shape.Width,
                             Height = shape.Height,
-                            Stroke = _currentBrush,     // Используем выбранный цвет
+                            Stroke = _currentBrush,
                             StrokeThickness = 2,
                             Fill = Brushes.Transparent,
                             Uid = shape.Id.ToString()
@@ -1109,7 +1291,7 @@ namespace WhiteSpace.Pages
                         {
                             Width = shape.Width,
                             Height = shape.Height,
-                            Stroke = _currentBrush,     // Используем выбранный цвет
+                            Stroke = _currentBrush,
                             StrokeThickness = 2,
                             Fill = Brushes.Transparent,
                             Uid = shape.Id.ToString()
@@ -1119,30 +1301,26 @@ namespace WhiteSpace.Pages
 
                     if (element != null)
                     {
-                        // Устанавливаем позицию фигуры на канвасе
                         Canvas.SetLeft(element, shape.X - shape.Width / 2);
                         Canvas.SetTop(element, shape.Y - shape.Height / 2);
 
-                        // Добавляем фигуру на канвас
                         BoardCanvas.Children.Add(element);
 
-                        // Сохраняем фигуру в базу данных Supabase
+                        // Сохраняем в Supabase
                         await _supabaseService.SaveShapeAsync(shape);
 
-                        AddNewShape(shape);
+                        // Отправляем в Firebase для реалтайм обновлений
+                        PushShapeToFirebase(shape);
 
-                        // Сбросим цвет инструмента на дефолтный
                         ResetToolColorToDefault();
                     }
                 }
             }
             finally
             {
-                // Разрешаем создание новых фигур
                 _isCreatingShape = false;
             }
         }
-
 
         private async void PlaceTextAt(Point world)
         {
@@ -1158,7 +1336,7 @@ namespace WhiteSpace.Pages
                 Background = Brushes.White,
                 BorderBrush = Brushes.Black,
                 BorderThickness = new Thickness(1),
-                Foreground = _currentBrush,   // ✅ цвет текста
+                Foreground = _currentBrush,
                 IsReadOnly = false,
                 Focusable = true,
                 Cursor = Cursors.IBeam
@@ -1185,14 +1363,15 @@ namespace WhiteSpace.Pages
                 Width = 120,
                 Height = 30,
                 Text = tb.Text,
-                Color = _currentColorString,   // ✅ сохраняем цвет
+                Color = _currentColorString,
                 Id = uniqueId
             };
 
             _shapesOnBoard.Add(shape);
-            await _supabaseService.SaveShapeAsync(shape);  // Сохраняем текстовый блок в базу данных
+            await _supabaseService.SaveShapeAsync(shape);
 
-            AddNewShape(shape);
+            // Отправляем в Firebase для реалтайм обновлений
+            PushShapeToFirebase(shape);
 
             ResetToolColorToDefault();
 
@@ -1202,9 +1381,7 @@ namespace WhiteSpace.Pages
             _isCreatingShape = false;
         }
 
-
-        // ===== РУЧКИ ИЗМЕНЕНИЯ РАЗМЕРА =====
-
+        // РУЧКИ ИЗМЕНЕНИЯ РАЗМЕРА
         private void ShowResizeFrame(UIElement element)
         {
             RemoveResizeFrame();
@@ -1216,7 +1393,6 @@ namespace WhiteSpace.Pages
 
             if (element is Polyline polyline)
             {
-                // Для линии вычисляем bounding box
                 if (polyline.Points.Count > 0)
                 {
                     double minX = polyline.Points.Min(p => p.X);
@@ -1226,8 +1402,8 @@ namespace WhiteSpace.Pages
 
                     left = minX;
                     top = minY;
-                    width = Math.Max(maxX - minX, 1); // Убедимся, что ширина хотя бы 1
-                    height = Math.Max(maxY - minY, 1); // Убедимся, что высота хотя бы 1
+                    width = Math.Max(maxX - minX, 1);
+                    height = Math.Max(maxY - minY, 1);
                 }
                 else
                 {
@@ -1239,22 +1415,18 @@ namespace WhiteSpace.Pages
             }
             else
             {
-                // Для других элементов
                 left = Canvas.GetLeft(element);
                 top = Canvas.GetTop(element);
                 width = ((FrameworkElement)element).ActualWidth;
                 height = ((FrameworkElement)element).ActualHeight;
 
-                // Убедимся, что размеры не слишком маленькие
                 if (width < 1) width = 1;
                 if (height < 1) height = 1;
             }
 
-            // Если значения NaN, используем 0
             if (double.IsNaN(left)) left = 0;
             if (double.IsNaN(top)) top = 0;
 
-            // Создаем рамку выделения
             _resizeBorder = new Rectangle
             {
                 Width = width,
@@ -1270,7 +1442,6 @@ namespace WhiteSpace.Pages
 
             BoardCanvas.Children.Add(_resizeBorder);
 
-            // Создаем ручки
             CreateResizeHandles(left, top, width, height);
         }
 
@@ -1282,7 +1453,6 @@ namespace WhiteSpace.Pages
                 _resizeBorder = null;
             }
 
-            // Удаляем все ручки
             RemoveAllHandles();
             _resizeTarget = null;
             ColorPanel.Visibility = Visibility.Collapsed;
@@ -1305,7 +1475,6 @@ namespace WhiteSpace.Pages
         {
             RemoveAllHandles();
 
-            // Позиции для 8 ручек
             var handlePositions = new Dictionary<string, (double X, double Y)>
             {
                 { "nw", (x, y) },
@@ -1330,13 +1499,11 @@ namespace WhiteSpace.Pages
         {
             if (_resizeBorder == null) return;
 
-            // Обновляем рамку
             _resizeBorder.Width = w;
             _resizeBorder.Height = h;
             Canvas.SetLeft(_resizeBorder, x);
             Canvas.SetTop(_resizeBorder, y);
 
-            // Обновляем позиции ручек
             UpdateResizeHandles(x, y, w, h);
         }
 
@@ -1360,7 +1527,6 @@ namespace WhiteSpace.Pages
             {
                 if (_resizeHandles.TryGetValue(kvp.Key, out var handle))
                 {
-                    // Центрируем ручку относительно точки
                     Canvas.SetLeft(handle, kvp.Value.X - 4);
                     Canvas.SetTop(handle, kvp.Value.Y - 4);
                 }
@@ -1381,11 +1547,9 @@ namespace WhiteSpace.Pages
                 IsHitTestVisible = true
             };
 
-            // Центрируем ручку относительно точки
             Canvas.SetLeft(handle, x - 4);
             Canvas.SetTop(handle, y - 4);
 
-            // Обработчик для перетаскивания
             handle.MouseDown += ResizeHandle_MouseDown;
 
             return handle;
@@ -1413,40 +1577,34 @@ namespace WhiteSpace.Pages
             _resizeDirection = handle.Tag.ToString();
             _isResizing = true;
 
-            // Используем позицию мыши относительно Viewport
             var screenPos = e.GetPosition(Viewport);
             _resizeStartWorld = ScreenToWorld(screenPos);
 
             if (_resizeTarget is Polyline polyline)
             {
-                // Для линии вычисляем bounding box и запоминаем точку, за которую тянем
                 if (polyline.Points.Count > 0)
                 {
-                    // Получаем текущий bounding box
                     double minX = polyline.Points.Min(p => p.X);
                     double maxX = polyline.Points.Max(p => p.X);
                     double minY = polyline.Points.Min(p => p.Y);
                     double maxY = polyline.Points.Max(p => p.Y);
 
-                    // Запоминаем не только размеры, но и положение
                     _startX = minX;
                     _startY = minY;
-                    _startW = Math.Max(maxX - minX, 0.1); // Минимум 0.1
+                    _startW = Math.Max(maxX - minX, 0.1);
                     _startH = Math.Max(maxY - minY, 0.1);
 
-                    // Запоминаем координаты углов
                     _originalCorners = new Dictionary<string, Point>
-            {
-                { "nw", new Point(minX, minY) },
-                { "ne", new Point(maxX, minY) },
-                { "sw", new Point(minX, maxY) },
-                { "se", new Point(maxX, maxY) }
-            };
+                    {
+                        { "nw", new Point(minX, minY) },
+                        { "ne", new Point(maxX, minY) },
+                        { "sw", new Point(minX, maxY) },
+                        { "se", new Point(maxX, maxY) }
+                    };
                 }
             }
             else
             {
-                // Для других элементов
                 _startX = Canvas.GetLeft(_resizeTarget);
                 _startY = Canvas.GetTop(_resizeTarget);
                 _startW = ((FrameworkElement)_resizeTarget).ActualWidth;
@@ -1464,7 +1622,6 @@ namespace WhiteSpace.Pages
         {
             if (_resizeTarget == null || string.IsNullOrEmpty(_resizeDirection)) return;
 
-            // Просто используем разницу в мировых координатах
             double dx = world.X - _resizeStartWorld.X;
             double dy = world.Y - _resizeStartWorld.Y;
 
@@ -1473,7 +1630,6 @@ namespace WhiteSpace.Pages
             double newW = _startW;
             double newH = _startH;
 
-            // Прямое изменение размеров - 1:1 с движением мыши
             if (_resizeDirection.Contains("e"))
             {
                 newW = Math.Max(1, _startW + dx);
@@ -1495,15 +1651,12 @@ namespace WhiteSpace.Pages
                 newY = _startY + delta;
             }
 
-            // Применяем изменения к фигуре
             if (_resizeTarget is Polyline polyline)
             {
-                // Для линии используем правильное масштабирование
                 ResizePolyline(polyline, newX, newY, newW, newH);
             }
             else
             {
-                // Для других фигур (Rectangle, Ellipse)
                 var fe = (FrameworkElement)_resizeTarget;
                 fe.Width = newW;
                 fe.Height = newH;
@@ -1511,7 +1664,6 @@ namespace WhiteSpace.Pages
                 Canvas.SetTop(fe, newY);
             }
 
-            // Обновляем рамку и ручки
             UpdateResizeFrame(newX, newY, newW, newH);
         }
 
@@ -1519,7 +1671,6 @@ namespace WhiteSpace.Pages
         {
             if (polyline == null || polyline.Points.Count == 0 || _originalCorners == null) return;
 
-            // Определяем, какой угол изменяется
             string cornerKey = "";
             if (_resizeDirection.Contains("n") && _resizeDirection.Contains("w")) cornerKey = "nw";
             else if (_resizeDirection.Contains("n") && _resizeDirection.Contains("e")) cornerKey = "ne";
@@ -1532,7 +1683,6 @@ namespace WhiteSpace.Pages
 
             if (string.IsNullOrEmpty(cornerKey)) return;
 
-            // Получаем текущие границы
             double currentMinX = polyline.Points.Min(p => p.X);
             double currentMaxX = polyline.Points.Max(p => p.X);
             double currentMinY = polyline.Points.Min(p => p.Y);
@@ -1544,27 +1694,23 @@ namespace WhiteSpace.Pages
             if (currentWidth <= 0) currentWidth = 0.1;
             if (currentHeight <= 0) currentHeight = 0.1;
 
-            // Создаем новые точки
             PointCollection newPoints = new PointCollection();
 
             foreach (var point in polyline.Points)
             {
-                // Нормализуем координату точки (0-1)
                 double normalizedX = (point.X - currentMinX) / currentWidth;
                 double normalizedY = (point.Y - currentMinY) / currentHeight;
 
-                // Преобразуем в новые координаты
                 double newPointX = newX + normalizedX * newW;
                 double newPointY = newY + normalizedY * newH;
 
                 newPoints.Add(new Point(newPointX, newPointY));
             }
 
-            // Обновляем точки
             polyline.Points = newPoints;
         }
 
-        private async void SaveResizedShape()
+        private async Task SaveResizedShapeAsync()
         {
             if (_resizeTarget == null) return;
 
@@ -1600,9 +1746,13 @@ namespace WhiteSpace.Pages
                 shape.Y = Canvas.GetTop(_resizeTarget) + shape.Height / 2;
             }
 
-            await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
+            // Сохраняем в Supabase
             await _supabaseService.SaveShapeAsync(shape);
+
+            // Отправляем в Firebase для реалтайм обновлений
+            PushShapeToFirebase(shape);
         }
+
         private async void Color_Click(object sender, RoutedEventArgs e)
         {
             if (sender is Button btn)
@@ -1610,49 +1760,45 @@ namespace WhiteSpace.Pages
                 var selectedBrush = btn.Background;
                 var selectedColorString = btn.Background.ToString();
 
-                // Если есть выделенная фигура — меняем только её цвет
                 if (_resizeTarget != null)
                 {
                     await ApplyColorToElement(_resizeTarget, selectedBrush, selectedColorString);
                 }
                 else
                 {
-                    // Иначе меняем цвет инструмента
                     _currentBrush = selectedBrush;
                     _currentColorString = selectedColorString;
                 }
             }
         }
-        private async Task ApplyColorToElement(
-            UIElement element,
-            Brush brush,
-            string colorString)
+
+        private async Task ApplyColorToElement(UIElement element, Brush brush, string colorString)
         {
             if (element is Shape shapeElement)
                 shapeElement.Stroke = brush;
-
             else if (element is Polyline polyline)
                 polyline.Stroke = brush;
-
             else if (element is TextBox tb)
                 tb.Foreground = brush;
 
-            var shape = _shapesOnBoard
-                .FirstOrDefault(s => s.Id.ToString() == element.Uid);
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
 
             if (shape != null)
             {
                 shape.Color = colorString;
-                await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
+
+                // Сохраняем в Supabase
                 await _supabaseService.SaveShapeAsync(shape);
+
+                // Отправляем в Firebase для реалтайм обновлений
+                PushShapeToFirebase(shape);
             }
         }
+
         private void ResetToolColorToDefault()
         {
             _currentBrush = Brushes.Black;
             _currentColorString = Brushes.Black.ToString();
         }
-
-
     }
 }

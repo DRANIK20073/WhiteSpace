@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Linq;
 using System.Windows.Controls;
+using System.Collections.Generic;
+using System;
 
 namespace WhiteSpace.Pages
 {
@@ -10,6 +12,7 @@ namespace WhiteSpace.Pages
     {
         private string _userGreeting = "Добро пожаловать!";
         private List<Board> _boards = new List<Board>();
+        private string _userName = "";
 
         public List<Board> Boards
         {
@@ -18,6 +21,7 @@ namespace WhiteSpace.Pages
             {
                 _boards = value;
                 OnPropertyChanged();
+                UpdateBoardsVisibility();
             }
         }
 
@@ -35,31 +39,63 @@ namespace WhiteSpace.Pages
         {
             InitializeComponent();
             DataContext = this;
-            LoadUserProfile();
-            LoadBoards();
         }
 
-        private async void LoadUserProfile()
+        private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
-            var service = new SupabaseService();
-            var profile = await service.GetMyProfileAsync();
+            await LoadUserProfile(); // Сначала загружаем профиль пользователя
+            await LoadBoards();       // Затем загружаем доски
+        }
 
-            if (profile != null && !string.IsNullOrEmpty(profile.Username))
+        // Загрузка профиля пользователя
+        private async System.Threading.Tasks.Task LoadUserProfile()
+        {
+            try
             {
-                UserGreeting = $"Здравствуйте, {profile.Username} 👋";
+                var service = new SupabaseService();
+                var profile = await service.GetMyProfileAsync();
+
+                if (profile != null && !string.IsNullOrEmpty(profile.Username))
+                {
+                    _userName = profile.Username;
+                    UserGreeting = $"Здравствуйте, {profile.Username} 👋";
+                }
+                else
+                {
+                    UserGreeting = "Здравствуйте!";
+                }
             }
-            else
+            catch (Exception ex)
             {
+                // В случае ошибки показываем стандартное приветствие
                 UserGreeting = "Здравствуйте!";
+                MessageBox.Show($"Ошибка загрузки профиля: {ex.Message}");
             }
         }
 
         //Загрузка списка досок
-        private async void LoadBoards()
+        private async System.Threading.Tasks.Task LoadBoards()
         {
-            var service = new SupabaseService();
-            var boardsWithRoles = await service.GetAllAccessibleBoardsWithRoleAsync();
-            Boards = boardsWithRoles.Select(x => x.Board).ToList();
+            try
+            {
+                var service = new SupabaseService();
+                var boardsWithRoles = await service.GetAllAccessibleBoardsWithRoleAsync();
+                Boards = boardsWithRoles.Select(x => x.Board).ToList();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки досок: {ex.Message}");
+            }
+        }
+
+        private void UpdateBoardsVisibility()
+        {
+            if (NoBoardsTextBlock != null)
+            {
+                NoBoardsTextBlock.Visibility = Boards == null || Boards.Count == 0
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -91,8 +127,7 @@ namespace WhiteSpace.Pages
             if (newBoard != null)
             {
                 var newBoardId = newBoard.Id;
-
-                this.NavigationService.Navigate(new BoardPage(newBoardId)); 
+                this.NavigationService.Navigate(new BoardPage(newBoardId));
             }
             else
             {
@@ -103,18 +138,17 @@ namespace WhiteSpace.Pages
         //Открыть доску
         private void OpenBoard_Click(object sender, RoutedEventArgs e)
         {
-            var boardId = (Guid)((Button)sender).CommandParameter;
-
-            this.NavigationService.Navigate(new BoardPage(boardId));
+            if (sender is Button button && button.CommandParameter is Guid boardId)
+            {
+                this.NavigationService.Navigate(new BoardPage(boardId));
+            }
         }
 
         //Выход из аккаунта
         private void Logout_Click(object sender, RoutedEventArgs e)
         {
             SessionStorage.ClearSession();
-
             SupabaseService.Client.Auth.SignOut();
-
             this.NavigationService.Navigate(new LoginPage());
         }
 
@@ -135,14 +169,32 @@ namespace WhiteSpace.Pages
             accessCode = accessCode.Trim().ToUpperInvariant();
 
             var service = new SupabaseService();
-            var board = await service.JoinBoardAsync(accessCode); // ← теперь вызывает правильный метод из сервиса
+            var board = await service.JoinBoardAsync(accessCode);
 
             if (board != null)
             {
                 MessageBox.Show($"✅ Вы успешно присоединились к доске \"{board.Title}\".");
-                LoadBoards(); // обновить список
+
+                // Обновляем список досок на главной странице
+                await LoadBoards();
+
+                // Спрашиваем пользователя, хочет ли он перейти на доску сейчас
+                var result = MessageBox.Show(
+                    "Хотите перейти на доску сейчас?",
+                    "Переход на доску",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    // Переходим на доску
+                    this.NavigationService.Navigate(new BoardPage(board.Id));
+                }
+            }
+            else
+            {
+                MessageBox.Show("Не удалось присоединиться к доске. Проверьте код доступа.");
             }
         }
-
     }
 }

@@ -1,6 +1,5 @@
 ﻿using Firebase.Database;
 using Firebase.Database.Query;
-using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -16,6 +15,7 @@ namespace WhiteSpace
         private readonly string _databaseUrl = "https://whitespace-af424-default-rtdb.europe-west1.firebasedatabase.app/";
 
         private const string SHAPES_PATH = "shapes";
+        private const string MEMBERS_PATH = "members";
 
         public FirebaseService()
         {
@@ -24,7 +24,6 @@ namespace WhiteSpace
 
         #region Shapes
 
-        // Подписка на обновления фигур в реальном времени
         public IObservable<BoardShape> GetShapesObservable(string boardId)
         {
             return _client
@@ -35,42 +34,33 @@ namespace WhiteSpace
                 {
                     if (dbevent.Object != null)
                     {
-                        // Преобразуем ключ из строки в int для Id
                         if (int.TryParse(dbevent.Key, out int id))
                         {
-                            dbevent.Object.Id = id;  // Присваиваем Id как int
+                            dbevent.Object.Id = id;
                         }
                         else
                         {
-                            // Если не удалось преобразовать строку в int, присваиваем 0 или другой дефолтный ID
                             dbevent.Object.Id = 0;
                         }
 
-                        // Преобразуем boardId в Guid
                         if (Guid.TryParse(boardId, out Guid guid))
                         {
-                            dbevent.Object.BoardId = guid;  // Присваиваем BoardId как Guid
-                        }
-                        else
-                        {
-                            // Если boardId не является допустимым Guid, можно присвоить значение по умолчанию
-                            dbevent.Object.BoardId = Guid.Empty;
+                            dbevent.Object.BoardId = guid;
                         }
                     }
                     return dbevent.Object;
                 });
         }
 
-
-
-        // Добавление или обновление фигуры
         public async Task PushShapeAsync(string boardId, BoardShape shape)
         {
-            shape.BoardId = Guid.TryParse(boardId, out Guid guid) ? guid : Guid.Empty;
+            if (Guid.TryParse(boardId, out Guid guid))
+            {
+                shape.BoardId = guid;
+            }
 
             if (shape.Id > 0)
             {
-                // Обновление существующей фигуры
                 await _client
                     .Child(SHAPES_PATH)
                     .Child(boardId)
@@ -79,13 +69,11 @@ namespace WhiteSpace
             }
             else
             {
-                // Получаем все фигуры для этой доски
                 var shapesResponse = await _client
                     .Child(SHAPES_PATH)
                     .Child(boardId)
                     .OnceAsync<BoardShape>();
 
-                // Находим максимальный ID
                 int maxId = 0;
                 foreach (var item in shapesResponse)
                 {
@@ -95,10 +83,8 @@ namespace WhiteSpace
                     }
                 }
 
-                // Новый ID = максимальный + 1
                 shape.Id = maxId + 1;
 
-                // Сохраняем новую фигуру
                 await _client
                     .Child(SHAPES_PATH)
                     .Child(boardId)
@@ -107,21 +93,17 @@ namespace WhiteSpace
             }
         }
 
-
-        // Удаление фигуры
         public async Task DeleteShapeAsync(string boardId, string shapeId)
         {
             await _client
                 .Child(SHAPES_PATH)
                 .Child(boardId)
                 .Child(shapeId)
-                .DeleteAsync();  // Удаляем фигуру по ID
+                .DeleteAsync();
         }
 
-        // Получение всех фигур доски
         public async Task<List<BoardShape>> GetAllShapesAsync(string boardId)
         {
-            // Получаем все фигуры доски
             var shapes = await _client
                 .Child(SHAPES_PATH)
                 .Child(boardId)
@@ -129,37 +111,117 @@ namespace WhiteSpace
 
             return shapes.Select(s =>
             {
-                // Преобразуем ключ Firebase (string) в int для Id
                 if (int.TryParse(s.Key, out int id))
                 {
                     s.Object.Id = id;
                 }
-                else
-                {
-                    s.Object.Id = 0; // Присваиваем значение по умолчанию, если не удалось преобразовать
-                }
 
-                // Преобразуем boardId из строки в Guid
                 if (Guid.TryParse(boardId, out Guid boardGuid))
                 {
                     s.Object.BoardId = boardGuid;
-                }
-                else
-                {
-                    s.Object.BoardId = Guid.Empty; // Присваиваем пустой Guid, если не удалось преобразовать
                 }
 
                 return s.Object;
             }).ToList();
         }
 
+        #endregion
+
+        #region Members
+
+        public IObservable<List<FirebaseBoardMember>> GetBoardMembersObservable(string boardId)
+        {
+            return _client
+                .Child(MEMBERS_PATH)
+                .Child(boardId)
+                .AsObservable<Dictionary<string, FirebaseBoardMember>>()
+                .Select(dbevent =>
+                {
+                    if (dbevent.Object != null && dbevent.EventType != Firebase.Database.Streaming.FirebaseEventType.Delete)
+                    {
+                        Console.WriteLine($"Получено событие {dbevent.EventType} для участников");
+                        return dbevent.Object.Values.ToList();
+                    }
+                    return new List<FirebaseBoardMember>();
+                });
+        }
+
+        public async Task PushBoardMembersAsync(string boardId, List<FirebaseBoardMember> members)
+        {
+            try
+            {
+                var membersDict = new Dictionary<string, object>();
+
+                foreach (var member in members)
+                {
+                    membersDict[member.UserId] = new
+                    {
+                        member.UserId,
+                        member.Role,
+                        member.JoinedAt
+                    };
+                }
+
+                await _client
+                    .Child(MEMBERS_PATH)
+                    .Child(boardId)
+                    .PutAsync(membersDict);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки участников в Firebase: {ex.Message}");
+            }
+        }
+
+        public async Task PushBoardMemberAsync(string boardId, FirebaseBoardMember member)
+        {
+            try
+            {
+                await _client
+                    .Child(MEMBERS_PATH)
+                    .Child(boardId)
+                    .Child(member.UserId)
+                    .PutAsync(new
+                    {
+                        member.UserId,
+                        member.Role,
+                        member.JoinedAt
+                    });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки участника в Firebase: {ex.Message}");
+            }
+        }
+
+        public async Task DeleteBoardMemberAsync(string boardId, string userId)
+        {
+            try
+            {
+                await _client
+                    .Child(MEMBERS_PATH)
+                    .Child(boardId)
+                    .Child(userId)
+                    .DeleteAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка удаления участника из Firebase: {ex.Message}");
+            }
+        }
 
         #endregion
 
         public void Dispose()
         {
-            // Очистка ресурсов при необходимости
         }
     }
 
+    // Класс для Firebase (с UserId как string)
+    public class FirebaseBoardMember
+    {
+        public string UserId { get; set; }
+        public string Role { get; set; }
+        public DateTime JoinedAt { get; set; }
+    }
 }
