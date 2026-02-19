@@ -1,61 +1,354 @@
 ﻿<Page x:Class="WhiteSpace.Pages.UserHomePage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-      Title="Главная страница пользователя"
-      Background="#F3F3F3">
+      xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+      Title="Главная"
+      Background="#FFFFFF">
 
-    <Grid Margin="20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
+    <Page.Resources>
+        <!-- Стиль для кнопок со скругленными углами -->
+        <Style x:Key="RoundedButtonStyle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Opacity" Value="0.8"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-        <!-- Приветствие -->
-        <TextBlock Text="{Binding UserGreeting}"
-               FontSize="24"
-               FontWeight="SemiBold"
-               Margin="0,0,0,20"/>
+        <!-- Стиль для кнопок с белым фоном -->
+        <Style x:Key="WhiteRoundedButtonStyle" TargetType="Button">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#F0F0F0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-        <!-- Кнопки -->
-        <StackPanel Grid.Row="1"
-                Orientation="Horizontal"
-                Margin="0,0,0,20">
+        <!-- Стиль для карточек файлов -->
+        <Style x:Key="FileCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#F3F2F1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="Margin" Value="0,0,20,20"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#E8E8E8"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Page.Resources>
 
-            <Button Content="➕ Создать доску"
-                Width="180"
-                Height="40"
-                Click="CreateBoard_Click"/>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <!-- Левая боковая панель -->
+            <ColumnDefinition Width="260"/>
+            <!-- Основной контент -->
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-            <Button Content="🔗 Подключиться по коду"
-                    Width="220"
-                    Height="40"
-                    Margin="10,0,0,0"
-                    Click="JoinByCode_Click"/>
+        <!-- Левая боковая панель -->
+        <Border Grid.Column="0"
+                Background="#FAF9F8"
+                BorderBrush="#EDEBE9"
+                BorderThickness="0,0,1,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="0,20,0,20">
 
-            <Button Content="🚪 Выход"
-            Width="180"
-            Height="40"
-            Click="Logout_Click"
-            Margin="10,0,0,0"/>
-        </StackPanel>
-
-        <!-- Список досок -->
-        <ListView Grid.Row="2"
-              Name="BoardsListView"
-              ItemsSource="{Binding Boards}"
-              HorizontalAlignment="Stretch">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel>
-                        <TextBlock Text="{Binding Title}" FontSize="18" Margin="5"/>
-                        <Button Content="Открыть"
-                            Width="100"
-                            Click="OpenBoard_Click"
-                            CommandParameter="{Binding Id}"/>
+                    <!-- Заголовок с логотипом -->
+                    <StackPanel Margin="20,0,20,20">
+                        <TextBlock Text="WHITESPACE"
+                                   FontSize="24"
+                                   FontWeight="Bold"
+                                   Foreground="#1A1A1A"/>
+                        <TextBlock Text="DRANIK"
+                                   FontSize="32"
+                                   FontWeight="Black"
+                                   Foreground="#333333"
+                                   Margin="0,5,0,10"/>
                     </StackPanel>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
+
+                    <!-- Поиск -->
+                    <Border Margin="20,0,20,20"
+                            Background="#FFFFFF"
+                            CornerRadius="8"
+                            BorderBrush="#EDEBE9"
+                            BorderThickness="1"
+                            Height="36">
+                        <Grid Margin="8,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" 
+                                       Text="🔍" 
+                                       FontSize="14"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Center"
+                                       Foreground="#605E5C"
+                                       Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="1"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     FontSize="14"
+                                     Foreground="#1A1A1A"
+                                     VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Раздел 1: Search -->
+                    <TextBlock Text="Search"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#605E5C"
+                               Margin="20,0,20,8"/>
+
+                    <StackPanel Margin="20,0,20,0">
+                        <RadioButton Content="Recently viewed"
+                                     FontSize="14"
+                                     Foreground="#1A1A1A"
+                                     Margin="0,0,0,8"
+                                     Background="Transparent"
+                                     GroupName="SearchGroup"/>
+                        <RadioButton Content="Shared files"
+                                     FontSize="14"
+                                     Foreground="#1A1A1A"
+                                     Margin="0,0,0,8"
+                                     Background="Transparent"
+                                     GroupName="SearchGroup"/>
+                        <RadioButton Content="Shared projects"
+                                     FontSize="14"
+                                     Foreground="#1A1A1A"
+                                     Margin="0,0,0,8"
+                                     Background="Transparent"
+                                     GroupName="SearchGroup"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Основной контент -->
+        <ScrollViewer Grid.Column="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Background="#FFFFFF">
+            <StackPanel Margin="40,40,40,40">
+
+                <!-- Заголовок с приветствием -->
+                <TextBlock Text="Good morning, Dranik"
+                           FontSize="28"
+                           FontWeight="SemiBold"
+                           Foreground="#1A1A1A"
+                           Margin="0,0,0,30"/>
+
+                <!-- Кнопки действий -->
+                <StackPanel Orientation="Horizontal"
+                            Margin="0,0,0,40">
+
+                    <!-- Кнопка Создать доску -->
+                    <Button Width="180"
+                            Height="44"
+                            Background="#333333"
+                            BorderThickness="0"
+                            Style="{StaticResource RoundedButtonStyle}"
+                            Cursor="Hand"
+                            Click="CreateBoard_Click">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="➕" 
+                                       FontSize="18" 
+                                       Margin="0,0,8,0"
+                                       Foreground="White"/>
+                            <TextBlock Text="Создать доску" 
+                                       FontSize="15"
+                                       FontWeight="Medium"
+                                       Foreground="White"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Кнопка Подключиться по коду -->
+                    <Button Width="200"
+                            Height="44"
+                            Background="#F3F2F1"
+                            BorderBrush="#EDEBE9"
+                            BorderThickness="1"
+                            Style="{StaticResource WhiteRoundedButtonStyle}"
+                            Margin="10,0,0,0"
+                            Cursor="Hand"
+                            Click="JoinByCode_Click">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="🔗" 
+                                       FontSize="18" 
+                                       Margin="0,0,8,0"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Подключиться по коду" 
+                                       FontSize="15"
+                                       FontWeight="Medium"
+                                       Foreground="#1A1A1A"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Кнопка Выход -->
+                    <Button Width="100"
+                            Height="44"
+                            Background="#F3F2F1"
+                            BorderBrush="#EDEBE9"
+                            BorderThickness="1"
+                            Style="{StaticResource WhiteRoundedButtonStyle}"
+                            Margin="10,0,0,0"
+                            Cursor="Hand"
+                            Click="Logout_Click">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <TextBlock Text="🚪" 
+                                       FontSize="18" 
+                                       Margin="0,0,8,0"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Выход" 
+                                       FontSize="15"
+                                       FontWeight="Medium"
+                                       Foreground="#1A1A1A"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <!-- Секция: Recently viewed -->
+                <TextBlock Text="Recently viewed"
+                           FontSize="18"
+                           FontWeight="SemiBold"
+                           Foreground="#1A1A1A"
+                           Margin="0,0,0,16"/>
+
+                <!-- Сетка файлов -->
+                <WrapPanel Orientation="Horizontal">
+                    <!-- Файл 1: Whiteboard -->
+                    <Border Style="{StaticResource FileCardStyle}"
+                            Width="240"
+                            Height="180"
+                            MouseLeftButtonUp="OpenBoard_Click">
+                        <StackPanel>
+                            <TextBlock Text="📋" 
+                                       FontSize="32" 
+                                       Margin="0,0,0,12"/>
+                            <TextBlock Text="Whiteboard"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Edited 8 days ago"
+                                       FontSize="13"
+                                       Foreground="#605E5C"
+                                       Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Файл 2: Untitled -->
+                    <Border Style="{StaticResource FileCardStyle}"
+                            Width="240"
+                            Height="180"
+                            MouseLeftButtonUp="OpenBoard_Click">
+                        <StackPanel>
+                            <TextBlock Text="📄" 
+                                       FontSize="32" 
+                                       Margin="0,0,0,12"/>
+                            <TextBlock Text="Untitled"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Edited 2 hours ago"
+                                       FontSize="13"
+                                       Foreground="#605E5C"
+                                       Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Файл 3: Untitled -->
+                    <Border Style="{StaticResource FileCardStyle}"
+                            Width="240"
+                            Height="180"
+                            MouseLeftButtonUp="OpenBoard_Click">
+                        <StackPanel>
+                            <TextBlock Text="📄" 
+                                       FontSize="32" 
+                                       Margin="0,0,0,12"/>
+                            <TextBlock Text="Untitled"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Edited 12 days ago"
+                                       FontSize="13"
+                                       Foreground="#605E5C"
+                                       Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Файл 4: Untitled -->
+                    <Border Style="{StaticResource FileCardStyle}"
+                            Width="240"
+                            Height="180"
+                            MouseLeftButtonUp="OpenBoard_Click">
+                        <StackPanel>
+                            <TextBlock Text="📄" 
+                                       FontSize="32" 
+                                       Margin="0,0,0,12"/>
+                            <TextBlock Text="Untitled"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Edited 1 month ago"
+                                       FontSize="13"
+                                       Foreground="#605E5C"
+                                       Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Файл 5: Untitled -->
+                    <Border Style="{StaticResource FileCardStyle}"
+                            Width="240"
+                            Height="180"
+                            MouseLeftButtonUp="OpenBoard_Click">
+                        <StackPanel>
+                            <TextBlock Text="📄" 
+                                       FontSize="32" 
+                                       Margin="0,0,0,12"/>
+                            <TextBlock Text="Untitled"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="#1A1A1A"/>
+                            <TextBlock Text="Edited 4 months ago"
+                                       FontSize="13"
+                                       Foreground="#605E5C"
+                                       Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </WrapPanel>
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </Page>
