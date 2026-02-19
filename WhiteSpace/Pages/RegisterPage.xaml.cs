@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace WhiteSpace.Pages
 {
@@ -35,11 +36,20 @@ namespace WhiteSpace.Pages
             NavigateAndClear(new LoginPage());
         }
 
-        private void PasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+        private void TextBox_KeyDown(object sender, KeyEventArgs e)
         {
-            PasswordPlaceholder.Visibility = string.IsNullOrEmpty(PasswordBox.Password)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            if (e.Key == Key.Enter)
+            {
+                Register_Click(sender, e);
+            }
+        }
+
+        private void PasswordBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                Register_Click(sender, e);
+            }
         }
 
         private void NavigateAndClear(Page page)

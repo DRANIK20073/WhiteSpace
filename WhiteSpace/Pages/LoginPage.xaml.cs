@@ -5,6 +5,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
+using WpfMessageBox = System.Windows.MessageBox;
+using WpfMessageBoxButton = System.Windows.MessageBoxButton;
+using WpfMessageBoxImage = System.Windows.MessageBoxImage;
+using WpfButton = System.Windows.Controls.Button;
 
 namespace WhiteSpace.Pages
 {
@@ -34,16 +38,39 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private void ForgotPassword_Click(object sender, RoutedEventArgs e)
+        {
+            WpfMessageBox.Show(
+                "Функция восстановления пароля будет доступна позже.\n\n" +
+                "Пожалуйста, обратитесь в службу поддержки или используйте вход через Google.",
+                "Восстановление пароля",
+                WpfMessageBoxButton.OK,
+                WpfMessageBoxImage.Information);
+        }
+
+        private void ClearTextBox_Click(object sender, RoutedEventArgs e)
+        {
+            EmailBox.Text = string.Empty;
+            EmailBox.Focus();
+        }
+
+        private void ClearPasswordBox_Click(object sender, RoutedEventArgs e)
+        {
+            PasswordBox.Password = string.Empty;
+            PasswordBox.Focus();
+        }
         private void RegisterLink_Click(object sender, RoutedEventArgs e)
         {
             NavigateAndClear(new RegisterPage());
         }
 
-        private void PasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
+        // Обработчик нажатия Enter в поле пароля
+        private void PasswordBox_KeyDown(object sender, KeyEventArgs e)
         {
-            PasswordPlaceholder.Visibility = string.IsNullOrEmpty(PasswordBox.Password)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            if (e.Key == Key.Enter)
+            {
+                Login_Click(sender, e);
+            }
         }
 
         private void NavigateAndClear(Page page)
@@ -55,20 +82,14 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void Button_MouseEnter(object sender, MouseEventArgs e)
+        // Обработчик нажатия Enter в поле email
+        private void TextBox_KeyDown(object sender, KeyEventArgs e)
         {
-            var button = sender as Button;
-            var animation = (Storyboard)FindResource("ButtonAnimation");
-            animation.Begin(button);
+            if (e.Key == Key.Enter)
+            {
+                Login_Click(sender, e);
+            }
         }
-
-        private void Button_MouseLeave(object sender, MouseEventArgs e)
-        {
-            var button = sender as Button;
-            var animation = (Storyboard)FindResource("ButtonAnimation");
-            animation.Stop(button);
-        }
-
 
         // Обработчик для кнопки Google
         private async void GoogleLogin_Click(object sender, RoutedEventArgs e)
