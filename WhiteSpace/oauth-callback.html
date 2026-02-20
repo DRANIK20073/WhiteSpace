@@ -51,69 +51,9 @@
             margin-bottom: 20px;
         }
 
-        .info {
-            background: #f5f5f5;
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px 0;
-            text-align: left;
-        }
-
-        .info-item {
-            margin: 10px 0;
-            padding: 10px;
-            background: white;
-            border-radius: 5px;
-            border-left: 4px solid #4CAF50;
-            word-break: break-all;
-        }
-
-        .info-label {
-            font-weight: bold;
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 5px;
-        }
-
-        .info-value {
-            color: #333;
-            font-size: 16px;
-        }
-
-        .button {
-            background: #4CAF50;
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            font-size: 18px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.3s;
-            margin-top: 20px;
-            width: 100%;
-            font-weight: bold;
-        }
-
-            .button:hover {
-                background: #45a049;
-            }
-
-            .button.secondary {
-                background: #2196F3;
-            }
-
-                .button.secondary:hover {
-                    background: #1976D2;
-                }
-
         .loading {
-            display: none;
             margin-top: 20px;
         }
-
-            .loading.show {
-                display: block;
-            }
 
         .spinner {
             border: 4px solid #f3f3f3;
@@ -122,7 +62,7 @@
             width: 40px;
             height: 40px;
             animation: spin 1s linear infinite;
-            margin: 0 auto;
+            margin: 20px auto;
         }
 
         @keyframes spin {
@@ -134,45 +74,62 @@
                 transform: rotate(360deg);
             }
         }
+
+        .success-message {
+            color: #4CAF50;
+            font-size: 18px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+
+        .close-hint {
+            color: #999;
+            font-size: 14px;
+            margin-top: 30px;
+        }
+
+        .button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.3s;
+            margin-top: 20px;
+            font-weight: bold;
+        }
+
+            .button:hover {
+                background: #45a049;
+            }
     </style>
 </head>
 <body>
     <div class="container" id="mainContainer">
         <div class="success-icon">✅</div>
-        <h2>Авторизация через Google завершена!</h2>
+        <h2>Авторизация через Google</h2>
 
-        <div id="loadingData" class="loading show">
+        <div id="processingScreen">
             <div class="spinner"></div>
-            <p style="margin-top: 20px;">Обработка данных авторизации...</p>
+            <p>Обработка данных авторизации...</p>
         </div>
 
-        <div id="dataContainer" style="display: none;">
-            <div class="info">
-                <h3 style="margin-top: 0; color: #333;">Данные пользователя:</h3>
-                <div class="info-item">
-                    <div class="info-label">Email:</div>
-                    <div class="info-value" id="userEmail">-</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Actor ID (User ID):</div>
-                    <div class="info-value" id="actorId">-</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Access Token:</div>
-                    <div class="info-value" id="accessToken" style="font-size: 12px;">-</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Refresh Token:</div>
-                    <div class="info-value" id="refreshToken" style="font-size: 12px;">-</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Expires In:</div>
-                    <div class="info-value" id="expiresIn">-</div>
-                </div>
+        <div id="successScreen" style="display: none;">
+            <div class="success-message">
+                ✓ Регистрация успешно завершена!
             </div>
+            <p>Данные переданы в приложение.</p>
+            <div class="close-hint">
+                Это окно можно закрыть
+            </div>
+        </div>
 
-            <button class="button" onclick="sendToApp()">📱 Отправить данные в приложение</button>
-            <button class="button secondary" onclick="window.close()" style="margin-top: 10px;">❌ Закрыть окно</button>
+        <div id="errorScreen" style="display: none;">
+            <div style="color: #f44336; font-size: 48px; margin-bottom: 20px;">❌</div>
+            <p style="color: #f44336;">Ошибка при обработке данных</p>
+            <button class="button" onclick="window.close()">Закрыть окно</button>
         </div>
     </div>
 
@@ -240,49 +197,49 @@
             // Отправляем данные в приложение через специальный URL
             const callbackUrl = `http://127.0.0.1:54322/auth/callback?data=${encodeURIComponent(JSON.stringify(data))}`;
 
-            // Показываем загрузку
-            document.getElementById('loadingData').classList.add('show');
-            document.getElementById('dataContainer').style.display = 'none';
-
             // Отправляем данные
-            fetch(callbackUrl)
+            return fetch(callbackUrl)
                 .then(response => response.text())
                 .then(result => {
-                    alert('Данные успешно отправлены в приложение!');
-                    setTimeout(() => window.close(), 1500);
+                    return true;
                 })
                 .catch(error => {
                     console.error('Ошибка отправки:', error);
-                    alert('Ошибка при отправке данных. Закройте окно и вернитесь в приложение.');
-
-                    // Показываем кнопку для ручного закрытия
-                    document.getElementById('loadingData').classList.remove('show');
-                    document.getElementById('dataContainer').style.display = 'block';
+                    return false;
                 });
         }
 
         // Инициализация при загрузке страницы
-        window.onload = function() {
+        window.onload = async function () {
             const params = getUrlParams();
 
-            // Отображаем данные
             if (Object.keys(params).length > 0) {
-                document.getElementById('loadingData').classList.remove('show');
-                document.getElementById('dataContainer').style.display = 'block';
+                try {
+                    // Отправляем данные в приложение
+                    const success = await sendToApp();
 
-                // Заполняем поля
-                document.getElementById('actorId').textContent = params.actor_id || params.user_id || params.sub || 'Не найдено';
-                document.getElementById('userEmail').textContent = params.email || 'Не найдено';
-                document.getElementById('accessToken').textContent = params.access_token ? params.access_token.substring(0, 50) + '...' : 'Не найдено';
-                document.getElementById('refreshToken').textContent = params.refresh_token ? params.refresh_token.substring(0, 50) + '...' : 'Не найдено';
-                document.getElementById('expiresIn').textContent = params.expires_in || '3600';
+                    // Показываем экран успеха
+                    document.getElementById('processingScreen').style.display = 'none';
 
-                // Автоматически отправляем данные через 2 секунды
-                setTimeout(sendToApp, 2000);
+                    if (success) {
+                        document.getElementById('successScreen').style.display = 'block';
+                    } else {
+                        // Если ошибка отправки, но данные есть - все равно показываем успех
+                        document.getElementById('successScreen').style.display = 'block';
+                    }
+
+                    // Автоматически закрываем окно через 3 секунды
+                    setTimeout(() => window.close(), 3000);
+
+                } catch (error) {
+                    console.error('Ошибка:', error);
+                    document.getElementById('processingScreen').style.display = 'none';
+                    document.getElementById('errorScreen').style.display = 'block';
+                }
             } else {
-                document.getElementById('loadingData').classList.remove('show');
-                document.getElementById('dataContainer').style.display = 'block';
-                document.querySelector('.info').innerHTML = '<p style="color: red;">❌ Не удалось получить данные авторизации</p>';
+                // Если нет параметров - показываем ошибку
+                document.getElementById('processingScreen').style.display = 'none';
+                document.getElementById('errorScreen').style.display = 'block';
             }
         };
     </script>

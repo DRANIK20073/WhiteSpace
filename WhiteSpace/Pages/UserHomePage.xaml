@@ -266,6 +266,27 @@
                             <Border Style="{StaticResource BoardCardStyle}"
                                     Width="240"
                                     Height="180">
+                                <Border.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Открыть доску"
+                                                  CommandParameter="{Binding Id}"
+                                                  Click="OpenBoard_Click">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="📂" Margin="0,0,5,0"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                        <Separator/>
+                                        <MenuItem Header="Удалить доску"
+                                                  CommandParameter="{Binding Id}"
+                                                  Click="DeleteBoard_Click"
+                                                  Foreground="#FF4444">
+                                            <MenuItem.Icon>
+                                                <TextBlock Text="❌" Margin="0,0,5,0"/>
+                                            </MenuItem.Icon>
+                                        </MenuItem>
+                                    </ContextMenu>
+                                </Border.ContextMenu>
+
                                 <Button Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
                                         Background="Transparent"
                                         BorderThickness="0"

@@ -138,9 +138,28 @@ namespace WhiteSpace.Pages
         //Открыть доску
         private void OpenBoard_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button button && button.CommandParameter is Guid boardId)
+            try
             {
-                this.NavigationService.Navigate(new BoardPage(boardId));
+                Guid boardId = Guid.Empty;
+
+                // Проверяем тип отправителя
+                if (sender is Button button && button.CommandParameter is Guid buttonBoardId)
+                {
+                    boardId = buttonBoardId;
+                }
+                else if (sender is MenuItem menuItem && menuItem.CommandParameter is Guid menuBoardId)
+                {
+                    boardId = menuBoardId;
+                }
+
+                if (boardId != Guid.Empty)
+                {
+                    this.NavigationService.Navigate(new BoardPage(boardId));
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при открытии доски: {ex.Message}");
             }
         }
 
@@ -194,6 +213,36 @@ namespace WhiteSpace.Pages
             else
             {
                 MessageBox.Show("Не удалось присоединиться к доске. Проверьте код доступа.");
+            }
+        }
+
+        private async void DeleteBoard_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Guid boardId = Guid.Empty;
+
+                // Проверяем тип отправителя
+                if (sender is MenuItem menuItem && menuItem.CommandParameter is Guid menuBoardId)
+                {
+                    boardId = menuBoardId;
+                }
+
+                if (boardId != Guid.Empty)
+                {
+                    var service = new SupabaseService();
+                    var success = await service.DeleteBoardAsync(boardId);
+
+                    if (success)
+                    {
+                        // Обновляем список досок после удаления
+                        await LoadBoards();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при удалении доски: {ex.Message}");
             }
         }
     }

@@ -922,4 +922,90 @@ public class SupabaseService
             return new List<BoardMember>();
         }
     }
+
+    public async Task<bool> DeleteBoardAsync(Guid boardId)
+    {
+        try
+        {
+            var user = _client.Auth.CurrentUser;
+            if (user == null)
+            {
+                MessageBox.Show("Пользователь не авторизован.");
+                return false;
+            }
+
+            // Проверяем, является ли пользователь владельцем доски
+            var board = await _client.From<Board>()
+                .Where(b => b.Id == boardId)
+                .Get();
+
+            if (board.Models == null || !board.Models.Any())
+            {
+                MessageBox.Show("Доска не найдена.");
+                return false;
+            }
+
+            var boardToDelete = board.Models.First();
+
+            if (boardToDelete.OwnerId != Guid.Parse(user.Id))
+            {
+                MessageBox.Show("Только владелец может удалить доску.");
+                return false;
+            }
+
+            // Подтверждение удаления
+            var result = MessageBox.Show(
+                $"Вы уверены, что хотите удалить доску \"{boardToDelete.Title}\"?\nЭто действие нельзя отменить.",
+                "Подтверждение удаления",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (result != MessageBoxResult.Yes)
+                return false;
+
+            // Удаляем всех участников доски
+            var members = await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId)
+                .Get();
+
+            if (members.Models != null && members.Models.Any())
+            {
+                foreach (var member in members.Models)
+                {
+                    await _client.From<BoardMember>()
+                        .Where(m => m.BoardId == member.BoardId && m.UserId == member.UserId)
+                        .Delete();
+                }
+            }
+
+            // Удаляем все фигуры с доски
+            var shapes = await _client.From<BoardShape>()
+                .Where(s => s.BoardId == boardId)
+                .Get();
+
+            if (shapes.Models != null && shapes.Models.Any())
+            {
+                foreach (var shape in shapes.Models)
+                {
+                    await _client.From<BoardShape>()
+                        .Where(s => s.BoardId == shape.BoardId && s.Id == shape.Id)
+                        .Delete();
+                }
+            }
+
+            // Удаляем саму доску
+            await _client.From<Board>()
+                .Where(b => b.Id == boardId)
+                .Delete();
+
+            MessageBox.Show($"Доска \"{boardToDelete.Title}\" успешно удалена.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Ошибка при удалении доски: {ex.Message}");
+            return false;
+        }
+    }
+
 }
