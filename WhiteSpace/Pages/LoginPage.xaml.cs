@@ -38,14 +38,20 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void ForgotPassword_Click(object sender, RoutedEventArgs e)
+        private async void ForgotPassword_Click(object sender, RoutedEventArgs e)
         {
-            WpfMessageBox.Show(
-                "Функция восстановления пароля будет доступна позже.\n\n" +
-                "Пожалуйста, обратитесь в службу поддержки или используйте вход через Google.",
+            string email = Microsoft.VisualBasic.Interaction.InputBox(
+                "Введите email, на который нужно отправить ссылку для смены пароля.",
                 "Восстановление пароля",
-                WpfMessageBoxButton.OK,
-                WpfMessageBoxImage.Information);
+                EmailBox.Text?.Trim() ?? string.Empty,
+                -1, -1);
+
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return;
+            }
+
+            await _supabaseService.SendPasswordResetEmailAsync(email.Trim());
         }
 
         private void ClearTextBox_Click(object sender, RoutedEventArgs e)

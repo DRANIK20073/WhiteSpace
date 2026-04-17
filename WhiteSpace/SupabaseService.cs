@@ -2,10 +2,12 @@
 using Newtonsoft.Json;
 using Supabase;
 using Supabase.Gotrue;
+using Supabase.Gotrue.Exceptions;
 using Supabase.Interfaces;
 using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -23,6 +25,12 @@ public class SupabaseService
 {
     private static Supabase.Client _client; // для работы с основной клиентской логикой
     private static Supabase.Gotrue.Client _authClient; // для работы с аутентификацией
+    private static readonly object _localServerLock = new();
+    private static HttpListener? _localServer;
+    private static TaskCompletionSource<Dictionary<string, object>?>? _googleAuthCompletionSource;
+    private const string LocalServerBaseUrl = "http://127.0.0.1:54322";
+    private const string GoogleCallbackPageUrl = $"{LocalServerBaseUrl}/oauth-callback.html";
+    private const string PasswordResetPageUrl = $"{LocalServerBaseUrl}/password-reset.html";
 
     public static Supabase.Client Client => _client;
 
@@ -48,6 +56,7 @@ public class SupabaseService
         _client = new Supabase.Client(url, key, options);
         _authClient = (Supabase.Gotrue.Client)_client.Auth;
         await _client.InitializeAsync();
+        EnsureLocalServerStarted();
     }
 
     //Регистрация
@@ -228,24 +237,54 @@ public class SupabaseService
         }
     }
 
-    public async Task<bool> GoogleSignInAsync(Page currentPage)
+    public async Task<bool> SendPasswordResetEmailAsync(string email)
     {
-        HttpListener listener = null;
-
         try
         {
-            // Запоминаем текущего пользователя
-            var previousUser = _client.Auth.CurrentUser;
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                MessageBox.Show("Введите email для восстановления пароля.");
+                return false;
+            }
 
-            // URL для нашего HTML файла (локальный сервер)
-            string callbackPageUrl = "http://127.0.0.1:54322/oauth-callback.html";
+            EnsureLocalServerStarted();
 
+            var options = new ResetPasswordForEmailOptions(email.Trim())
+            {
+                RedirectTo = PasswordResetPageUrl
+            };
+
+            await _client.Auth.ResetPasswordForEmail(options);
+
+            MessageBox.Show(
+                $"Если аккаунт с адресом {email.Trim()} существует, письмо со ссылкой для смены пароля уже отправлено.",
+                "Восстановление пароля",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            return true;
+        }
+        catch (GotrueException ex)
+        {
+            MessageBox.Show($"Не удалось отправить письмо для восстановления пароля: {ex.Message}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Неизвестная ошибка при восстановлении пароля: {ex.Message}");
+            return false;
+        }
+    }
+
+    public async Task<bool> GoogleSignInAsync(Page currentPage)
+    {
+        try
+        {
             // Создаем URL для OAuth авторизации через Supabase
             string oauthUrl = $"https://ceqnfiznaanuzojjgdcs.supabase.co/auth/v1/authorize" +
                               $"?provider=google" +
-                              $"&redirect_to={Uri.EscapeDataString(callbackPageUrl)}";
+                              $"&redirect_to={Uri.EscapeDataString(GoogleCallbackPageUrl)}";
 
-            // Информируем пользователя
             MessageBox.Show(
                 "Сейчас откроется браузер для входа через Google.\n" +
                 "После авторизации данные будут автоматически отправлены в приложение.",
@@ -253,95 +292,64 @@ public class SupabaseService
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
 
-            // Запускаем локальный сервер для HTML страницы
-            StartLocalServer();
+            EnsureLocalServerStarted();
 
-            // Создаем HTTP слушатель для получения данных от HTML страницы
-            listener = new HttpListener();
-            listener.Prefixes.Add("http://127.0.0.1:54322/auth/callback/");
-            listener.Start();
+            var completionSource = new TaskCompletionSource<Dictionary<string, object>?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _googleAuthCompletionSource = completionSource;
 
-            // Открываем браузер
             Process.Start(new ProcessStartInfo
             {
                 FileName = oauthUrl,
                 UseShellExecute = true
             });
 
-            // Ждем данные от HTML страницы (таймаут 120 секунд)
-            var timeoutTask = Task.Delay(120000);
-            var getContextTask = listener.GetContextAsync();
-            var completedTask = await Task.WhenAny(getContextTask, timeoutTask);
+            var completedTask = await Task.WhenAny(completionSource.Task, Task.Delay(120000));
 
-            if (completedTask == timeoutTask)
+            if (completedTask != completionSource.Task)
             {
                 MessageBox.Show("Время ожидания авторизации истекло.");
-                listener.Stop();
+                _googleAuthCompletionSource = null;
                 return false;
             }
 
-            var context = await getContextTask;
+            var userData = await completionSource.Task;
+            _googleAuthCompletionSource = null;
 
-            // Получаем данные из запроса
-            string data = context.Request.QueryString["data"];
-
-            // Отправляем ответ
-            string responseHtml = "<html><body style='font-family: Arial; text-align: center; margin-top: 50px;'><h2 style='color: #4CAF50;'>✅ Данные получены!</h2><p>Окно можно закрыть.</p><script>setTimeout(() => window.close(), 1500);</script></body></html>";
-            byte[] buffer = Encoding.UTF8.GetBytes(responseHtml);
-            context.Response.ContentType = "text/html; charset=utf-8";
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-            context.Response.Close();
-
-            listener.Stop();
-
-            // Парсим полученные данные
-            if (!string.IsNullOrEmpty(data))
+            if (userData != null)
             {
-                var userData = JsonConvert.DeserializeObject<Dictionary<string, object>>(data);
+                string accessToken = userData.ContainsKey("accessToken") ? userData["accessToken"]?.ToString() : null;
+                string refreshToken = userData.ContainsKey("refreshToken") ? userData["refreshToken"]?.ToString() : null;
 
-                if (userData != null)
+                if (!string.IsNullOrEmpty(accessToken))
                 {
-                    string actorId = userData.ContainsKey("actorId") ? userData["actorId"]?.ToString() : null;
-                    string accessToken = userData.ContainsKey("accessToken") ? userData["accessToken"]?.ToString() : null;
-                    string refreshToken = userData.ContainsKey("refreshToken") ? userData["refreshToken"]?.ToString() : null;
-                    string email = userData.ContainsKey("email") ? userData["email"]?.ToString() : null;
+                    await _client.Auth.SetSession(accessToken, refreshToken);
+                    await Task.Delay(1000);
 
-                    // Устанавливаем сессию
-                    if (!string.IsNullOrEmpty(accessToken))
+                    if (_client.Auth.CurrentUser != null)
                     {
-                        await _client.Auth.SetSession(accessToken, refreshToken);
-
-                        // Даем время на установку сессии
-                        await Task.Delay(1000);
-
-                        if (_client.Auth.CurrentUser != null)
+                        if (_client.Auth.CurrentSession != null)
                         {
-                            // Сохраняем сессию
-                            if (_client.Auth.CurrentSession != null)
+                            SessionStorage.SaveSession(_client.Auth.CurrentSession);
+                        }
+
+                        var profile = await GetProfileByActorIdAsync(_client.Auth.CurrentUser.Id);
+
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            if (profile != null && !string.IsNullOrEmpty(profile.Username))
                             {
-                                SessionStorage.SaveSession(_client.Auth.CurrentSession);
+                                MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {profile.Username}");
+                            }
+                            else
+                            {
+                                MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}");
                             }
 
-                            // Получаем профиль
-                            var profile = await GetProfileByActorIdAsync(_client.Auth.CurrentUser.Id);
+                            currentPage.NavigationService.Navigate(new UserHomePage());
+                        });
 
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                if (profile != null && !string.IsNullOrEmpty(profile.Username))
-                                {
-                                    MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {profile.Username}");
-                                }
-                                else
-                                {
-                                    MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}");
-                                }
-
-                                currentPage.NavigationService.Navigate(new UserHomePage());
-                            });
-
-                            return true;
-                        }
+                        return true;
                     }
                 }
             }
@@ -353,15 +361,6 @@ public class SupabaseService
         {
             MessageBox.Show($"Ошибка при входе через Google: {ex.Message}");
             return false;
-        }
-        finally
-        {
-            try
-            {
-                listener?.Stop();
-                listener?.Close();
-            }
-            catch { }
         }
     }
 
@@ -388,87 +387,45 @@ public class SupabaseService
         }
     }
 
-    // Добавьте этот метод в класс SupabaseService
-    private void StartLocalServer()
+    public static void EnsureLocalServerStarted()
     {
-        try
+        if (_localServer != null && _localServer.IsListening)
         {
-            // Создаем HTTP слушатель для HTML страницы
-            var htmlListener = new HttpListener();
-            htmlListener.Prefixes.Add("http://127.0.0.1:54322/");
+            return;
+        }
 
-            try
+        lock (_localServerLock)
+        {
+            if (_localServer != null && _localServer.IsListening)
             {
-                htmlListener.Start();
-            }
-            catch (HttpListenerException)
-            {
-                // Сервер уже запущен, игнорируем
                 return;
             }
 
-            Console.WriteLine("Локальный сервер запущен на http://127.0.0.1:54322");
+            _localServer = new HttpListener();
+            _localServer.Prefixes.Add($"{LocalServerBaseUrl}/");
+        }
 
-            // Запускаем обработку запросов в фоновом потоке
+        try
+        {
+            try
+            {
+                _localServer!.Start();
+            }
+            catch (HttpListenerException)
+            {
+                return;
+            }
+
+            Console.WriteLine($"Локальный сервер запущен на {LocalServerBaseUrl}");
+
             Task.Run(async () =>
             {
-                while (htmlListener.IsListening)
+                while (_localServer != null && _localServer.IsListening)
                 {
                     try
                     {
-                        var context = await htmlListener.GetContextAsync();
-
-                        // Обрабатываем только GET запросы
-                        if (context.Request.HttpMethod != "GET")
-                        {
-                            context.Response.StatusCode = 405;
-                            context.Response.Close();
-                            continue;
-                        }
-
-                        // Если запрашивают наш HTML файл
-                        if (context.Request.Url.AbsolutePath == "/oauth-callback.html")
-                        {
-                            try
-                            {
-                                // Получаем путь к HTML файлу (рядом с EXE)
-                                string htmlPath = System.IO.Path.Combine(
-                                    AppDomain.CurrentDomain.BaseDirectory,
-                                    "oauth-callback.html");
-
-                                // Проверяем, существует ли файл
-                                if (System.IO.File.Exists(htmlPath))
-                                {
-                                    string html = System.IO.File.ReadAllText(htmlPath);
-                                    byte[] buffer = Encoding.UTF8.GetBytes(html);
-
-                                    context.Response.ContentType = "text/html; charset=utf-8";
-                                    context.Response.ContentLength64 = buffer.Length;
-                                    await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-                                }
-                                else
-                                {
-                                    // Файл не найден, отправляем ошибку
-                                    string errorHtml = $"<html><body><h2>Ошибка: файл oauth-callback.html не найден</h2><p>Путь: {htmlPath}</p></body></html>";
-                                    byte[] buffer = Encoding.UTF8.GetBytes(errorHtml);
-                                    context.Response.ContentType = "text/html; charset=utf-8";
-                                    context.Response.ContentLength64 = buffer.Length;
-                                    await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"Ошибка при чтении HTML файла: {ex.Message}");
-                                context.Response.StatusCode = 500;
-                            }
-                        }
-                        else
-                        {
-                            // Для всех других запросов отправляем 404
-                            context.Response.StatusCode = 404;
-                        }
-
-                        context.Response.Close();
+                        var context = await _localServer.GetContextAsync();
+                        await HandleLocalServerRequestAsync(context);
                     }
                     catch (Exception ex)
                     {
@@ -481,6 +438,183 @@ public class SupabaseService
         {
             Console.WriteLine($"Ошибка запуска сервера: {ex.Message}");
         }
+    }
+
+    private static async Task HandleLocalServerRequestAsync(HttpListenerContext context)
+    {
+        try
+        {
+            if (context.Request.HttpMethod != "GET")
+            {
+                context.Response.StatusCode = 405;
+                context.Response.Close();
+                return;
+            }
+
+            var path = context.Request.Url?.AbsolutePath?.ToLowerInvariant();
+
+            switch (path)
+            {
+                case "/oauth-callback.html":
+                    await ServeLocalHtmlAsync(context, "oauth-callback.html");
+                    break;
+                case "/password-reset.html":
+                    await ServeLocalHtmlAsync(context, "password-reset.html");
+                    break;
+                case "/auth/callback/":
+                case "/auth/callback":
+                    await HandleGoogleCallbackAsync(context);
+                    break;
+                case "/auth/reset-password/":
+                case "/auth/reset-password":
+                    await HandlePasswordResetCallbackAsync(context);
+                    break;
+                default:
+                    context.Response.StatusCode = 404;
+                    context.Response.Close();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка обработки локального запроса: {ex.Message}");
+
+            if (context.Response.OutputStream.CanWrite)
+            {
+                context.Response.StatusCode = 500;
+                context.Response.Close();
+            }
+        }
+    }
+
+    private static async Task ServeLocalHtmlAsync(HttpListenerContext context, string fileName)
+    {
+        var htmlPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+
+        if (!File.Exists(htmlPath))
+        {
+            context.Response.StatusCode = 404;
+            await WriteResponseAsync(
+                context.Response,
+                $"<html><body><h2>Ошибка: файл {fileName} не найден</h2><p>Путь: {htmlPath}</p></body></html>",
+                "text/html; charset=utf-8");
+            return;
+        }
+
+        var html = File.ReadAllText(htmlPath);
+        await WriteResponseAsync(context.Response, html, "text/html; charset=utf-8");
+    }
+
+    private static async Task HandleGoogleCallbackAsync(HttpListenerContext context)
+    {
+        string data = context.Request.QueryString["data"];
+        Dictionary<string, object>? userData = null;
+
+        if (!string.IsNullOrWhiteSpace(data))
+        {
+            userData = JsonConvert.DeserializeObject<Dictionary<string, object>>(data);
+        }
+
+        _googleAuthCompletionSource?.TrySetResult(userData);
+
+        await WriteResponseAsync(
+            context.Response,
+            "<html><body style='font-family: Arial; text-align: center; margin-top: 50px;'><h2 style='color: #4CAF50;'>✅ Данные получены!</h2><p>Окно можно закрыть.</p><script>setTimeout(() => window.close(), 1500);</script></body></html>",
+            "text/html; charset=utf-8");
+    }
+
+    private static async Task HandlePasswordResetCallbackAsync(HttpListenerContext context)
+    {
+        string data = context.Request.QueryString["data"];
+
+        if (string.IsNullOrWhiteSpace(data))
+        {
+            context.Response.StatusCode = 400;
+            await WriteResponseAsync(
+                context.Response,
+                JsonConvert.SerializeObject(new { success = false, message = "Данные для смены пароля не получены." }),
+                "application/json; charset=utf-8");
+            return;
+        }
+
+        var payload = JsonConvert.DeserializeObject<PasswordResetPayload>(data);
+        var result = await CompletePasswordResetAsync(payload);
+
+        context.Response.StatusCode = result.Success ? 200 : 400;
+        await WriteResponseAsync(
+            context.Response,
+            JsonConvert.SerializeObject(new { success = result.Success, message = result.Message }),
+            "application/json; charset=utf-8");
+    }
+
+    private static async Task<(bool Success, string Message)> CompletePasswordResetAsync(PasswordResetPayload? payload)
+    {
+        if (payload == null)
+        {
+            return (false, "Не удалось прочитать данные для смены пароля.");
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.NewPassword) || payload.NewPassword.Length < 6)
+        {
+            return (false, "Пароль должен содержать минимум 6 символов.");
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(payload.AccessToken))
+            {
+                await _client.Auth.SetSession(payload.AccessToken, payload.RefreshToken, false);
+            }
+            else if (!string.IsNullOrWhiteSpace(payload.TokenHash))
+            {
+                await _client.Auth.VerifyTokenHash(payload.TokenHash, EmailOtpType.Recovery);
+            }
+            else
+            {
+                return (false, "Ссылка для восстановления не содержит токенов авторизации.");
+            }
+
+            var attributes = new UserAttributes
+            {
+                Password = payload.NewPassword
+            };
+
+            await _client.Auth.Update(attributes);
+
+            SessionStorage.ClearSession();
+            await _client.Auth.SignOut();
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (Application.Current.MainWindow is WhiteSpace.MainWindow window)
+                {
+                    window.MainFrame.Navigate(new LoginPage());
+                }
+            });
+
+            return (true, "Пароль успешно обновлен. Теперь вы можете войти с новым паролем.");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Не удалось обновить пароль: {ex.Message}");
+        }
+    }
+
+    private static async Task WriteResponseAsync(HttpListenerResponse response, string content, string contentType)
+    {
+        var buffer = Encoding.UTF8.GetBytes(content);
+        response.ContentType = contentType;
+        response.ContentLength64 = buffer.Length;
+        await response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+        response.Close();
+    }
+
+    private sealed class PasswordResetPayload
+    {
+        public string? AccessToken { get; set; }
+        public string? RefreshToken { get; set; }
+        public string? TokenHash { get; set; }
+        public string? NewPassword { get; set; }
     }
 
 

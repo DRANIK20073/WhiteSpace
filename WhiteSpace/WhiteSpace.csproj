@@ -21,10 +21,13 @@
     <PackageReference Include="WPF-UI" Version="4.2.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Update="oauth-callback.html">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
+	<ItemGroup>
+		<None Update="oauth-callback.html">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+		<None Update="password-reset.html">
+			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+	</ItemGroup>
 
 </Project>
