@@ -14,6 +14,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
@@ -153,7 +154,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка загрузки фигур: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка загрузки фигур: {ex.Message}", "Доска");
             }
             finally
             {
@@ -188,7 +189,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка подписки на Firebase: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка подписки на Firebase: {ex.Message}", "Доска");
             }
         }
 
@@ -345,7 +346,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка подписки на участников: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка подписки на участников: {ex.Message}", "Участники доски");
             }
         }
 
@@ -459,7 +460,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка при загрузке участников: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка при загрузке участников: {ex.Message}", "Участники доски");
             }
         }
 
@@ -470,13 +471,13 @@ namespace WhiteSpace.Pages
 
             if (boardMember == null)
             {
-                MessageBox.Show("Ошибка: участник не выбран.");
+                AppDialogService.ShowWarning("Участник не выбран.", "Изменение роли");
                 return;
             }
 
             if (boardMember.Role == "owner")
             {
-                MessageBox.Show("Вы не можете изменить роль владельца.");
+                AppDialogService.ShowWarning("Вы не можете изменить роль владельца.", "Изменение роли");
                 return;
             }
 
@@ -488,11 +489,11 @@ namespace WhiteSpace.Pages
                 // Отправляем обновление в Firebase
                 PushBoardMembersToFirebase();
 
-                MessageBox.Show($"Роль пользователя изменена на {newRole}.");
+                AppDialogService.ShowSuccess($"Роль пользователя изменена на {newRole}.", "Изменение роли");
             }
             else
             {
-                MessageBox.Show("Не удалось изменить роль.");
+                AppDialogService.ShowError("Не удалось изменить роль.", "Изменение роли");
             }
         }
 

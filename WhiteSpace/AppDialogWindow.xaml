@@ -1,0 +1,158 @@
+﻿<Window x:Class="WhiteSpace.AppDialogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WhiteSpace"
+        Width="480"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False">
+
+    <Window.Resources>
+        <Style x:Key="AnimatedLoginButton" TargetType="Button">
+            <Setter Property="Height" Value="42"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#333333"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="10">
+
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+
+                        <ControlTemplate.Triggers>
+
+                            <!-- Hover -->
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border"
+                                        Property="Background"
+                                        Value="#444444"/>
+                            </Trigger>
+
+                            <!-- Нажатие -->
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border"
+                                        Property="Background"
+                                        Value="#222222"/>
+                                <Setter TargetName="border"
+                                        Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.97" ScaleY="0.97"/>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+
+                            <!-- Disabled -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border"
+                                        Property="Opacity"
+                                        Value="0.6"/>
+                            </Trigger>
+
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="Transparent">
+
+        <Border Width="440"
+                Margin="18"
+                Background="Transparent"
+                CornerRadius="20"
+                BorderBrush="#E5E5E5"
+                BorderThickness="1.5"
+                SnapsToDevicePixels="True">
+
+            <Border Background="#FFFFFF"
+                    CornerRadius="18"
+                    ClipToBounds="True">
+
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="6"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border x:Name="AccentBar"
+                            Grid.Row="0"
+                            Width="430"
+                            Background="#333333"
+                            CornerRadius="18,18,0,0"/>
+
+                    <StackPanel Grid.Row="1"
+                                Margin="28,24,28,18">
+
+                        <Border x:Name="IconBadge"
+                                Width="54"
+                                Height="54"
+                                CornerRadius="27"
+                                Background="#F2F2F2"
+                                HorizontalAlignment="Left">
+                            <TextBlock x:Name="IconText"
+                                       Text="i"
+                                       FontSize="28"
+                                       FontWeight="Bold"
+                                       Foreground="#333333"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Margin="0,6,0,0"/>
+                        </Border>
+
+                        <TextBlock x:Name="TitleText"
+                                   Margin="0,18,0,10"
+                                   FontSize="28"
+                                   FontWeight="Bold"
+                                   Foreground="#111111"
+                                   TextWrapping="Wrap"/>
+
+                        <TextBlock x:Name="MessageText"
+                                   FontSize="15"
+                                   Foreground="#5F5F5F"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <Grid Grid.Row="2"
+                          Margin="28,0,28,26">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button x:Name="SecondaryButton"
+                                Grid.Column="0"
+                                Width="120"
+                                Height="42"
+                                Margin="0,0,12,0"
+                                Content="Отмена"
+                                Visibility="Collapsed"
+                                Click="SecondaryButton_Click"/>
+
+                        <Button x:Name="PrimaryButton"
+                                Grid.Column="1"
+                                Width="140"
+                                Height="42"
+                                Style="{StaticResource AnimatedLoginButton}"
+                                Click="PrimaryButton_Click"/>
+                    </Grid>
+
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+</Window>

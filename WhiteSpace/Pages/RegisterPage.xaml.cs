@@ -1,12 +1,13 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
     public partial class RegisterPage : Page
     {
-        private SupabaseService _supabaseService;
+        private readonly SupabaseService _supabaseService;
 
         public RegisterPage()
         {
@@ -27,7 +28,7 @@ namespace WhiteSpace.Pages
             }
             else
             {
-                MessageBox.Show("Не удалось зарегистрироваться. Проверьте введенные данные.");
+                AppDialogService.ShowError("Не удалось зарегистрироваться. Проверьте введенные данные.", "Регистрация");
             }
         }
 
@@ -54,16 +55,23 @@ namespace WhiteSpace.Pages
 
         private void NavigateAndClear(Page page)
         {
-            NavigationService.Navigate(page);
+            var navigationService = NavigationService
+                ?? (Application.Current.MainWindow as WhiteSpace.MainWindow)?.MainFrame.NavigationService;
 
-            while (NavigationService.CanGoBack)
+            if (navigationService == null)
             {
-                NavigationService.RemoveBackEntry();
+                AppDialogService.ShowError("Не удалось выполнить переход на другую страницу.", "Ошибка навигации");
+                return;
+            }
+
+            navigationService.Navigate(page);
+
+            while (navigationService.CanGoBack)
+            {
+                navigationService.RemoveBackEntry();
             }
         }
 
-
-        // Обработчик для кнопки Google
         private async void GoogleLogin_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -75,17 +83,13 @@ namespace WhiteSpace.Pages
                     button.Content = "Авторизация...";
                 }
 
-                // Вызываем обновленный метод
                 bool success = await _supabaseService.GoogleSignInAsync(this);
 
                 if (!success)
                 {
-                    MessageBox.Show(
-                        "Не удалось выполнить вход через Google.\n\n" +
-                        "Попробуйте позже или используйте вход по email.",
-                        "Ошибка",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
+                    AppDialogService.ShowWarning(
+                        "Не удалось выполнить вход через Google.\n\nПопробуйте позже или используйте вход по email.",
+                        "Вход через Google");
 
                     if (button != null)
                     {
@@ -96,7 +100,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка: {ex.Message}", "Вход через Google");
 
                 var button = sender as Button;
                 if (button != null)

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows.Controls;
 using System.Collections.Generic;
 using System;
+using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
@@ -69,7 +70,7 @@ namespace WhiteSpace.Pages
             {
                 // В случае ошибки показываем стандартное приветствие
                 UserGreeting = "Здравствуйте!";
-                MessageBox.Show($"Ошибка загрузки профиля: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка загрузки профиля: {ex.Message}", "Профиль");
             }
         }
 
@@ -84,7 +85,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка загрузки досок: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка загрузки досок: {ex.Message}", "Доски");
             }
         }
 
@@ -118,7 +119,7 @@ namespace WhiteSpace.Pages
 
             if (string.IsNullOrWhiteSpace(boardTitle))
             {
-                MessageBox.Show("Название доски не может быть пустым.");
+                AppDialogService.ShowWarning("Название доски не может быть пустым.", "Создание доски");
                 return;
             }
 
@@ -131,7 +132,7 @@ namespace WhiteSpace.Pages
             }
             else
             {
-                MessageBox.Show("Не удалось создать доску.");
+                AppDialogService.ShowError("Не удалось создать доску.", "Создание доски");
             }
         }
 
@@ -159,7 +160,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка при открытии доски: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка при открытии доски: {ex.Message}", "Открытие доски");
             }
         }
 
@@ -181,7 +182,7 @@ namespace WhiteSpace.Pages
 
             if (string.IsNullOrWhiteSpace(accessCode))
             {
-                MessageBox.Show("Код доступа не может быть пустым.");
+                AppDialogService.ShowWarning("Код доступа не может быть пустым.", "Подключение по коду");
                 return;
             }
 
@@ -192,27 +193,24 @@ namespace WhiteSpace.Pages
 
             if (board != null)
             {
-                MessageBox.Show($"✅ Вы успешно присоединились к доске \"{board.Title}\".");
+                AppDialogService.ShowSuccess($"Вы успешно присоединились к доске \"{board.Title}\".", "Подключение по коду");
 
                 // Обновляем список досок на главной странице
                 await LoadBoards();
 
                 // Спрашиваем пользователя, хочет ли он перейти на доску сейчас
-                var result = MessageBox.Show(
+                var result = AppDialogService.ShowConfirmation(
                     "Хотите перейти на доску сейчас?",
-                    "Переход на доску",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Question);
+                    "Переход на доску");
 
-                if (result == MessageBoxResult.Yes)
+                if (result)
                 {
-                    // Переходим на доску
                     this.NavigationService.Navigate(new BoardPage(board.Id));
                 }
             }
             else
             {
-                MessageBox.Show("Не удалось присоединиться к доске. Проверьте код доступа.");
+                AppDialogService.ShowError("Не удалось присоединиться к доске. Проверьте код доступа.", "Подключение по коду");
             }
         }
 
@@ -242,7 +240,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка при удалении доски: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка при удалении доски: {ex.Message}", "Удаление доски");
             }
         }
     }

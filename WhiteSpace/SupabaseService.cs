@@ -18,6 +18,7 @@ using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using WhiteSpace.Pages;
+using WhiteSpace.Services;
 using static Supabase.Gotrue.Constants;
 using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
 
@@ -66,7 +67,7 @@ public class SupabaseService
         {
             if (_client == null)
             {
-                MessageBox.Show("Клиент Supabase не был инициализирован.");
+                AppDialogService.ShowError("Клиент Supabase не был инициализирован.", "Supabase");
                 return false;
             }
 
@@ -75,12 +76,12 @@ public class SupabaseService
             if (response.User != null)
             {
                 var userId = response.User.Id;
-                MessageBox.Show("Регистрация успешна 🎉");
+                AppDialogService.ShowSuccess("Регистрация успешна.", "Регистрация");
                 return true;
             }
             else
             {
-                MessageBox.Show("Ошибка регистрации");
+                AppDialogService.ShowError("Ошибка регистрации.", "Регистрация");
                 return false;
             }
         }
@@ -88,25 +89,25 @@ public class SupabaseService
         {
             if (ex.Message.Contains("user_already_exists"))
             {
-                MessageBox.Show("Пользователь с таким email уже зарегистрирован.");
+                AppDialogService.ShowWarning("Пользователь с таким email уже зарегистрирован.", "Регистрация");
             }
             else if (ex.Message.Contains("validation_failed") && ex.Message.Contains("invalid format"))
             {
-                MessageBox.Show("Неправильный формат email. Пожалуйста, проверьте введенный адрес.");
+                AppDialogService.ShowWarning("Неправильный формат email. Пожалуйста, проверьте введенный адрес.", "Регистрация");
             }
             else if (ex.Message.Contains("password"))
             {
-                MessageBox.Show("Пароль должен содержать минимум 6 символов.");
+                AppDialogService.ShowWarning("Пароль должен содержать минимум 6 символов.", "Регистрация");
             }
             else
             {
-                MessageBox.Show($"Ошибка при регистрации: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка при регистрации: {ex.Message}", "Регистрация");
             }
             return false;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Неизвестная ошибка: {ex.Message}");
+            AppDialogService.ShowError($"Неизвестная ошибка: {ex.Message}", "Регистрация");
             return false;
         }
     }
@@ -120,13 +121,13 @@ public class SupabaseService
 
             if (user == null)
             {
-                MessageBox.Show("Пользователь не авторизован.");
+                AppDialogService.ShowWarning("Пользователь не авторизован.", "Профиль");
                 return false;
             }
 
             if (string.IsNullOrWhiteSpace(newUsername) || newUsername.Length < 3)
             {
-                MessageBox.Show("Имя пользователя должно содержать минимум 3 символа.");
+                AppDialogService.ShowWarning("Имя пользователя должно содержать минимум 3 символа.", "Профиль");
                 return false;
             }
 
@@ -150,12 +151,12 @@ public class SupabaseService
 
                 if (result.Models?.Any() == true)
                 {
-                    MessageBox.Show($"Имя пользователя успешно обновлено на: {newUsername}");
+                    AppDialogService.ShowSuccess($"Имя пользователя успешно обновлено на: {newUsername}", "Профиль");
                     return true;
                 }
                 else
                 {
-                    MessageBox.Show("Не удалось обновить имя пользователя.");
+                    AppDialogService.ShowError("Не удалось обновить имя пользователя.", "Профиль");
                     return false;
                 }
             }
@@ -174,19 +175,19 @@ public class SupabaseService
 
                 if (result.Models?.Any() == true)
                 {
-                    MessageBox.Show($"Профиль создан с именем пользователя: {newUsername}");
+                    AppDialogService.ShowSuccess($"Профиль создан с именем пользователя: {newUsername}", "Профиль");
                     return true;
                 }
                 else
                 {
-                    MessageBox.Show("Не удалось создать профиль.");
+                    AppDialogService.ShowError("Не удалось создать профиль.", "Профиль");
                     return false;
                 }
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при смене имени пользователя: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при смене имени пользователя: {ex.Message}", "Профиль");
             return false;
         }
     }
@@ -200,7 +201,7 @@ public class SupabaseService
 
             if (session == null)
             {
-                MessageBox.Show("Не удалось войти. Проверьте введенные данные.");
+                AppDialogService.ShowError("Не удалось войти. Проверьте введенные данные.", "Вход");
                 return false;
             }
 
@@ -209,7 +210,7 @@ public class SupabaseService
                 SessionStorage.SaveSession(session);
             }
 
-            MessageBox.Show("Вход выполнен успешно!");
+            AppDialogService.ShowSuccess("Вход выполнен успешно!", "Вход");
 
             return true;
         }
@@ -217,22 +218,22 @@ public class SupabaseService
         {
             if (ex.Message.Contains("missing email or phone"))
             {
-                MessageBox.Show("Ошибка входа: Не указан email.");
+                AppDialogService.ShowWarning("Ошибка входа: Не указан email.", "Вход");
             }
             else if (ex.Message.Contains("invalid_credentials"))
             {
-                MessageBox.Show("Ошибка входа: Неверные учетные данные.");
+                AppDialogService.ShowWarning("Ошибка входа: Неверные учетные данные.", "Вход");
             }
             else
             {
-                MessageBox.Show($"Ошибка входа: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка входа: {ex.Message}", "Вход");
             }
 
             return false;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Неизвестная ошибка: {ex.Message}");
+            AppDialogService.ShowError($"Неизвестная ошибка: {ex.Message}", "Вход");
             return false;
         }
     }
@@ -243,7 +244,7 @@ public class SupabaseService
         {
             if (string.IsNullOrWhiteSpace(email))
             {
-                MessageBox.Show("Введите email для восстановления пароля.");
+                AppDialogService.ShowWarning("Введите email для восстановления пароля.", "Восстановление пароля");
                 return false;
             }
 
@@ -256,22 +257,20 @@ public class SupabaseService
 
             await _client.Auth.ResetPasswordForEmail(options);
 
-            MessageBox.Show(
+            AppDialogService.ShowInfo(
                 $"Если аккаунт с адресом {email.Trim()} существует, письмо со ссылкой для смены пароля уже отправлено.",
-                "Восстановление пароля",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                "Восстановление пароля");
 
             return true;
         }
         catch (GotrueException ex)
         {
-            MessageBox.Show($"Не удалось отправить письмо для восстановления пароля: {ex.Message}");
+            AppDialogService.ShowError($"Не удалось отправить письмо для восстановления пароля: {ex.Message}", "Восстановление пароля");
             return false;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Неизвестная ошибка при восстановлении пароля: {ex.Message}");
+            AppDialogService.ShowError($"Неизвестная ошибка при восстановлении пароля: {ex.Message}", "Восстановление пароля");
             return false;
         }
     }
@@ -285,12 +284,10 @@ public class SupabaseService
                               $"?provider=google" +
                               $"&redirect_to={Uri.EscapeDataString(GoogleCallbackPageUrl)}";
 
-            MessageBox.Show(
+            AppDialogService.ShowInfo(
                 "Сейчас откроется браузер для входа через Google.\n" +
                 "После авторизации данные будут автоматически отправлены в приложение.",
-                "Вход через Google",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+                "Вход через Google");
 
             EnsureLocalServerStarted();
 
@@ -308,7 +305,7 @@ public class SupabaseService
 
             if (completedTask != completionSource.Task)
             {
-                MessageBox.Show("Время ожидания авторизации истекло.");
+                AppDialogService.ShowWarning("Время ожидания авторизации истекло.", "Вход через Google");
                 _googleAuthCompletionSource = null;
                 return false;
             }
@@ -339,11 +336,11 @@ public class SupabaseService
                         {
                             if (profile != null && !string.IsNullOrEmpty(profile.Username))
                             {
-                                MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {profile.Username}");
+                                AppDialogService.ShowSuccess($"Вход через Google выполнен успешно! Добро пожаловать, {profile.Username}", "Вход через Google");
                             }
                             else
                             {
-                                MessageBox.Show($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}");
+                                AppDialogService.ShowSuccess($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}", "Вход через Google");
                             }
 
                             currentPage.NavigationService.Navigate(new UserHomePage());
@@ -354,12 +351,12 @@ public class SupabaseService
                 }
             }
 
-            MessageBox.Show("Не удалось получить данные авторизации.");
+            AppDialogService.ShowError("Не удалось получить данные авторизации.", "Вход через Google");
             return false;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при входе через Google: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при входе через Google: {ex.Message}", "Вход через Google");
             return false;
         }
     }
@@ -630,7 +627,7 @@ public class SupabaseService
         var session = _client.Auth.CurrentSession;
         if (session == null)
         {
-            MessageBox.Show("Пользователь не авторизован.");
+            AppDialogService.ShowWarning("Пользователь не авторизован.", "Сессия");
             return null;
         }
         return session.AccessToken;
@@ -649,25 +646,25 @@ public class SupabaseService
 
                 if (profile != null && !string.IsNullOrEmpty(profile.Username))
                 {
-                    MessageBox.Show($"Имя пользователя: {profile.Username}");
+                    AppDialogService.ShowInfo($"Имя пользователя: {profile.Username}", "Профиль");
                 }
                 else if (profile != null && string.IsNullOrEmpty(profile.Username))
                 {
-                    MessageBox.Show("Имя пользователя не установлено");
+                    AppDialogService.ShowInfo("Имя пользователя не установлено", "Профиль");
                 }
                 else
                 {
-                    MessageBox.Show("Профиль пользователя не найден в базе данных");
+                    AppDialogService.ShowWarning("Профиль пользователя не найден в базе данных", "Профиль");
                 }
             }
             else
             {
-                MessageBox.Show("Пользователь не авторизован. Пожалуйста, выполните вход.");
+                AppDialogService.ShowWarning("Пользователь не авторизован. Пожалуйста, выполните вход.", "Сессия");
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при получении имени пользователя: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при получении имени пользователя: {ex.Message}", "Профиль");
         }
     }
 
@@ -703,7 +700,7 @@ public class SupabaseService
             var user = _client.Auth.CurrentUser;
             if (user == null)
             {
-                MessageBox.Show("Пользователь не авторизован");
+                AppDialogService.ShowWarning("Пользователь не авторизован", "Профиль");
                 return null;
             }
 
@@ -718,7 +715,7 @@ public class SupabaseService
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка в GetMyProfileAsync: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка в GetMyProfileAsync: {ex.Message}", "Профиль");
             return null;
         }
     }
@@ -731,13 +728,13 @@ public class SupabaseService
             var user = _client.Auth.CurrentUser;
             if (user == null)
             {
-                MessageBox.Show("Пользователь не авторизован");
+                AppDialogService.ShowWarning("Пользователь не авторизован", "Создание доски");
                 return null;
             }
 
             if (string.IsNullOrWhiteSpace(title))
             {
-                MessageBox.Show("Название доски не может быть пустым");
+                AppDialogService.ShowWarning("Название доски не может быть пустым", "Создание доски");
                 return null;
             }
 
@@ -764,16 +761,16 @@ public class SupabaseService
 
                 await _client.From<BoardMember>().Insert(newBoardMember);
 
-                MessageBox.Show("Доска успешно создана 🎉");
+                AppDialogService.ShowSuccess("Доска успешно создана.", "Создание доски");
                 return result.Models.First();
             }
 
-            MessageBox.Show("Не удалось создать доску");
+            AppDialogService.ShowError("Не удалось создать доску", "Создание доски");
             return null;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка создания доски: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка создания доски: {ex.Message}", "Создание доски");
             return null;
         }
     }
@@ -818,7 +815,7 @@ public class SupabaseService
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка получения досок: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка получения досок: {ex.Message}", "Доски");
         }
         return result;
     }
@@ -850,18 +847,18 @@ public class SupabaseService
 
             if (result.Models?.Any() == true)
             {
-                MessageBox.Show("Фигура успешно сохранена.");
+                AppDialogService.ShowSuccess("Фигура успешно сохранена.", "Доска");
                 return true;
             }
             else
             {
-                MessageBox.Show("Не удалось сохранить фигуру.");
+                AppDialogService.ShowError("Не удалось сохранить фигуру.", "Доска");
                 return false;
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при сохранении фигуры: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при сохранении фигуры: {ex.Message}", "Доска");
             return false;
         }
     }
@@ -925,7 +922,7 @@ public class SupabaseService
             var user = _client.Auth.CurrentUser;
             if (user == null)
             {
-                MessageBox.Show("Пользователь не авторизован.");
+                AppDialogService.ShowWarning("Пользователь не авторизован.", "Подключение к доске");
                 return null;
             }
 
@@ -935,7 +932,7 @@ public class SupabaseService
 
             if (boardResult == null)
             {
-                MessageBox.Show("Доска с таким кодом не найдена.");
+                AppDialogService.ShowWarning("Доска с таким кодом не найдена.", "Подключение к доске");
                 return null;
             }
 
@@ -944,7 +941,7 @@ public class SupabaseService
 
             if (boardResult.OwnerId == userId)
             {
-                MessageBox.Show("Вы владелец этой доски.");
+                AppDialogService.ShowInfo("Вы владелец этой доски.", "Подключение к доске");
                 return boardResult;
             }
 
@@ -954,7 +951,7 @@ public class SupabaseService
 
             if (existingMember != null)
             {
-                MessageBox.Show("Вы уже присоединились к этой доске.");
+                AppDialogService.ShowInfo("Вы уже присоединились к этой доске.", "Подключение к доске");
                 return boardResult;
             }
 
@@ -970,18 +967,18 @@ public class SupabaseService
 
             if (insertResult.Models?.Count > 0)
             {
-                MessageBox.Show($"✅ Вы успешно присоединились к доске \"{boardResult.Title}\" (режим просмотра).");
+                AppDialogService.ShowSuccess($"Вы успешно присоединились к доске \"{boardResult.Title}\" (режим просмотра).", "Подключение к доске");
                 return boardResult;
             }
             else
             {
-                MessageBox.Show("❌ Не удалось добавить запись в таблицу участников. Проверьте политики RLS.");
+                AppDialogService.ShowError("Не удалось добавить запись в таблицу участников. Проверьте политики RLS.", "Подключение к доске");
                 return null;
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"❌ Ошибка присоединения к доске: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка присоединения к доске: {ex.Message}", "Подключение к доске");
             return null;
         }
     }
@@ -1023,7 +1020,7 @@ public class SupabaseService
 
             if (member == null)
             {
-                MessageBox.Show("Пользователь не найден.");
+                AppDialogService.ShowWarning("Пользователь не найден.", "Изменение роли");
                 return false;
             }
 
@@ -1034,7 +1031,7 @@ public class SupabaseService
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при изменении роли: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при изменении роли: {ex.Message}", "Изменение роли");
             return false;
         }
     }
@@ -1052,7 +1049,7 @@ public class SupabaseService
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при получении списка участников: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при получении списка участников: {ex.Message}", "Участники доски");
             return new List<BoardMember>();
         }
     }
@@ -1064,7 +1061,7 @@ public class SupabaseService
             var user = _client.Auth.CurrentUser;
             if (user == null)
             {
-                MessageBox.Show("Пользователь не авторизован.");
+                AppDialogService.ShowWarning("Пользователь не авторизован.", "Удаление доски");
                 return false;
             }
 
@@ -1075,7 +1072,7 @@ public class SupabaseService
 
             if (board.Models == null || !board.Models.Any())
             {
-                MessageBox.Show("Доска не найдена.");
+                AppDialogService.ShowWarning("Доска не найдена.", "Удаление доски");
                 return false;
             }
 
@@ -1083,18 +1080,18 @@ public class SupabaseService
 
             if (boardToDelete.OwnerId != Guid.Parse(user.Id))
             {
-                MessageBox.Show("Только владелец может удалить доску.");
+                AppDialogService.ShowWarning("Только владелец может удалить доску.", "Удаление доски");
                 return false;
             }
 
             // Подтверждение удаления
-            var result = MessageBox.Show(
+            var result = AppDialogService.ShowConfirmation(
                 $"Вы уверены, что хотите удалить доску \"{boardToDelete.Title}\"?\nЭто действие нельзя отменить.",
                 "Подтверждение удаления",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
+                "Удалить",
+                "Отмена");
 
-            if (result != MessageBoxResult.Yes)
+            if (!result)
                 return false;
 
             // Удаляем всех участников доски
@@ -1132,12 +1129,12 @@ public class SupabaseService
                 .Where(b => b.Id == boardId)
                 .Delete();
 
-            MessageBox.Show($"Доска \"{boardToDelete.Title}\" успешно удалена.");
+            AppDialogService.ShowSuccess($"Доска \"{boardToDelete.Title}\" успешно удалена.", "Удаление доски");
             return true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Ошибка при удалении доски: {ex.Message}");
+            AppDialogService.ShowError($"Ошибка при удалении доски: {ex.Message}", "Удаление доски");
             return false;
         }
     }

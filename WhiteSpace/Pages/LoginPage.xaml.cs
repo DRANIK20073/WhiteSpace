@@ -1,20 +1,13 @@
-﻿using Supabase;
-using Supabase.Gotrue;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media.Animation;
-using WpfMessageBox = System.Windows.MessageBox;
-using WpfMessageBoxButton = System.Windows.MessageBoxButton;
-using WpfMessageBoxImage = System.Windows.MessageBoxImage;
-using WpfButton = System.Windows.Controls.Button;
+using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
     public partial class LoginPage : Page
     {
-        private SupabaseService _supabaseService;
+        private readonly SupabaseService _supabaseService;
 
         public LoginPage()
         {
@@ -38,20 +31,9 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void ForgotPassword_Click(object sender, RoutedEventArgs e)
+        private void ForgotPassword_Click(object sender, RoutedEventArgs e)
         {
-            string email = Microsoft.VisualBasic.Interaction.InputBox(
-                "Введите email, на который нужно отправить ссылку для смены пароля.",
-                "Восстановление пароля",
-                EmailBox.Text?.Trim() ?? string.Empty,
-                -1, -1);
-
-            if (string.IsNullOrWhiteSpace(email))
-            {
-                return;
-            }
-
-            await _supabaseService.SendPasswordResetEmailAsync(email.Trim());
+            NavigateAndClear(new ForgotPasswordPage(EmailBox.Text));
         }
 
         private void ClearTextBox_Click(object sender, RoutedEventArgs e)
@@ -65,12 +47,12 @@ namespace WhiteSpace.Pages
             PasswordBox.Password = string.Empty;
             PasswordBox.Focus();
         }
+
         private void RegisterLink_Click(object sender, RoutedEventArgs e)
         {
             NavigateAndClear(new RegisterPage());
         }
 
-        // Обработчик нажатия Enter в поле пароля
         private void PasswordBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
@@ -81,14 +63,23 @@ namespace WhiteSpace.Pages
 
         private void NavigateAndClear(Page page)
         {
-            NavigationService.Navigate(page);
-            while (NavigationService.CanGoBack)
+            var navigationService = NavigationService
+                ?? (Application.Current.MainWindow as WhiteSpace.MainWindow)?.MainFrame.NavigationService;
+
+            if (navigationService == null)
             {
-                NavigationService.RemoveBackEntry();
+                AppDialogService.ShowError("Не удалось выполнить переход на другую страницу.", "Ошибка навигации");
+                return;
+            }
+
+            navigationService.Navigate(page);
+
+            while (navigationService.CanGoBack)
+            {
+                navigationService.RemoveBackEntry();
             }
         }
 
-        // Обработчик нажатия Enter в поле email
         private void TextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
@@ -97,7 +88,6 @@ namespace WhiteSpace.Pages
             }
         }
 
-        // Обработчик для кнопки Google
         private async void GoogleLogin_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -109,17 +99,13 @@ namespace WhiteSpace.Pages
                     button.Content = "Авторизация...";
                 }
 
-                // Вызываем обновленный метод
                 bool success = await _supabaseService.GoogleSignInAsync(this);
 
                 if (!success)
                 {
-                    MessageBox.Show(
-                        "Не удалось выполнить вход через Google.\n\n" +
-                        "Попробуйте позже или используйте вход по email.",
-                        "Ошибка",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
+                    AppDialogService.ShowWarning(
+                        "Не удалось выполнить вход через Google.\n\nПопробуйте позже или используйте вход по email.",
+                        "Вход через Google");
 
                     if (button != null)
                     {
@@ -130,7 +116,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка: {ex.Message}");
+                AppDialogService.ShowError($"Ошибка: {ex.Message}", "Вход через Google");
 
                 var button = sender as Button;
                 if (button != null)
