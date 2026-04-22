@@ -384,6 +384,38 @@ public class SupabaseService
         }
     }
 
+    public async Task<Profile?> GetProfileByUserIdAsync(Guid userId)
+    {
+        try
+        {
+            var result = await _client
+                .From<Profile>()
+                .Where(p => p.Id == userId)
+                .Single();
+
+            return result;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<Board?> GetBoardByIdAsync(Guid boardId)
+    {
+        try
+        {
+            return await _client
+                .From<Board>()
+                .Where(b => b.Id == boardId)
+                .Single();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static void EnsureLocalServerStarted()
     {
         if (_localServer != null && _localServer.IsListening)
@@ -847,12 +879,10 @@ public class SupabaseService
 
             if (result.Models?.Any() == true)
             {
-                AppDialogService.ShowSuccess("Фигура успешно сохранена.", "Доска");
                 return true;
             }
             else
             {
-                AppDialogService.ShowError("Не удалось сохранить фигуру.", "Доска");
                 return false;
             }
         }
@@ -893,6 +923,42 @@ public class SupabaseService
             Console.WriteLine($"Ошибка при загрузке фигур: {ex.Message}");
             return new List<BoardShape>();
         }
+    }
+
+    public async Task<bool> ClearBoardShapesAsync(Guid boardId)
+    {
+        try
+        {
+            await _client
+                .From<BoardShape>()
+                .Where(shape => shape.BoardId == boardId)
+                .Delete();
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError($"Ошибка при очистке доски: {ex.Message}", "Доска");
+            return false;
+        }
+    }
+
+    public async Task<bool> ReplaceBoardShapesAsync(Guid boardId, IEnumerable<BoardShape> shapes)
+    {
+        if (!await ClearBoardShapesAsync(boardId))
+        {
+            return false;
+        }
+
+        foreach (var shape in shapes)
+        {
+            if (!await SaveShapeAsync(shape))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public async Task<int> GenerateUniqueIdAsync(Guid boardId)

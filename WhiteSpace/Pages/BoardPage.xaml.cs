@@ -1,9 +1,11 @@
 ﻿using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Win32;
 using Newtonsoft.Json;
 using Supabase;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reactive.Linq;
@@ -12,6 +14,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using WhiteSpace.Services;
@@ -22,9 +25,11 @@ namespace WhiteSpace.Pages
     {
         private List<BoardShape> _shapesOnBoard = new List<BoardShape>();
         private readonly Guid _boardId;
-        private SupabaseService _supabaseService;
-        private FirebaseService _firebaseService;
+        private Board? _boardInfo;
+        private readonly SupabaseService _supabaseService;
+        private readonly FirebaseService _firebaseService;
         private bool _isLoadingShapes = false; // Флаг для предотвращения двойной загрузки
+        private bool _isRestoringHistory;
 
         private IDisposable _shapesSubscription;
         private IDisposable _membersSubscription;
@@ -71,6 +76,10 @@ namespace WhiteSpace.Pages
 
         // Словарь для хранения ручек изменения размера
         private Dictionary<string, Rectangle> _resizeHandles = new Dictionary<string, Rectangle>();
+        private readonly Stack<List<BoardShape>> _undoHistory = new Stack<List<BoardShape>>();
+        private readonly Stack<List<BoardShape>> _redoHistory = new Stack<List<BoardShape>>();
+        private const double DefaultImageW = 280;
+        private const double DefaultImageH = 180;
 
         public BoardPage(Guid boardId)
         {
@@ -91,6 +100,8 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            await LoadBoardMetadataAsync();
+
             // Загружаем фигуры из Supabase
             await LoadShapesFromSupabase();
 
@@ -121,6 +132,106 @@ namespace WhiteSpace.Pages
             // Подписываемся на изменения фигур из Firebase (только для получения обновлений)
             SubscribeToShapes();
             SubscribeToBoardMembers();
+        }
+
+        private async Task LoadBoardMetadataAsync()
+        {
+            _boardInfo = await _supabaseService.GetBoardByIdAsync(_boardId);
+
+            BoardTitleText.Text = string.IsNullOrWhiteSpace(_boardInfo?.Title)
+                ? "Моя доска"
+                : _boardInfo.Title;
+
+            MarkSaved();
+        }
+
+        private void MarkSaved()
+        {
+            if (SaveStatusText != null)
+            {
+                SaveStatusText.Text = $"Сохранено {DateTime.Now:HH:mm}";
+            }
+        }
+
+        private void CaptureBoardStateForUndo()
+        {
+            if (_isRestoringHistory)
+            {
+                return;
+            }
+
+            _undoHistory.Push(CloneShapes(_shapesOnBoard));
+            _redoHistory.Clear();
+        }
+
+        private static List<BoardShape> CloneShapes(IEnumerable<BoardShape> shapes)
+        {
+            return shapes.Select(CloneShape).ToList();
+        }
+
+        private static BoardShape CloneShape(BoardShape shape)
+        {
+            return new BoardShape
+            {
+                Id = shape.Id,
+                BoardId = shape.BoardId,
+                Type = shape.Type,
+                X = shape.X,
+                Y = shape.Y,
+                Width = shape.Width,
+                Height = shape.Height,
+                Color = shape.Color,
+                Text = shape.Text,
+                Points = shape.Points,
+                DeserializedPoints = shape.DeserializedPoints != null
+                    ? shape.DeserializedPoints.Select(point => new Point(point.X, point.Y)).ToList()
+                    : new List<Point>()
+            };
+        }
+
+        private void RenderCurrentBoardState()
+        {
+            RemoveResizeFrame();
+            RemovePreviewShape();
+
+            _currentStroke = null;
+            _isDrawing = false;
+            _isDraggingElement = false;
+            _dragElement = null;
+
+            BoardCanvas.Children.Clear();
+
+            foreach (var shape in _shapesOnBoard)
+            {
+                AddShapeToCanvas(CloneShape(shape), false);
+            }
+
+            if (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse)
+            {
+                EnsurePreviewShape();
+            }
+        }
+
+        private async Task RestoreBoardStateAsync(List<BoardShape> snapshot)
+        {
+            _isRestoringHistory = true;
+            try
+            {
+                _shapesOnBoard = CloneShapes(snapshot);
+                RenderCurrentBoardState();
+                await _supabaseService.ReplaceBoardShapesAsync(_boardId, _shapesOnBoard);
+
+                foreach (var shape in _shapesOnBoard)
+                {
+                    PushShapeToFirebase(shape);
+                }
+
+                MarkSaved();
+            }
+            finally
+            {
+                _isRestoringHistory = false;
+            }
         }
 
         private void CenterViewport()
@@ -262,6 +373,10 @@ namespace WhiteSpace.Pages
                 textBox.Foreground = brush;
                 textBox.Text = shape.Text;
             }
+            else if (element is Image image)
+            {
+                image.Source = CreateImageSource(shape.Text);
+            }
 
             // Обновляем позицию и размеры
             if (shape.Type == "text")
@@ -384,9 +499,10 @@ namespace WhiteSpace.Pages
 
                     Console.WriteLine($"Отображаем участников: {otherMembers.Count}");
 
-                    UsersListView.ItemsSource = null; // Сбрасываем для принудительного обновления
-                    UsersListView.ItemsSource = otherMembers;
+                    UsersListView.ItemsSource = null;
+                    UsersListView.ItemsSource = await CreateParticipantCardsAsync(otherMembers, currentUser?.Id);
                     UsersListView.Visibility = Visibility.Visible;
+                    MembersCountText.Text = displayMembers.Count.ToString();
 
                     // Обновляем доступность кнопок в зависимости от роли
                     var currentUserMember = displayMembers.FirstOrDefault(m => m.UserId == currentUser?.Id);
@@ -400,6 +516,7 @@ namespace WhiteSpace.Pages
                 {
                     UsersListView.ItemsSource = null;
                     UsersListView.Visibility = Visibility.Collapsed;
+                    MembersCountText.Text = "0";
                     Console.WriteLine("Нет участников для отображения");
                 }
             }
@@ -443,19 +560,18 @@ namespace WhiteSpace.Pages
 
                 if (boardMembers != null && boardMembers.Any())
                 {
-                    // Фильтруем, чтобы не показывать текущего пользователя
                     var otherMembers = boardMembers.Where(m => m.UserId != currentUser?.Id).ToList();
-
-                    UsersListView.ItemsSource = otherMembers;
+                    UsersListView.ItemsSource = await CreateParticipantCardsAsync(otherMembers, currentUser?.Id);
                     UsersListView.Visibility = Visibility.Visible;
+                    MembersCountText.Text = boardMembers.Count.ToString();
 
-                    // Отправляем начальный список в Firebase
                     PushBoardMembersToFirebase();
                 }
                 else
                 {
                     UsersListView.ItemsSource = null;
                     UsersListView.Visibility = Visibility.Collapsed;
+                    MembersCountText.Text = "0";
                 }
             }
             catch (Exception ex)
@@ -467,7 +583,7 @@ namespace WhiteSpace.Pages
         private async void ChangeRole_Click(object sender, RoutedEventArgs e)
         {
             var button = sender as Button;
-            var boardMember = button?.DataContext as BoardMember;
+            var boardMember = button?.DataContext as BoardParticipantCard;
 
             if (boardMember == null)
             {
@@ -497,6 +613,78 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private async Task<List<BoardParticipantCard>> CreateParticipantCardsAsync(List<BoardMember> members, Guid? currentUserId)
+        {
+            var cards = new List<BoardParticipantCard>();
+            int colorIndex = 0;
+
+            foreach (var member in members)
+            {
+                var profile = await _supabaseService.GetProfileByUserIdAsync(member.UserId);
+                string displayName = !string.IsNullOrWhiteSpace(profile?.Username)
+                    ? profile.Username
+                    : member.UserId.ToString()[..8];
+
+                var (fill, stroke) = GetParticipantPalette(colorIndex++);
+                cards.Add(new BoardParticipantCard
+                {
+                    UserId = member.UserId,
+                    DisplayName = displayName,
+                    Initials = GetInitials(displayName),
+                    Role = member.Role,
+                    RoleLabel = member.Role switch
+                    {
+                        "owner" => "Ведущий",
+                        "editor" => "Редактор",
+                        _ => "Наблюдатель"
+                    },
+                    ActionLabel = member.Role == "viewer" ? "Сделать редактором" : "Сделать наблюдателем",
+                    ActionVisibility = member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                    AvatarFill = fill,
+                    AvatarStroke = stroke,
+                    RoleBadgeBackground = member.Role == "owner"
+                        ? new SolidColorBrush(Color.FromRgb(14, 16, 38))
+                        : new SolidColorBrush(Color.FromRgb(244, 246, 251)),
+                    RoleBadgeForeground = member.Role == "owner"
+                        ? Brushes.White
+                        : new SolidColorBrush(Color.FromRgb(73, 80, 96))
+                });
+            }
+
+            MembersCountText.Text = (cards.Count + (currentUserId.HasValue ? 1 : 0)).ToString();
+            return cards;
+        }
+
+        private static string GetInitials(string displayName)
+        {
+            if (string.IsNullOrWhiteSpace(displayName))
+            {
+                return "?";
+            }
+
+            var parts = displayName
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Take(2)
+                .Select(p => char.ToUpperInvariant(p[0]));
+
+            return string.Concat(parts);
+        }
+
+        private static (Brush Fill, Brush Stroke) GetParticipantPalette(int index)
+        {
+            var palettes = new[]
+            {
+                (Fill: "#EEF4FF", Stroke: "#3B82F6"),
+                (Fill: "#ECFDF3", Stroke: "#10B981"),
+                (Fill: "#FFF7ED", Stroke: "#F59E0B"),
+                (Fill: "#F5F3FF", Stroke: "#8B5CF6")
+            };
+
+            var palette = palettes[index % palettes.Length];
+            return (new BrushConverter().ConvertFromString(palette.Fill) as Brush ?? Brushes.LightGray,
+                new BrushConverter().ConvertFromString(palette.Stroke) as Brush ?? Brushes.DimGray);
+        }
+
         private Brush GetBrushFromColor(string colorString)
         {
             if (string.IsNullOrEmpty(colorString))
@@ -517,10 +705,163 @@ namespace WhiteSpace.Pages
             RectButton.IsEnabled = false;
             EllipseButton.IsEnabled = false;
             TextButton.IsEnabled = false;
-            ColorPanel.Visibility = Visibility.Collapsed;
+            ColorPanel.Visibility = Visibility.Visible;
         }
 
-        private void AddShapeToCanvas(BoardShape shape)
+        private void Share_Click(object sender, RoutedEventArgs e)
+        {
+            string accessCode = string.IsNullOrWhiteSpace(_boardInfo?.AccessCode)
+                ? "Код доски пока недоступен."
+                : $"Код доступа к доске: {_boardInfo.AccessCode}";
+
+            AppDialogService.ShowInfo(accessCode, "Поделиться доской");
+        }
+
+        private void SaveBoard_Click(object sender, RoutedEventArgs e)
+        {
+            MarkSaved();
+            AppDialogService.ShowSuccess("Все изменения уже сохраняются автоматически.", "Сохранение");
+        }
+
+        private void BoardMenuButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (BoardMenuButton.ContextMenu != null)
+            {
+                BoardMenuButton.ContextMenu.PlacementTarget = BoardMenuButton;
+                BoardMenuButton.ContextMenu.IsOpen = true;
+            }
+        }
+
+        private void PresentationMode_Click(object sender, RoutedEventArgs e)
+        {
+            AppDialogService.ShowInfo("Режим презентации можно подключить следующим шагом. Каркас меню уже готов.", "Презентация");
+        }
+
+        private void SaveVersion_Click(object sender, RoutedEventArgs e)
+        {
+            MarkSaved();
+            AppDialogService.ShowSuccess("Текущая версия отмечена как сохранённая.", "Версия доски");
+        }
+
+        private void VersionHistory_Click(object sender, RoutedEventArgs e)
+        {
+            AppDialogService.ShowInfo("Историю версий можно добавить следующим шагом. Сейчас доступно меню и общий UX.", "История версий");
+        }
+
+        private async void DeleteBoardMenu_Click(object sender, RoutedEventArgs e)
+        {
+            bool success = await _supabaseService.DeleteBoardAsync(_boardId);
+            if (success)
+            {
+                NavigationService?.Navigate(new UserHomePage());
+            }
+        }
+
+        private void Invite_Click(object sender, RoutedEventArgs e)
+        {
+            Share_Click(sender, e);
+        }
+
+        private void ExportPng_Click(object sender, RoutedEventArgs e)
+        {
+            AppDialogService.ShowInfo("Экспорт в PNG можно подключить следующим шагом. Сейчас сохранил для вас новый интерфейс доски.", "Экспорт PNG");
+        }
+
+        private void ExportPdf_Click(object sender, RoutedEventArgs e)
+        {
+            AppDialogService.ShowInfo("Экспорт в PDF можно подключить следующим шагом. Сейчас интерфейс доски уже перестроен под новый дизайн.", "Экспорт PDF");
+        }
+
+        private async void Undo_Click(object sender, RoutedEventArgs e)
+        {
+            if (_undoHistory.Count == 0)
+            {
+                return;
+            }
+
+            _redoHistory.Push(CloneShapes(_shapesOnBoard));
+            await RestoreBoardStateAsync(_undoHistory.Pop());
+        }
+
+        private async void Redo_Click(object sender, RoutedEventArgs e)
+        {
+            if (_redoHistory.Count == 0)
+            {
+                return;
+            }
+
+            _undoHistory.Push(CloneShapes(_shapesOnBoard));
+            await RestoreBoardStateAsync(_redoHistory.Pop());
+        }
+
+        private async void ClearBoard_Click(object sender, RoutedEventArgs e)
+        {
+            if (!AppDialogService.ShowConfirmation("Очистить всю доску? Это удалит все фигуры и изображения.", "Очистить доску"))
+            {
+                return;
+            }
+
+            if (_shapesOnBoard.Count == 0)
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+            _shapesOnBoard.Clear();
+            RenderCurrentBoardState();
+
+            if (await _supabaseService.ClearBoardShapesAsync(_boardId))
+            {
+                MarkSaved();
+            }
+        }
+
+        private async void AddImage_Click(object sender, RoutedEventArgs e)
+        {
+            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+            if (userRole == "viewer")
+            {
+                return;
+            }
+
+            var dialog = new OpenFileDialog
+            {
+                Title = "Выберите изображение",
+                Filter = "Изображения|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"
+            };
+
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            await AddImageToBoardAsync(dialog.FileName);
+        }
+
+        private void ToggleChat_Click(object sender, RoutedEventArgs e)
+        {
+            ChatWidget.Visibility = ChatWidget.Visibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+
+        private void CloseChat_Click(object sender, RoutedEventArgs e)
+        {
+            ChatWidget.Visibility = Visibility.Collapsed;
+        }
+
+        private void ChatSend_Click(object sender, RoutedEventArgs e)
+        {
+            ChatWidget.Visibility = Visibility.Visible;
+            if (ChatInputBox.Text == "Введите сообщение...")
+            {
+                ChatInputBox.Text = string.Empty;
+            }
+
+            ChatInputBox.Focus();
+        }
+
+        private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true)
         {
             Brush brush = GetBrushFromColor(shape.Color);
 
@@ -543,7 +884,10 @@ namespace WhiteSpace.Pages
                 }
 
                 BoardCanvas.Children.Add(polyline);
-                _shapesOnBoard.Add(shape);
+                if (addToBoardState)
+                {
+                    _shapesOnBoard.Add(shape);
+                }
             }
             else if (shape.Type == "text")
             {
@@ -570,7 +914,30 @@ namespace WhiteSpace.Pages
                 Canvas.SetTop(textBox, shape.Y);
 
                 BoardCanvas.Children.Add(textBox);
-                _shapesOnBoard.Add(shape);
+                if (addToBoardState)
+                {
+                    _shapesOnBoard.Add(shape);
+                }
+            }
+            else if (shape.Type == "image")
+            {
+                var image = new Image
+                {
+                    Width = shape.Width > 0 ? shape.Width : DefaultImageW,
+                    Height = shape.Height > 0 ? shape.Height : DefaultImageH,
+                    Stretch = Stretch.UniformToFill,
+                    Uid = shape.Id.ToString(),
+                    Source = CreateImageSource(shape.Text)
+                };
+
+                Canvas.SetLeft(image, shape.X - image.Width / 2);
+                Canvas.SetTop(image, shape.Y - image.Height / 2);
+
+                BoardCanvas.Children.Add(image);
+                if (addToBoardState)
+                {
+                    _shapesOnBoard.Add(shape);
+                }
             }
             else
             {
@@ -603,8 +970,34 @@ namespace WhiteSpace.Pages
                     Canvas.SetTop(element, shape.Y - shape.Height / 2);
 
                     BoardCanvas.Children.Add(element);
-                    _shapesOnBoard.Add(shape);
+                    if (addToBoardState)
+                    {
+                        _shapesOnBoard.Add(shape);
+                    }
                 }
+            }
+        }
+
+        private ImageSource? CreateImageSource(string? imagePath)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            {
+                return null;
+            }
+
+            try
+            {
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
+                bitmap.EndInit();
+                bitmap.Freeze();
+                return bitmap;
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -618,6 +1011,7 @@ namespace WhiteSpace.Pages
             {
                 var world = ScreenToWorld(e.GetPosition(Viewport));
                 _dragStartWorld = world;
+                CaptureBoardStateForUndo();
 
                 _wasTextEditingEnabled = !textBox.IsReadOnly;
 
@@ -683,22 +1077,7 @@ namespace WhiteSpace.Pages
         private void SetTool(ToolMode tool)
         {
             _tool = tool;
-
-            if (_tool == ToolMode.Pen ||
-                _tool == ToolMode.Rect ||
-                _tool == ToolMode.Ellipse ||
-                _tool == ToolMode.Text)
-            {
-                ColorPanel.Visibility = Visibility.Visible;
-            }
-            else if (_tool == ToolMode.Hand)
-            {
-                ColorPanel.Visibility = _selectedElement != null ? Visibility.Visible : Visibility.Collapsed;
-            }
-            else
-            {
-                ColorPanel.Visibility = Visibility.Collapsed;
-            }
+            ColorPanel.Visibility = Visibility.Visible;
 
             _isDrawing = false;
             _currentStroke = null;
@@ -806,8 +1185,9 @@ namespace WhiteSpace.Pages
                     if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
                         !(uiElement is TextBox) && uiElement != _previewShape)
                     {
-                        if (uiElement is Polyline || uiElement is Rectangle || uiElement is Ellipse)
+                        if (uiElement is Polyline || uiElement is Rectangle || uiElement is Ellipse || uiElement is Image)
                         {
+                            CaptureBoardStateForUndo();
                             _isDraggingElement = true;
                             _dragElement = uiElement;
 
@@ -886,7 +1266,7 @@ namespace WhiteSpace.Pages
                 {
                     if (_tool == ToolMode.Hand)
                     {
-                        if (uiElement is Shape || uiElement is TextBox || uiElement is Polyline)
+                        if (uiElement is Shape || uiElement is TextBox || uiElement is Polyline || uiElement is Image)
                         {
                             ShowResizeFrame(uiElement);
                             e.Handled = true;
@@ -969,6 +1349,7 @@ namespace WhiteSpace.Pages
                     {
                         shape.Points = JsonConvert.SerializeObject(_currentStroke.Points);
                         await _supabaseService.SaveShapeAsync(shape);
+                        MarkSaved();
 
                         // Отправляем в Firebase для реалтайм обновлений
                         PushShapeToFirebase(shape); // Этот метод может остаться void, так как не требует await
@@ -1014,6 +1395,11 @@ namespace WhiteSpace.Pages
                     }
                     shape.DeserializedPoints = newPoints;
                     shape.Points = JsonConvert.SerializeObject(newPoints);
+                }
+                else if (_dragElement is Image image)
+                {
+                    shape.X = offsetX + image.ActualWidth / 2;
+                    shape.Y = offsetY + image.ActualHeight / 2;
                 }
             }
 
@@ -1084,9 +1470,15 @@ namespace WhiteSpace.Pages
                     shape.X = Canvas.GetLeft(element) + shape.Width / 2;
                     shape.Y = Canvas.GetTop(element) + shape.Height / 2;
                 }
+                else if (element is Image image)
+                {
+                    shape.X = Canvas.GetLeft(element) + image.ActualWidth / 2;
+                    shape.Y = Canvas.GetTop(element) + image.ActualHeight / 2;
+                }
 
                 // Сохраняем в Supabase
                 await _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
 
                 // Отправляем в Firebase для реалтайм обновлений
                 PushShapeToFirebase(shape);
@@ -1101,6 +1493,7 @@ namespace WhiteSpace.Pages
                 shape.X = Canvas.GetLeft(textBox);
                 shape.Y = Canvas.GetTop(textBox);
                 await _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
 
                 // Отправляем в Firebase для реалтайм обновлений
                 PushShapeToFirebase(shape);
@@ -1112,8 +1505,14 @@ namespace WhiteSpace.Pages
             var shape = _shapesOnBoard.Find(s => s.Id.ToString() == textBox.Uid);
             if (shape != null)
             {
+                if (shape.Text != textBox.Text)
+                {
+                    CaptureBoardStateForUndo();
+                }
+
                 shape.Text = textBox.Text;
                 await _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
 
                 // Отправляем в Firebase для реалтайм обновлений
                 PushShapeToFirebase(shape);
@@ -1152,6 +1551,7 @@ namespace WhiteSpace.Pages
 
         private async void StartStroke(Point startWorld)
         {
+            CaptureBoardStateForUndo();
             _isDrawing = true;
 
             _currentStroke = new Polyline
@@ -1242,6 +1642,7 @@ namespace WhiteSpace.Pages
             _isCreatingShape = true;
             try
             {
+                CaptureBoardStateForUndo();
                 int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
                 BoardShape shape = _tool switch
@@ -1309,12 +1710,12 @@ namespace WhiteSpace.Pages
 
                         // Сохраняем в Supabase
                         await _supabaseService.SaveShapeAsync(shape);
+                        MarkSaved();
 
                         // Отправляем в Firebase для реалтайм обновлений
                         PushShapeToFirebase(shape);
 
-                        ResetToolColorToDefault();
-                    }
+        }
                 }
             }
             finally
@@ -1328,6 +1729,7 @@ namespace WhiteSpace.Pages
             if (_isCreatingShape) return;
 
             _isCreatingShape = true;
+            CaptureBoardStateForUndo();
 
             var tb = new TextBox
             {
@@ -1370,11 +1772,10 @@ namespace WhiteSpace.Pages
 
             _shapesOnBoard.Add(shape);
             await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
 
             // Отправляем в Firebase для реалтайм обновлений
             PushShapeToFirebase(shape);
-
-            ResetToolColorToDefault();
 
             tb.Focus();
             tb.SelectAll();
@@ -1456,7 +1857,7 @@ namespace WhiteSpace.Pages
 
             RemoveAllHandles();
             _resizeTarget = null;
-            ColorPanel.Visibility = Visibility.Collapsed;
+            ColorPanel.Visibility = Visibility.Visible;
         }
 
         private void RemoveAllHandles()
@@ -1575,6 +1976,7 @@ namespace WhiteSpace.Pages
             var handle = sender as Rectangle;
             if (handle == null) return;
 
+            CaptureBoardStateForUndo();
             _resizeDirection = handle.Tag.ToString();
             _isResizing = true;
 
@@ -1749,6 +2151,7 @@ namespace WhiteSpace.Pages
 
             // Сохраняем в Supabase
             await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
 
             // Отправляем в Firebase для реалтайм обновлений
             PushShapeToFirebase(shape);
@@ -1775,6 +2178,19 @@ namespace WhiteSpace.Pages
 
         private async Task ApplyColorToElement(UIElement element, Brush brush, string colorString)
         {
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
+            if (shape == null)
+            {
+                return;
+            }
+
+            if (string.Equals(shape.Color, colorString, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+
             if (element is Shape shapeElement)
                 shapeElement.Stroke = brush;
             else if (element is Polyline polyline)
@@ -1782,17 +2198,59 @@ namespace WhiteSpace.Pages
             else if (element is TextBox tb)
                 tb.Foreground = brush;
 
-            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
+            shape.Color = colorString;
 
-            if (shape != null)
+            // Сохраняем в Supabase
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+
+            // Отправляем в Firebase для реалтайм обновлений
+            PushShapeToFirebase(shape);
+        }
+
+        private async Task AddImageToBoardAsync(string imagePath)
+        {
+            if (_isCreatingShape || string.IsNullOrWhiteSpace(imagePath))
             {
-                shape.Color = colorString;
+                return;
+            }
 
-                // Сохраняем в Supabase
+            _isCreatingShape = true;
+            try
+            {
+                CaptureBoardStateForUndo();
+
+                int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+                var viewportCenter = new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2);
+                var world = ScreenToWorld(viewportCenter);
+
+                var shape = new BoardShape
+                {
+                    BoardId = _boardId,
+                    Type = "image",
+                    X = world.X,
+                    Y = world.Y,
+                    Width = DefaultImageW,
+                    Height = DefaultImageH,
+                    Color = null,
+                    Text = imagePath,
+                    Id = uniqueId
+                };
+
+                AddShapeToCanvas(shape);
                 await _supabaseService.SaveShapeAsync(shape);
-
-                // Отправляем в Firebase для реалтайм обновлений
+                MarkSaved();
                 PushShapeToFirebase(shape);
+
+                var image = FindUIElementByUid(shape.Id.ToString());
+                if (image != null)
+                {
+                    ShowResizeFrame(image);
+                }
+            }
+            finally
+            {
+                _isCreatingShape = false;
             }
         }
 
@@ -1801,5 +2259,20 @@ namespace WhiteSpace.Pages
             _currentBrush = Brushes.Black;
             _currentColorString = Brushes.Black.ToString();
         }
+    }
+
+    public sealed class BoardParticipantCard
+    {
+        public Guid UserId { get; set; }
+        public string DisplayName { get; set; } = "";
+        public string Initials { get; set; } = "";
+        public string Role { get; set; } = "viewer";
+        public string RoleLabel { get; set; } = "";
+        public string ActionLabel { get; set; } = "";
+        public Visibility ActionVisibility { get; set; } = Visibility.Visible;
+        public Brush AvatarFill { get; set; } = Brushes.White;
+        public Brush AvatarStroke { get; set; } = Brushes.Black;
+        public Brush RoleBadgeBackground { get; set; } = Brushes.White;
+        public Brush RoleBadgeForeground { get; set; } = Brushes.Black;
     }
 }

@@ -1,92 +1,515 @@
-﻿<Page x:Class="WhiteSpace.Pages.BoardPage"
+<Page x:Class="WhiteSpace.Pages.BoardPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Title="Доска"
-      Background="#F3F3F3">
+      Background="#F6F7FB">
+
+    <Page.Resources>
+        <Style x:Key="ToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#1D1D1F"/>
+            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#F2F4F8"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Background" Value="#0E1026"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="HeaderActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+            <Setter Property="Padding" Value="16,10"/>
+            <Setter Property="BorderBrush" Value="#E6E8EF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style x:Key="DarkActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+            <Setter Property="Background" Value="#0E1026"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="Padding" Value="16,10"/>
+            <Setter Property="BorderBrush" Value="#0E1026"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#1A1D3D"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ColorButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="BorderBrush" Value="#D6D9E2"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="7"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Viewport (камера) -->
-        <Border Grid.Row="0" Background="#F6F6F6" ClipToBounds="True">
-            <Grid x:Name="Viewport"
-                  MouseDown="Viewport_MouseDown"
-                  MouseMove="Viewport_MouseMove"
-                  MouseUp="Viewport_MouseUp"
-                  MouseWheel="Viewport_MouseWheel">
+        <Border Grid.Row="0"
+                Background="#FFFFFF"
+                BorderBrush="#E9ECF3"
+                BorderThickness="0,0,0,1"
+                Padding="20,14">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-                <Grid.Background>
-                    <SolidColorBrush Color="#FFFFFF"/>
-                </Grid.Background>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="38"
+                            Height="38"
+                            CornerRadius="12"
+                            Background="#6C63FF"
+                            Margin="0,0,12,0">
+                        <TextBlock Text="W"
+                                   Foreground="#FFFFFF"
+                                   FontWeight="Bold"
+                                   FontSize="20"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"/>
+                    </Border>
 
-                <!-- Большой Canvas (условно бесконечный) -->
-                <Canvas x:Name="BoardCanvas" Width="50000" Height="50000">
-                    <Canvas.RenderTransform>
-                        <TransformGroup>
-                            <ScaleTransform x:Name="BoardScale" ScaleX="1" ScaleY="1"/>
-                            <TranslateTransform x:Name="BoardTranslate" X="0" Y="0"/>
-                        </TransformGroup>
-                    </Canvas.RenderTransform>
-                </Canvas>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="BoardTitleText"
+                                   Text="Моя доска"
+                                   FontSize="21"
+                                   FontWeight="SemiBold"
+                                   Foreground="#121420"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SaveStatusText"
+                                   Text="Сохранено"
+                                   Margin="14,5,0,0"
+                                   FontSize="15"
+                                   Foreground="#6F768A"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Style="{StaticResource HeaderActionButtonStyle}"
+                            Click="Share_Click">
+                        <TextBlock Text="Поделиться"/>
+                    </Button>
+
+                    <Button Style="{StaticResource DarkActionButtonStyle}"
+                            Margin="8,0,0,0"
+                            Click="SaveBoard_Click">
+                        <TextBlock Text="Сохранить"/>
+                    </Button>
+
+                    <Button x:Name="BoardMenuButton"
+                            Style="{StaticResource ToolbarButtonStyle}"
+                            Margin="8,0,0,0"
+                            Padding="12,10"
+                            Click="BoardMenuButton_Click">
+                        <TextBlock Text="⋮" FontSize="18"/>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="BoardOptionsMenu"
+                                         Placement="Bottom">
+                                <MenuItem Header="Включить режим презентации"
+                                          Click="PresentationMode_Click"/>
+                                <MenuItem Header="Сохранить версию"
+                                          Click="SaveVersion_Click"/>
+                                <MenuItem Header="История версий"
+                                          Click="VersionHistory_Click"/>
+                                <Separator/>
+                                <MenuItem Header="Удалить доску"
+                                          Foreground="#D92D20"
+                                          Click="DeleteBoardMenu_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 
+        <Border Grid.Row="1"
+                Background="#FFFFFF"
+                BorderBrush="#E9ECF3"
+                BorderThickness="0,0,0,1"
+                Padding="18,10">
+            <DockPanel LastChildFill="True">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Button x:Name="HandButton" Style="{StaticResource ToolbarButtonStyle}" Content="Рука" Click="Hand_Click"/>
+                    <Button x:Name="PenButton" Style="{StaticResource ToolbarButtonStyle}" Content="Перо" Click="Pen_Click"/>
+                    <Button x:Name="RectButton" Style="{StaticResource ToolbarButtonStyle}" Content="Квадрат" Click="Rect_Click"/>
+                    <Button x:Name="EllipseButton" Style="{StaticResource ToolbarButtonStyle}" Content="Круг" Click="Ellipse_Click"/>
+                    <Button x:Name="TextButton" Style="{StaticResource ToolbarButtonStyle}" Content="Текст" Click="Text_Click"/>
 
-        <!-- Панель для отображения участников доски (верхний левый угол) -->
-        <Grid Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10">
-            <StackPanel>
-                <TextBlock Text="Список участников" FontSize="18" Margin="10"/>
+                    <Border Width="1" Height="32" Background="#E5E8F0" Margin="8,0,12,0"/>
 
-                <!-- List of Users with Roles -->
-                <ListView x:Name="UsersListView" Width="300" Height="200" Margin="10">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="Пользователь" DisplayMemberBinding="{Binding UserId}" Width="200"/>
-                            <GridViewColumn Header="Роль" DisplayMemberBinding="{Binding Role}" Width="100"/>
-                            <GridViewColumn Width="100">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Button Content="Изменить Роль" Click="ChangeRole_Click"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
-            </StackPanel>
-        </Grid>
-
-        <!-- Панель инструментов снизу -->
-        <Border Grid.Row="1" Background="White" Padding="10" BorderBrush="#22000000" BorderThickness="1">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                <Button x:Name="HandButton" Content="🖐 Рука" Width="90" Margin="4" Click="Hand_Click"/>
-                <Button x:Name="PenButton" Content="✏ Карандаш" Width="110" Margin="4" Click="Pen_Click"/>
-                <Button x:Name="RectButton" Content="⬛ Прямоуг." Width="110" Margin="4" Click="Rect_Click"/>
-                <Button x:Name="EllipseButton" Content="🔵 Круг" Width="90" Margin="4" Click="Ellipse_Click"/>
-                <Button x:Name="TextButton" Content="🅣 Текст" Width="90" Margin="4" Click="Text_Click"/>
-            </StackPanel>
+                    <StackPanel x:Name="ColorPanel"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center"
+                                Visibility="Visible">
+                        <Button Background="#111111" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#FF3B30" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#34C759" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#007AFF" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#FFD60A" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#FF2DDA" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#32D7FF" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#FF9500" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#AF52DE" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button Background="#30B0C7" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Border Width="1" Height="32" Background="#E5E8F0" Margin="8,0,12,0"/>
+                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="↶" Click="Undo_Click"/>
+                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="↷" Click="Redo_Click"/>
+                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="🗑" Click="ClearBoard_Click"/>
+                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="🖼" Click="AddImage_Click"/>
+                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="PNG" Click="ExportPng_Click"/>
+                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="PDF" Click="ExportPdf_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
         </Border>
 
-        <!-- Панель цветов -->
-        <StackPanel x:Name="ColorPanel"
-            Orientation="Horizontal"
-            Visibility="Collapsed"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Top"
-            Margin="0,10,0,0">
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="320"/>
+            </Grid.ColumnDefinitions>
 
-            <Button Background="Black" Width="30" Height="30" Click="Color_Click"/>
-            <Button Background="Red" Width="30" Height="30" Click="Color_Click"/>
-            <Button Background="Orange" Width="30" Height="30" Click="Color_Click"/>
-            <Button Background="Gold" Width="30" Height="30" Click="Color_Click"/>
-            <Button Background="Green" Width="30" Height="30" Click="Color_Click"/>
-            <Button Background="Blue" Width="30" Height="30" Click="Color_Click"/>
-            <Button Background="Purple" Width="30" Height="30" Click="Color_Click"/>
+            <Border Grid.Column="0"
+                    Background="#FBFCFE"
+                    ClipToBounds="True">
+                <Grid x:Name="Viewport"
+                      MouseDown="Viewport_MouseDown"
+                      MouseMove="Viewport_MouseMove"
+                      MouseUp="Viewport_MouseUp"
+                      MouseWheel="Viewport_MouseWheel">
+                    <Grid.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#FFFFFF" Offset="0"/>
+                            <GradientStop Color="#F8FAFD" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Grid.Background>
 
-        </StackPanel>
+                    <Canvas x:Name="BoardCanvas" Width="50000" Height="50000">
+                        <Canvas.RenderTransform>
+                            <TransformGroup>
+                                <ScaleTransform x:Name="BoardScale" ScaleX="1" ScaleY="1"/>
+                                <TranslateTransform x:Name="BoardTranslate" X="0" Y="0"/>
+                            </TransformGroup>
+                        </Canvas.RenderTransform>
+                    </Canvas>
+                </Grid>
+            </Border>
 
+            <Border Grid.Column="1"
+                    Background="#FFFFFF"
+                    BorderBrush="#E9ECF3"
+                    BorderThickness="1,0,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="18,16,18,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Участники"
+                                       FontSize="18"
+                                       FontWeight="SemiBold"
+                                       Foreground="#171923"/>
+                            <Border Background="#F0F3FA"
+                                    CornerRadius="9"
+                                    Margin="8,1,0,0"
+                                    Padding="8,2">
+                                <TextBlock x:Name="MembersCountText"
+                                           Text="0"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Foreground="#59637A"/>
+                            </Border>
+                        </StackPanel>
+
+                        <Button Grid.Column="1"
+                                Style="{StaticResource DarkActionButtonStyle}"
+                                Padding="14,8"
+                                Click="Invite_Click">
+                            <TextBlock Text="Пригласить"/>
+                        </Button>
+                    </Grid>
+
+                    <ListView x:Name="UsersListView"
+                              Grid.Row="1"
+                              Margin="10,0,10,12"
+                              BorderThickness="0"
+                              Background="Transparent"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0,0,0,8"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListViewItem">
+                                            <ContentPresenter/>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#FBFCFE"
+                                        BorderBrush="#EEF1F6"
+                                        BorderThickness="1"
+                                        CornerRadius="16"
+                                        Padding="12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <Grid Width="42" Height="42" VerticalAlignment="Top">
+                                            <Border Background="{Binding AvatarFill}"
+                                                    BorderBrush="{Binding AvatarStroke}"
+                                                    BorderThickness="2"
+                                                    CornerRadius="21"/>
+                                            <TextBlock Text="{Binding Initials}"
+                                                       Foreground="{Binding AvatarStroke}"
+                                                       FontWeight="SemiBold"
+                                                       FontSize="17"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                            <Ellipse Width="10"
+                                                     Height="10"
+                                                     Fill="#22C55E"
+                                                     Stroke="#FFFFFF"
+                                                     StrokeThickness="2"
+                                                     HorizontalAlignment="Right"
+                                                     VerticalAlignment="Bottom"/>
+                                        </Grid>
+
+                                        <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                                            <TextBlock Text="{Binding DisplayName}"
+                                                       FontSize="16"
+                                                       FontWeight="Medium"
+                                                       Foreground="#171923"/>
+                                            <Border Background="{Binding RoleBadgeBackground}"
+                                                    HorizontalAlignment="Left"
+                                                    CornerRadius="10"
+                                                    Margin="0,6,0,0"
+                                                    Padding="10,3">
+                                                <TextBlock Text="{Binding RoleLabel}"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{Binding RoleBadgeForeground}"/>
+                                            </Border>
+                                        </StackPanel>
+
+                                        <Button Grid.Column="2"
+                                                Content="{Binding ActionLabel}"
+                                                Style="{StaticResource ToolbarButtonStyle}"
+                                                Padding="10,6"
+                                                Margin="8,0,0,0"
+                                                Click="ChangeRole_Click"
+                                                Visibility="{Binding ActionVisibility}"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+
+            <Grid Grid.ColumnSpan="2">
+                <Grid HorizontalAlignment="Right"
+                      VerticalAlignment="Bottom"
+                      Margin="0,0,18,18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Border x:Name="ChatWidget"
+                            Grid.Row="0"
+                            Width="360"
+                            Background="#FFFFFF"
+                            BorderBrush="#E7EAF2"
+                            BorderThickness="1"
+                            CornerRadius="18"
+                            Visibility="Collapsed"
+                            Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Grid Margin="16,14,16,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Text="Чат"
+                                           FontSize="18"
+                                           FontWeight="SemiBold"
+                                           Foreground="#171923"/>
+                                <Button Grid.Column="1"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Foreground="#6C7487"
+                                        FontSize="18"
+                                        Cursor="Hand"
+                                        Click="CloseChat_Click"
+                                        Content="×"/>
+                            </Grid>
+
+                            <StackPanel Grid.Row="1" Margin="16,0,16,12">
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Border Width="30" Height="30" CornerRadius="15" Background="#E8FFF4" BorderBrush="#10B981" BorderThickness="2">
+                                        <TextBlock Text="A" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#0F8A5F"/>
+                                    </Border>
+                                    <StackPanel Margin="10,0,0,0">
+                                        <TextBlock Text="Анна Смирнова 16:39" FontSize="12" Foreground="#8A93A5"/>
+                                        <Border Background="#F1F3F8" CornerRadius="14" Padding="12,8" Margin="0,4,0,0">
+                                            <TextBlock Text="Привет! Отличная идея для проекта" TextWrapping="Wrap" Foreground="#2B3245"/>
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <StackPanel HorizontalAlignment="Right" Margin="0,0,0,12">
+                                    <TextBlock Text="Вы 16:40" FontSize="12" Foreground="#8A93A5" HorizontalAlignment="Right"/>
+                                    <Border Background="#0E1026" CornerRadius="14" Padding="12,8" Margin="0,4,0,0">
+                                        <TextBlock Text="Спасибо! Давайте начнем с диаграммы" TextWrapping="Wrap" Foreground="#FFFFFF"/>
+                                    </Border>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="30" Height="30" CornerRadius="15" Background="#FFF5E9" BorderBrush="#F59E0B" BorderThickness="2">
+                                        <TextBlock Text="M" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#B86B00"/>
+                                    </Border>
+                                    <StackPanel Margin="10,0,0,0">
+                                        <TextBlock Text="Михаил Козлов 16:42" FontSize="12" Foreground="#8A93A5"/>
+                                        <Border Background="#F1F3F8" CornerRadius="14" Padding="12,8" Margin="0,4,0,0">
+                                            <TextBlock Text="Я добавлю схему архитектуры" TextWrapping="Wrap" Foreground="#2B3245"/>
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <Grid Grid.Row="2" Margin="16,0,16,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBox x:Name="ChatInputBox"
+                                         Height="42"
+                                         VerticalContentAlignment="Center"
+                                         Padding="14,0"
+                                         Background="#F6F7FB"
+                                         BorderBrush="#E6E8EF"
+                                         BorderThickness="1"
+                                         Text="Введите сообщение..."/>
+
+                                <Button Grid.Column="1"
+                                        Width="42"
+                                        Height="42"
+                                        Margin="10,0,0,0"
+                                        Style="{StaticResource DarkActionButtonStyle}"
+                                        Click="ChatSend_Click">
+                                    <TextBlock Text="➜"/>
+                                </Button>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <Button Grid.Row="1"
+                            Width="56"
+                            Height="56"
+                            Background="#0E1026"
+                            Foreground="#FFFFFF"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            Click="ToggleChat_Click"
+                            HorizontalAlignment="Right">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}"
+                                        CornerRadius="28">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <TextBlock Text="💬" FontSize="18"/>
+                    </Button>
+                </Grid>
+            </Grid>
+        </Grid>
     </Grid>
 </Page>
