@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media.Animation;
 using System.Windows.Media;
 
 namespace WhiteSpace
@@ -73,6 +74,31 @@ namespace WhiteSpace
         {
             return new BrushConverter().ConvertFromString(hex) as SolidColorBrush
                 ?? Brushes.Gray;
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            var fadeIn = new DoubleAnimation
+            {
+                From = 0,
+                To = 1,
+                Duration = TimeSpan.FromMilliseconds(220)
+            };
+
+            var slideIn = new DoubleAnimation
+            {
+                From = 18,
+                To = 0,
+                Duration = TimeSpan.FromMilliseconds(240),
+                EasingFunction = new PowerEase
+                {
+                    Power = 3,
+                    EasingMode = EasingMode.EaseOut
+                }
+            };
+
+            BeginAnimation(OpacityProperty, fadeIn);
+            DialogTranslate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, slideIn);
         }
 
         private void PrimaryButton_Click(object sender, RoutedEventArgs e)

@@ -1,40 +1,57 @@
-﻿using System.ComponentModel;
-using System.Runtime.CompilerServices;
-using System.Windows;
-using System.Linq;
-using System.Windows.Controls;
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
     public partial class UserHomePage : Page, INotifyPropertyChanged
     {
-        private string _userGreeting = "Добро пожаловать!";
-        private List<Board> _boards = new List<Board>();
-        private string _userName = "";
-
-        public List<Board> Boards
+        private enum DashboardSection
         {
-            get => _boards;
+            MyBoards,
+            SharedBoards,
+            RecentBoards
+        }
+
+        private static readonly string RecentBoardsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "WhiteSpace",
+            "recent-boards.json");
+
+        private readonly SupabaseService _service = new SupabaseService();
+        private List<HomeBoardCard> _allBoards = new();
+        private List<HomeBoardCard> _visibleBoards = new();
+        private DashboardSection _currentSection = DashboardSection.MyBoards;
+        private bool _isCompactView;
+        private string _userName = "Пользователь";
+        private string _userEmail = "email@example.com";
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public List<HomeBoardCard> VisibleBoards
+        {
+            get => _visibleBoards;
             set
             {
-                _boards = value;
+                _visibleBoards = value;
                 OnPropertyChanged();
                 UpdateBoardsVisibility();
             }
         }
 
-        public string UserGreeting
-        {
-            get => _userGreeting;
-            set
-            {
-                _userGreeting = value;
-                OnPropertyChanged();
-            }
-        }
+        public double BoardCardWidth => _isCompactView ? 250 : 360;
+
+        public double BoardCardHeight => _isCompactView ? 214 : 248;
 
         public UserHomePage()
         {
@@ -44,44 +61,95 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
-            await LoadUserProfile(); // Сначала загружаем профиль пользователя
-            await LoadBoards();       // Затем загружаем доски
+            ApplySidebarSelection();
+            ApplyViewModeSelection();
+            await LoadDashboardAsync();
         }
 
-        // Загрузка профиля пользователя
-        private async System.Threading.Tasks.Task LoadUserProfile()
+        private async Task LoadDashboardAsync()
+        {
+            await LoadUserProfileAsync();
+            await LoadBoardsAsync();
+        }
+
+        private async Task LoadUserProfileAsync()
         {
             try
             {
-                var service = new SupabaseService();
-                var profile = await service.GetMyProfileAsync();
+                var profile = await _service.GetMyProfileAsync();
 
-                if (profile != null && !string.IsNullOrEmpty(profile.Username))
-                {
-                    _userName = profile.Username;
-                    UserGreeting = $"Здравствуйте, {profile.Username} 👋";
-                }
-                else
-                {
-                    UserGreeting = "Здравствуйте!";
-                }
+                _userName = !string.IsNullOrWhiteSpace(profile?.Username)
+                    ? profile.Username
+                    : "Пользователь";
+
+                _userEmail = !string.IsNullOrWhiteSpace(profile?.Email)
+                    ? profile.Email
+                    : "email@example.com";
+
+                GreetingTextBlock.Text = $"Здравствуйте, {_userName} 👋";
+                HeaderEmailTextBlock.Text = _userEmail;
+                SidebarUserNameTextBlock.Text = _userName;
+                SidebarUserEmailTextBlock.Text = _userEmail;
+                PopupUserNameTextBlock.Text = _userName;
+                PopupUserEmailTextBlock.Text = _userEmail;
+
+                var initials = GetInitials(_userName);
+                UserInitialsTextBlock.Text = initials;
             }
             catch (Exception ex)
             {
-                // В случае ошибки показываем стандартное приветствие
-                UserGreeting = "Здравствуйте!";
+                GreetingTextBlock.Text = "Здравствуйте!";
+                HeaderEmailTextBlock.Text = "Профиль временно недоступен";
                 AppDialogService.ShowError($"Ошибка загрузки профиля: {ex.Message}", "Профиль");
             }
         }
 
-        //Загрузка списка досок
-        private async System.Threading.Tasks.Task LoadBoards()
+        private async Task LoadBoardsAsync()
         {
             try
             {
-                var service = new SupabaseService();
-                var boardsWithRoles = await service.GetAllAccessibleBoardsWithRoleAsync();
-                Boards = boardsWithRoles.Select(x => x.Board).ToList();
+                var boardsWithRoles = await _service.GetAllAccessibleBoardsWithRoleAsync();
+                var palette = GetBoardPalette();
+                var cards = new List<HomeBoardCard>();
+
+                for (int index = 0; index < boardsWithRoles.Count; index++)
+                {
+                    var (board, role) = boardsWithRoles[index];
+                    var paletteItem = palette[index % palette.Length];
+
+                    cards.Add(new HomeBoardCard
+                    {
+                        Id = board.Id,
+                        Title = string.IsNullOrWhiteSpace(board.Title) ? "Новая доска" : board.Title,
+                        Role = role,
+                        RoleLabel = role switch
+                        {
+                            "owner" => "Владелец",
+                            "editor" => "Редактор",
+                            _ => "Наблюдатель"
+                        },
+                        Subtitle = role switch
+                        {
+                            "owner" => $"Личная доска • Код {board.AccessCode}",
+                            "editor" => $"Общая доска • Код {board.AccessCode}",
+                            _ => $"Только просмотр • Код {board.AccessCode}"
+                        },
+                        CreatedAt = board.CreatedAt,
+                        CreatedText = FormatRelativeDate(board.CreatedAt),
+                        AccentStart = paletteItem.Start,
+                        AccentEnd = paletteItem.End,
+                        RoleBadgeBackground = role == "owner"
+                            ? new SolidColorBrush(Color.FromRgb(245, 158, 11))
+                            : new SolidColorBrush(Color.FromRgb(238, 242, 255)),
+                        RoleBadgeForeground = role == "owner"
+                            ? Brushes.White
+                            : new SolidColorBrush(Color.FromRgb(67, 56, 202)),
+                        DeleteVisibility = role == "owner" ? Visibility.Visible : Visibility.Collapsed
+                    });
+                }
+
+                _allBoards = cards;
+                RefreshVisibleBoards();
             }
             catch (Exception ex)
             {
@@ -89,28 +157,273 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void UpdateBoardsVisibility()
+        private void RefreshVisibleBoards()
         {
-            if (NoBoardsTextBlock != null)
+            IEnumerable<HomeBoardCard> query = _currentSection switch
             {
-                NoBoardsTextBlock.Visibility = Boards == null || Boards.Count == 0
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
+                DashboardSection.MyBoards => _allBoards.Where(board => board.Role == "owner"),
+                DashboardSection.SharedBoards => _allBoards.Where(board => board.Role != "owner"),
+                DashboardSection.RecentBoards => GetRecentBoards(),
+                _ => _allBoards
+            };
+
+            var search = SearchTextBox?.Text?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                query = query.Where(board => board.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
+            }
+
+            query = ApplySorting(query);
+
+            VisibleBoards = query.ToList();
+            UpdateSectionPresentation();
+        }
+
+        private IEnumerable<HomeBoardCard> ApplySorting(IEnumerable<HomeBoardCard> boards)
+        {
+            var selectedSort = (SortComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Новые сначала";
+
+            if (_currentSection == DashboardSection.RecentBoards && selectedSort == "Новые сначала")
+            {
+                var positions = LoadRecentBoardIds()
+                    .Select((id, index) => new { id, index })
+                    .ToDictionary(item => item.id, item => item.index);
+
+                return boards.OrderBy(board => positions.TryGetValue(board.Id, out var position) ? position : int.MaxValue);
+            }
+
+            return selectedSort switch
+            {
+                "Старые сначала" => boards.OrderBy(board => board.CreatedAt),
+                "Название А-Я" => boards.OrderBy(board => board.Title),
+                "Название Я-А" => boards.OrderByDescending(board => board.Title),
+                _ => boards.OrderByDescending(board => board.CreatedAt)
+            };
+        }
+
+        private IEnumerable<HomeBoardCard> GetRecentBoards()
+        {
+            var orderedIds = LoadRecentBoardIds();
+            if (orderedIds.Count == 0)
+            {
+                foreach (var board in _allBoards.OrderByDescending(board => board.CreatedAt).Take(8))
+                {
+                    yield return board;
+                }
+
+                yield break;
+            }
+
+            var boardsById = _allBoards.ToDictionary(board => board.Id, board => board);
+
+            foreach (var boardId in orderedIds)
+            {
+                if (boardsById.TryGetValue(boardId, out var board))
+                {
+                    yield return board;
+                }
             }
         }
 
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        private void UpdateSectionPresentation()
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            var myBoardsCount = _allBoards.Count(board => board.Role == "owner");
+            var sharedBoardsCount = _allBoards.Count(board => board.Role != "owner");
+            var recentCount = GetRecentBoards().Count();
+
+            switch (_currentSection)
+            {
+                case DashboardSection.MyBoards:
+                    SectionTitleTextBlock.Text = "Мои доски";
+                    SectionSubtitleTextBlock.Text = $"{myBoardsCount} досок";
+                    EmptyStateTitleTextBlock.Text = "У вас пока нет личных досок";
+                    EmptyStateSubtitleTextBlock.Text = "Создайте новую доску, и она появится здесь.";
+                    break;
+                case DashboardSection.SharedBoards:
+                    SectionTitleTextBlock.Text = "Общие доски";
+                    SectionSubtitleTextBlock.Text = $"{sharedBoardsCount} досок";
+                    EmptyStateTitleTextBlock.Text = "Пока нет общих досок";
+                    EmptyStateSubtitleTextBlock.Text = "Подключитесь по коду, чтобы доски других пользователей появились здесь.";
+                    break;
+                default:
+                    SectionTitleTextBlock.Text = "Недавние";
+                    SectionSubtitleTextBlock.Text = $"{recentCount} досок";
+                    EmptyStateTitleTextBlock.Text = "История ещё не заполнена";
+                    EmptyStateSubtitleTextBlock.Text = "Открытые вами доски будут появляться в этом разделе.";
+                    break;
+            }
+
+            ApplySidebarSelection();
         }
 
-        //Создать доску
+        private void ApplySidebarSelection()
+        {
+            var activeBackground = new SolidColorBrush(Color.FromRgb(34, 45, 72));
+            var transparent = Brushes.Transparent;
+
+            MyBoardsButton.Background = _currentSection == DashboardSection.MyBoards ? activeBackground : transparent;
+            SharedBoardsButton.Background = _currentSection == DashboardSection.SharedBoards ? activeBackground : transparent;
+            RecentBoardsButton.Background = _currentSection == DashboardSection.RecentBoards ? activeBackground : transparent;
+        }
+
+        private void ApplyViewModeSelection()
+        {
+            LargeViewButton.Background = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(14, 16, 38));
+            LargeViewButton.Foreground = _isCompactView ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : Brushes.White;
+            LargeViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(228, 233, 243)) : new SolidColorBrush(Color.FromRgb(14, 16, 38));
+
+            CompactViewButton.Background = _isCompactView ? new SolidColorBrush(Color.FromRgb(14, 16, 38)) : Brushes.White;
+            CompactViewButton.Foreground = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(15, 23, 42));
+            CompactViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(14, 16, 38)) : new SolidColorBrush(Color.FromRgb(228, 233, 243));
+        }
+
+        private void UpdateBoardsVisibility()
+        {
+            if (NoBoardsState == null || BoardsItemsControl == null)
+            {
+                return;
+            }
+
+            bool hasBoards = VisibleBoards != null && VisibleBoards.Count > 0;
+            NoBoardsState.Visibility = hasBoards ? Visibility.Collapsed : Visibility.Visible;
+            BoardsItemsControl.Visibility = hasBoards ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private static string GetInitials(string userName)
+        {
+            if (string.IsNullOrWhiteSpace(userName))
+            {
+                return "W";
+            }
+
+            var parts = userName
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Take(2)
+                .Select(part => char.ToUpperInvariant(part[0]));
+
+            var initials = string.Concat(parts);
+            return string.IsNullOrWhiteSpace(initials) ? "W" : initials;
+        }
+
+        private static (Color Start, Color End)[] GetBoardPalette()
+        {
+            return new[]
+            {
+                (Color.FromRgb(108, 99, 255), Color.FromRgb(60, 183, 255)),
+                (Color.FromRgb(60, 183, 255), Color.FromRgb(155, 106, 255)),
+                (Color.FromRgb(87, 108, 188), Color.FromRgb(108, 99, 255)),
+                (Color.FromRgb(108, 99, 255), Color.FromRgb(196, 92, 255))
+            };
+        }
+
+        private static string FormatRelativeDate(DateTime date)
+        {
+            var value = date.ToLocalTime().Date;
+            var today = DateTime.Now.Date;
+            var days = (today - value).Days;
+
+            return days switch
+            {
+                <= 0 => "сегодня",
+                1 => "1 день назад",
+                < 5 => $"{days} дня назад",
+                _ => $"{days} дней назад"
+            };
+        }
+
+        private static List<Guid> LoadRecentBoardIds()
+        {
+            try
+            {
+                if (!File.Exists(RecentBoardsPath))
+                {
+                    return new List<Guid>();
+                }
+
+                var json = File.ReadAllText(RecentBoardsPath);
+                return JsonSerializer.Deserialize<List<Guid>>(json) ?? new List<Guid>();
+            }
+            catch
+            {
+                return new List<Guid>();
+            }
+        }
+
+        private static void SaveRecentBoardIds(List<Guid> boardIds)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(RecentBoardsPath)!);
+            File.WriteAllText(RecentBoardsPath, JsonSerializer.Serialize(boardIds));
+        }
+
+        private static void RememberBoard(Guid boardId)
+        {
+            var boardIds = LoadRecentBoardIds();
+            boardIds.Remove(boardId);
+            boardIds.Insert(0, boardId);
+            SaveRecentBoardIds(boardIds.Take(20).ToList());
+        }
+
+        private void SetSection(DashboardSection section)
+        {
+            _currentSection = section;
+            RefreshVisibleBoards();
+        }
+
+        private void MyBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.MyBoards);
+
+        private void SharedBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.SharedBoards);
+
+        private void RecentBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.RecentBoards);
+
+        private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e) => RefreshVisibleBoards();
+
+        private void SortComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (IsLoaded)
+            {
+                RefreshVisibleBoards();
+            }
+        }
+
+        private void LargeViewButton_Click(object sender, RoutedEventArgs e)
+        {
+            _isCompactView = false;
+            OnPropertyChanged(nameof(BoardCardWidth));
+            OnPropertyChanged(nameof(BoardCardHeight));
+            ApplyViewModeSelection();
+        }
+
+        private void CompactViewButton_Click(object sender, RoutedEventArgs e)
+        {
+            _isCompactView = true;
+            OnPropertyChanged(nameof(BoardCardWidth));
+            OnPropertyChanged(nameof(BoardCardHeight));
+            ApplyViewModeSelection();
+        }
+
+        private void ProfileButton_Click(object sender, RoutedEventArgs e)
+        {
+            ProfilePopup.IsOpen = !ProfilePopup.IsOpen;
+        }
+
+        private void ProfilePopup_Closed(object sender, EventArgs e)
+        {
+        }
+
+        private void ProfileSettings_Click(object sender, RoutedEventArgs e)
+        {
+            ProfilePopup.IsOpen = false;
+            AppDialogService.ShowInfo($"Имя: {_userName}\nПочта: {_userEmail}", "Настройки пользователя");
+        }
+
+        private async void RefreshDashboard_Click(object sender, RoutedEventArgs e)
+        {
+            ProfilePopup.IsOpen = false;
+            await LoadDashboardAsync();
+        }
+
         private async void CreateBoard_Click(object sender, RoutedEventArgs e)
         {
-            var service = new SupabaseService();
-
             string boardTitle = Microsoft.VisualBasic.Interaction.InputBox(
                 "Введите имя для новой доски:",
                 "Создание новой доски",
@@ -123,53 +436,15 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            var newBoard = await service.CreateBoardAsync(boardTitle);
-
-            if (newBoard != null)
-            {
-                var newBoardId = newBoard.Id;
-                this.NavigationService.Navigate(new BoardPage(newBoardId));
-            }
-            else
+            var newBoard = await _service.CreateBoardAsync(boardTitle.Trim());
+            if (newBoard == null)
             {
                 AppDialogService.ShowError("Не удалось создать доску.", "Создание доски");
+                return;
             }
-        }
 
-        //Открыть доску
-        private void OpenBoard_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                Guid boardId = Guid.Empty;
-
-                // Проверяем тип отправителя
-                if (sender is Button button && button.CommandParameter is Guid buttonBoardId)
-                {
-                    boardId = buttonBoardId;
-                }
-                else if (sender is MenuItem menuItem && menuItem.CommandParameter is Guid menuBoardId)
-                {
-                    boardId = menuBoardId;
-                }
-
-                if (boardId != Guid.Empty)
-                {
-                    this.NavigationService.Navigate(new BoardPage(boardId));
-                }
-            }
-            catch (Exception ex)
-            {
-                AppDialogService.ShowError($"Ошибка при открытии доски: {ex.Message}", "Открытие доски");
-            }
-        }
-
-        //Выход из аккаунта
-        private void Logout_Click(object sender, RoutedEventArgs e)
-        {
-            SessionStorage.ClearSession();
-            SupabaseService.Client.Auth.SignOut();
-            this.NavigationService.Navigate(new LoginPage());
+            RememberBoard(newBoard.Id);
+            NavigationService?.Navigate(new BoardPage(newBoard.Id));
         }
 
         private async void JoinByCode_Click(object sender, RoutedEventArgs e)
@@ -186,62 +461,107 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            accessCode = accessCode.Trim().ToUpperInvariant();
-
-            var service = new SupabaseService();
-            var board = await service.JoinBoardAsync(accessCode);
-
-            if (board != null)
-            {
-                AppDialogService.ShowSuccess($"Вы успешно присоединились к доске \"{board.Title}\".", "Подключение по коду");
-
-                // Обновляем список досок на главной странице
-                await LoadBoards();
-
-                // Спрашиваем пользователя, хочет ли он перейти на доску сейчас
-                var result = AppDialogService.ShowConfirmation(
-                    "Хотите перейти на доску сейчас?",
-                    "Переход на доску");
-
-                if (result)
-                {
-                    this.NavigationService.Navigate(new BoardPage(board.Id));
-                }
-            }
-            else
+            var board = await _service.JoinBoardAsync(accessCode.Trim().ToUpperInvariant());
+            if (board == null)
             {
                 AppDialogService.ShowError("Не удалось присоединиться к доске. Проверьте код доступа.", "Подключение по коду");
+                return;
             }
+
+            await LoadBoardsAsync();
+            RememberBoard(board.Id);
+
+            if (AppDialogService.ShowConfirmation($"Вы подключились к доске \"{board.Title}\". Открыть её сейчас?", "Подключение по коду"))
+            {
+                NavigationService?.Navigate(new BoardPage(board.Id));
+            }
+        }
+
+        private void OpenBoard_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button button || button.CommandParameter is not Guid boardId)
+            {
+                return;
+            }
+
+            RememberBoard(boardId);
+            NavigationService?.Navigate(new BoardPage(boardId));
+        }
+
+        private void OpenBoardCard_Click(object sender, MouseButtonEventArgs e)
+        {
+            var source = e.OriginalSource as DependencyObject;
+            while (source != null)
+            {
+                if (source is Button)
+                {
+                    return;
+                }
+
+                source = VisualTreeHelper.GetParent(source);
+            }
+
+            if (sender is not Border border || border.Tag is not Guid boardId)
+            {
+                return;
+            }
+
+            RememberBoard(boardId);
+            NavigationService?.Navigate(new BoardPage(boardId));
         }
 
         private async void DeleteBoard_Click(object sender, RoutedEventArgs e)
         {
-            try
+            if (sender is not Button button || button.CommandParameter is not Guid boardId)
             {
-                Guid boardId = Guid.Empty;
-
-                // Проверяем тип отправителя
-                if (sender is MenuItem menuItem && menuItem.CommandParameter is Guid menuBoardId)
-                {
-                    boardId = menuBoardId;
-                }
-
-                if (boardId != Guid.Empty)
-                {
-                    var service = new SupabaseService();
-                    var success = await service.DeleteBoardAsync(boardId);
-
-                    if (success)
-                    {
-                        // Обновляем список досок после удаления
-                        await LoadBoards();
-                    }
-                }
+                return;
             }
-            catch (Exception ex)
+
+            var success = await _service.DeleteBoardAsync(boardId);
+            if (success)
             {
-                AppDialogService.ShowError($"Ошибка при удалении доски: {ex.Message}", "Удаление доски");
+                await LoadBoardsAsync();
             }
         }
+
+        private void Logout_Click(object sender, RoutedEventArgs e)
+        {
+            ProfilePopup.IsOpen = false;
+            SessionStorage.ClearSession();
+            SupabaseService.Client.Auth.SignOut();
+            NavigationService?.Navigate(new LoginPage());
+        }
+
+        private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+    }
+
+    public sealed class HomeBoardCard
+    {
+        public Guid Id { get; set; }
+
+        public string Title { get; set; } = string.Empty;
+
+        public string Role { get; set; } = string.Empty;
+
+        public string RoleLabel { get; set; } = string.Empty;
+
+        public string Subtitle { get; set; } = string.Empty;
+
+        public DateTime CreatedAt { get; set; }
+
+        public string CreatedText { get; set; } = string.Empty;
+
+        public Color AccentStart { get; set; }
+
+        public Color AccentEnd { get; set; }
+
+        public Brush RoleBadgeBackground { get; set; } = Brushes.White;
+
+        public Brush RoleBadgeForeground { get; set; } = Brushes.Black;
+
+        public Visibility DeleteVisibility { get; set; } = Visibility.Collapsed;
     }
 }
