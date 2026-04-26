@@ -86,6 +86,11 @@ namespace WhiteSpace.Pages
             "WhiteSpace",
             "board-snapshots");
         private bool _isPresentationMode;
+        private DateTime _lastResizeRealtimePushUtc = DateTime.MinValue;
+        private bool _removalHandled;
+        private readonly DispatcherTimer _accessMonitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+        private bool _isAccessCheckRunning;
+        private readonly Dictionary<Guid, FirebaseBoardMember> _presenceByUserId = new();
 
         public BoardPage(Guid boardId)
         {
@@ -102,6 +107,7 @@ namespace WhiteSpace.Pages
 
             Loaded += Page_Loaded;
             Unloaded += Page_Unloaded;
+            _accessMonitorTimer.Tick += AccessMonitorTimer_Tick;
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
@@ -118,15 +124,18 @@ namespace WhiteSpace.Pages
             {
                 await LoadBoardMembers();
                 UsersListView.IsEnabled = false;
+                SetViewerMode(userRole == "viewer");
             }
             else if (userRole == "owner")
             {
                 await LoadBoardMembers();
                 UsersListView.IsEnabled = true;
+                SetViewerMode(false);
             }
             else
             {
                 UsersListView.Visibility = Visibility.Collapsed;
+                SetViewerMode(false);
             }
 
             // Центрируем камеру
@@ -138,6 +147,8 @@ namespace WhiteSpace.Pages
             // Подписываемся на изменения фигур из Firebase (только для получения обновлений)
             SubscribeToShapes();
             SubscribeToBoardMembers();
+            await SetCurrentUserPresenceAsync(true);
+            _accessMonitorTimer.Start();
         }
 
         private async Task LoadBoardMetadataAsync()
@@ -254,6 +265,13 @@ namespace WhiteSpace.Pages
             // Отписываемся от событий при выходе
             _shapesSubscription?.Dispose();
             _membersSubscription?.Dispose();
+            _accessMonitorTimer.Stop();
+            _ = SetCurrentUserPresenceAsync(false);
+        }
+
+        private async void AccessMonitorTimer_Tick(object? sender, EventArgs e)
+        {
+            await RefreshCurrentUserPermissionsAsync();
         }
 
         // Загрузка фигур из Supabase
@@ -288,7 +306,6 @@ namespace WhiteSpace.Pages
                 _shapesSubscription = _firebaseService
                     .GetShapesObservable(_boardId.ToString())
                     .Where(shape => shape != null)
-                    .DistinctUntilChanged()
                     .Subscribe(async shape =>
                     {
                         // Игнорируем обновления, если идет загрузка из Supabase
@@ -471,6 +488,37 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private async Task SetCurrentUserPresenceAsync(bool isOnline)
+        {
+            try
+            {
+                var profile = await _supabaseService.GetMyProfileAsync();
+                if (profile == null)
+                {
+                    return;
+                }
+
+                var role = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+                if (string.IsNullOrWhiteSpace(role))
+                {
+                    return;
+                }
+
+                await _firebaseService.PushBoardMemberAsync(_boardId.ToString(), new FirebaseBoardMember
+                {
+                    UserId = profile.Id.ToString(),
+                    Role = role,
+                    JoinedAt = DateTime.UtcNow,
+                    IsOnline = isOnline,
+                    LastSeenUtc = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки presence в Firebase: {ex.Message}");
+            }
+        }
+
         // Обновление списка участников из Firebase
         // Обновление списка участников из Firebase
         private async Task UpdateBoardMembersFromFirebase(List<FirebaseBoardMember> members)
@@ -479,8 +527,19 @@ namespace WhiteSpace.Pages
             {
                 Console.WriteLine($"Получено обновление участников из Firebase. Количество: {members?.Count ?? 0}");
 
-                // Получаем текущего пользователя
+                await RefreshCurrentUserPermissionsAsync();
                 var currentUser = await _supabaseService.GetMyProfileAsync();
+                _presenceByUserId.Clear();
+                if (members != null)
+                {
+                    foreach (var member in members)
+                    {
+                        if (Guid.TryParse(member.UserId, out var userId))
+                        {
+                            _presenceByUserId[userId] = member;
+                        }
+                    }
+                }
 
                 if (members != null && members.Any())
                 {
@@ -500,13 +559,10 @@ namespace WhiteSpace.Pages
                         }
                     }
 
-                    // Фильтруем, чтобы не показывать текущего пользователя
-                    var otherMembers = displayMembers.Where(m => m.UserId != currentUser?.Id).ToList();
-
-                    Console.WriteLine($"Отображаем участников: {otherMembers.Count}");
+                    Console.WriteLine($"Отображаем участников: {displayMembers.Count}");
 
                     UsersListView.ItemsSource = null;
-                    UsersListView.ItemsSource = await CreateParticipantCardsAsync(otherMembers, currentUser?.Id);
+                    UsersListView.ItemsSource = await CreateParticipantCardsAsync(displayMembers, currentUser?.Id, _presenceByUserId);
                     UsersListView.Visibility = Visibility.Visible;
                     MembersCountText.Text = displayMembers.Count.ToString();
 
@@ -533,7 +589,7 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void PushBoardMembersToFirebase()
+        private async Task<bool> PushBoardMembersToFirebaseAsync()
         {
             try
             {
@@ -548,10 +604,12 @@ namespace WhiteSpace.Pages
                 }).ToList();
 
                 await _firebaseService.PushBoardMembersAsync(_boardId.ToString(), firebaseMembers);
+                return true;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Ошибка отправки участников в Firebase: {ex.Message}");
+                return false;
             }
         }
 
@@ -566,12 +624,11 @@ namespace WhiteSpace.Pages
 
                 if (boardMembers != null && boardMembers.Any())
                 {
-                    var otherMembers = boardMembers.Where(m => m.UserId != currentUser?.Id).ToList();
-                    UsersListView.ItemsSource = await CreateParticipantCardsAsync(otherMembers, currentUser?.Id);
+                    UsersListView.ItemsSource = await CreateParticipantCardsAsync(boardMembers, currentUser?.Id, _presenceByUserId);
                     UsersListView.Visibility = Visibility.Visible;
                     MembersCountText.Text = boardMembers.Count.ToString();
 
-                    PushBoardMembersToFirebase();
+                    await PushBoardMembersToFirebaseAsync();
                 }
                 else
                 {
@@ -586,10 +643,10 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void ChangeRole_Click(object sender, RoutedEventArgs e)
+        private async void ToggleParticipantRoleMenu_Click(object sender, RoutedEventArgs e)
         {
-            var button = sender as Button;
-            var boardMember = button?.DataContext as BoardParticipantCard;
+            var menuItem = sender as MenuItem;
+            var boardMember = menuItem?.DataContext as BoardParticipantCard;
 
             if (boardMember == null)
             {
@@ -603,13 +660,25 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            string newRole = boardMember.Role == "viewer" ? "editor" : "viewer";
+            string newRole = boardMember.Role switch
+            {
+                "viewer" => "editor",
+                "editor" => "viewer",
+                _ => boardMember.Role
+            };
+
+            if (newRole == boardMember.Role)
+            {
+                return;
+            }
+
             var result = await _supabaseService.UpdateBoardMemberRoleAsync(_boardId, boardMember.UserId, newRole);
 
             if (result)
             {
-                // Отправляем обновление в Firebase
-                PushBoardMembersToFirebase();
+                // Синхронно публикуем изменение в Firebase для мгновенного обновления у всех.
+                await PushBoardMembersToFirebaseAsync();
+                await LoadBoardMembers();
 
                 AppDialogService.ShowSuccess($"Роль пользователя изменена на {newRole}.", "Изменение роли");
             }
@@ -619,7 +688,59 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async Task<List<BoardParticipantCard>> CreateParticipantCardsAsync(List<BoardMember> members, Guid? currentUserId)
+        private void ParticipantActionsButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button button || button.ContextMenu == null)
+            {
+                return;
+            }
+
+            button.ContextMenu.DataContext = button.DataContext;
+            button.ContextMenu.PlacementTarget = button;
+            button.ContextMenu.IsOpen = true;
+        }
+
+        private void CopyParticipantIdMenu_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem menuItem || menuItem.DataContext is not BoardParticipantCard boardMember)
+            {
+                return;
+            }
+
+            Clipboard.SetText(boardMember.UserId.ToString());
+            AppDialogService.ShowInfo("ID пользователя скопирован в буфер обмена.", "Участники");
+        }
+
+        private async void RemoveParticipantMenu_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem menuItem || menuItem.DataContext is not BoardParticipantCard boardMember)
+            {
+                return;
+            }
+
+            if (!AppDialogService.ShowConfirmation(
+                    $"Удалить пользователя \"{boardMember.DisplayName}\" с доски?",
+                    "Удаление участника",
+                    "Удалить",
+                    "Отмена"))
+            {
+                return;
+            }
+
+            var result = await _supabaseService.RemoveBoardMemberAsync(_boardId, boardMember.UserId);
+            if (result)
+            {
+                // Сначала обновляем Firebase, затем локальный список.
+                await PushBoardMembersToFirebaseAsync();
+                await LoadBoardMembers();
+                AppDialogService.ShowSuccess("Пользователь удалён с доски.", "Удаление участника");
+            }
+        }
+
+        private async Task<List<BoardParticipantCard>> CreateParticipantCardsAsync(
+            List<BoardMember> members,
+            Guid? currentUserId,
+            IReadOnlyDictionary<Guid, FirebaseBoardMember>? presenceByUserId = null)
         {
             var cards = new List<BoardParticipantCard>();
             int colorIndex = 0;
@@ -632,6 +753,10 @@ namespace WhiteSpace.Pages
                     : member.UserId.ToString()[..8];
 
                 var (fill, stroke) = GetParticipantPalette(colorIndex++);
+                var isCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
+                var isOnline = presenceByUserId != null
+                    && presenceByUserId.TryGetValue(member.UserId, out var presence)
+                    && presence?.IsOnline == true;
                 cards.Add(new BoardParticipantCard
                 {
                     UserId = member.UserId,
@@ -644,8 +769,21 @@ namespace WhiteSpace.Pages
                         "editor" => "Редактор",
                         _ => "Наблюдатель"
                     },
-                    ActionLabel = member.Role == "viewer" ? "Сделать редактором" : "Сделать наблюдателем",
-                    ActionVisibility = member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                    RoleActionLabel = member.Role == "viewer" ? "Сделать редактором" : "Сделать наблюдателем",
+                    RoleActionVisibility = member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                    ActionVisibility = isCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                    RemoveActionVisibility = isCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                    CurrentUserHint = isCurrentUser ? "Вы" : string.Empty,
+                    CurrentUserHintVisibility = isCurrentUser ? Visibility.Visible : Visibility.Collapsed,
+                    PresenceLabel = isOnline ? "Онлайн" : "Не в сети",
+                    PresenceDotFill = isOnline
+                        ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
+                        : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                    PresenceTextFill = isOnline
+                        ? new SolidColorBrush(Color.FromRgb(22, 163, 74))
+                        : new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                    IsCurrentUser = isCurrentUser,
+                    IsOnline = isOnline,
                     AvatarFill = fill,
                     AvatarStroke = stroke,
                     RoleBadgeBackground = member.Role == "owner"
@@ -657,7 +795,13 @@ namespace WhiteSpace.Pages
                 });
             }
 
-            MembersCountText.Text = (cards.Count + (currentUserId.HasValue ? 1 : 0)).ToString();
+            cards = cards
+                .OrderByDescending(card => card.IsCurrentUser)
+                .ThenByDescending(card => card.IsOnline)
+                .ThenBy(card => card.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            MembersCountText.Text = cards.Count.ToString();
             return cards;
         }
 
@@ -711,7 +855,78 @@ namespace WhiteSpace.Pages
             RectButton.IsEnabled = false;
             EllipseButton.IsEnabled = false;
             TextButton.IsEnabled = false;
-            ColorPanel.Visibility = Visibility.Visible;
+            UndoButton.IsEnabled = false;
+            RedoButton.IsEnabled = false;
+            ClearBoardButton.IsEnabled = false;
+            AddImageButton.IsEnabled = false;
+            ColorPanel.IsEnabled = false;
+        }
+
+        private void EnableEditingTools()
+        {
+            PenButton.IsEnabled = true;
+            RectButton.IsEnabled = true;
+            EllipseButton.IsEnabled = true;
+            TextButton.IsEnabled = true;
+            UndoButton.IsEnabled = true;
+            RedoButton.IsEnabled = true;
+            ClearBoardButton.IsEnabled = true;
+            AddImageButton.IsEnabled = true;
+            ColorPanel.IsEnabled = true;
+        }
+
+        private void SetViewerMode(bool isViewer)
+        {
+            ViewerModeText.Visibility = isViewer ? Visibility.Visible : Visibility.Collapsed;
+            if (isViewer)
+            {
+                DisableEditingTools();
+            }
+            else
+            {
+                EnableEditingTools();
+            }
+        }
+
+        private async Task RefreshCurrentUserPermissionsAsync()
+        {
+            if (_removalHandled || _isAccessCheckRunning)
+            {
+                return;
+            }
+
+            _isAccessCheckRunning = true;
+            try
+            {
+                var currentUser = await _supabaseService.GetMyProfileAsync();
+                if (currentUser == null)
+                {
+                    return;
+                }
+
+                var isOwner = _boardInfo?.OwnerId == currentUser.Id;
+                if (isOwner)
+                {
+                    SetViewerMode(false);
+                    return;
+                }
+
+                var role = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+                if (string.IsNullOrWhiteSpace(role))
+                {
+                    _removalHandled = true;
+                    _accessMonitorTimer.Stop();
+                    AppDialogService.ShowWarning("Вы были удалены с этой доски.", "Доступ к доске");
+                    NavigationService?.Navigate(new UserHomePage());
+                    return;
+                }
+
+                SetViewerMode(string.Equals(role, "viewer", StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                _isAccessCheckRunning = false;
+            }
         }
 
         private void Share_Click(object sender, RoutedEventArgs e)
@@ -721,6 +936,11 @@ namespace WhiteSpace.Pages
                 : $"Код доступа к доске: {_boardInfo.AccessCode}";
 
             AppDialogService.ShowInfo(accessCode, "Поделиться доской");
+        }
+
+        private void BackToMenu_Click(object sender, RoutedEventArgs e)
+        {
+            NavigationService?.Navigate(new UserHomePage());
         }
 
         private void SaveBoard_Click(object sender, RoutedEventArgs e)
@@ -2200,6 +2420,56 @@ namespace WhiteSpace.Pages
             }
 
             UpdateResizeFrame(newX, newY, newW, newH);
+            PushRealtimeResizeUpdate(_resizeTarget);
+        }
+
+        private void PushRealtimeResizeUpdate(UIElement? target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            if ((now - _lastResizeRealtimePushUtc).TotalMilliseconds < 80)
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == target.Uid);
+            if (shape == null)
+            {
+                return;
+            }
+
+            if (target is Polyline polyline)
+            {
+                shape.DeserializedPoints = new List<Point>(polyline.Points);
+                shape.Points = JsonConvert.SerializeObject(polyline.Points);
+
+                if (polyline.Points.Count > 0)
+                {
+                    double minX = polyline.Points.Min(p => p.X);
+                    double maxX = polyline.Points.Max(p => p.X);
+                    double minY = polyline.Points.Min(p => p.Y);
+                    double maxY = polyline.Points.Max(p => p.Y);
+
+                    shape.X = (minX + maxX) / 2;
+                    shape.Y = (minY + maxY) / 2;
+                    shape.Width = maxX - minX;
+                    shape.Height = maxY - minY;
+                }
+            }
+            else if (target is FrameworkElement fe)
+            {
+                shape.Width = fe.Width > 0 ? fe.Width : fe.ActualWidth;
+                shape.Height = fe.Height > 0 ? fe.Height : fe.ActualHeight;
+                shape.X = Canvas.GetLeft(target) + shape.Width / 2;
+                shape.Y = Canvas.GetTop(target) + shape.Height / 2;
+            }
+
+            _lastResizeRealtimePushUtc = now;
+            PushShapeToFirebase(shape);
         }
 
         private void ResizePolyline(Polyline polyline, double newX, double newY, double newW, double newH)
@@ -2411,8 +2681,17 @@ namespace WhiteSpace.Pages
         public string Initials { get; set; } = "";
         public string Role { get; set; } = "viewer";
         public string RoleLabel { get; set; } = "";
-        public string ActionLabel { get; set; } = "";
+        public string RoleActionLabel { get; set; } = "";
+        public Visibility RoleActionVisibility { get; set; } = Visibility.Visible;
         public Visibility ActionVisibility { get; set; } = Visibility.Visible;
+        public Visibility RemoveActionVisibility { get; set; } = Visibility.Visible;
+        public string CurrentUserHint { get; set; } = string.Empty;
+        public Visibility CurrentUserHintVisibility { get; set; } = Visibility.Collapsed;
+        public string PresenceLabel { get; set; } = "Не в сети";
+        public Brush PresenceDotFill { get; set; } = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+        public Brush PresenceTextFill { get; set; } = new SolidColorBrush(Color.FromRgb(107, 114, 128));
+        public bool IsCurrentUser { get; set; }
+        public bool IsOnline { get; set; }
         public Brush AvatarFill { get; set; } = Brushes.White;
         public Brush AvatarStroke { get; set; } = Brushes.Black;
         public Brush RoleBadgeBackground { get; set; } = Brushes.White;

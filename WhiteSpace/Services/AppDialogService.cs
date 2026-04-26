@@ -47,6 +47,27 @@ namespace WhiteSpace.Services
             });
         }
 
+        public static string? ShowTextInput(
+            string title,
+            string message,
+            string confirmButtonText = "ОК",
+            string cancelButtonText = "Отмена",
+            string initialValue = "")
+        {
+            return InvokeOnUiThread(() =>
+            {
+                var dialog = new AppTextInputWindow(
+                    title,
+                    message,
+                    confirmButtonText,
+                    cancelButtonText,
+                    initialValue);
+
+                var result = dialog.ShowDialog() == true;
+                return result ? dialog.InputText : null;
+            });
+        }
+
         private static void ShowDialog(string message, string title, AppDialogType type)
         {
             InvokeOnUiThread(() =>

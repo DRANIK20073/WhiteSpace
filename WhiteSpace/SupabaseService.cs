@@ -1152,6 +1152,33 @@ public class SupabaseService
         }
     }
 
+    public async Task<bool> RemoveBoardMemberAsync(Guid boardId, Guid userId)
+    {
+        try
+        {
+            var member = await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId && m.UserId == userId)
+                .Single();
+
+            if (member == null)
+            {
+                AppDialogService.ShowWarning("Пользователь не найден в участниках доски.", "Удаление участника");
+                return false;
+            }
+
+            await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId && m.UserId == userId)
+                .Delete();
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError($"Ошибка при удалении участника: {ex.Message}", "Удаление участника");
+            return false;
+        }
+    }
+
     public async Task<bool> DeleteBoardAsync(Guid boardId)
     {
         try

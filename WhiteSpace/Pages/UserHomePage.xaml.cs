@@ -99,9 +99,6 @@ namespace WhiteSpace.Pages
                 HeaderEmailTextBlock.Text = _userEmail;
                 SidebarUserNameTextBlock.Text = _userName;
                 SidebarUserEmailTextBlock.Text = _userEmail;
-                PopupUserNameTextBlock.Text = _userName;
-                PopupUserEmailTextBlock.Text = _userEmail;
-
                 var initials = GetInitials(_userName);
                 UserInitialsTextBlock.Text = initials;
             }
@@ -241,6 +238,11 @@ namespace WhiteSpace.Pages
             var sharedBoardsCount = _allBoards.Count(board => board.Role != "owner");
             var recentCount = GetRecentBoards().Count();
 
+            if (EmptyStateActionButton != null)
+            {
+                EmptyStateActionButton.Visibility = Visibility.Visible;
+            }
+
             switch (_currentSection)
             {
                 case DashboardSection.MyBoards:
@@ -254,6 +256,10 @@ namespace WhiteSpace.Pages
                     SectionSubtitleTextBlock.Text = $"{sharedBoardsCount} досок";
                     EmptyStateTitleTextBlock.Text = "Пока нет общих досок";
                     EmptyStateSubtitleTextBlock.Text = "Подключитесь по коду, чтобы доски других пользователей появились здесь.";
+                    if (EmptyStateActionButton != null)
+                    {
+                        EmptyStateActionButton.Visibility = Visibility.Collapsed;
+                    }
                     break;
                 default:
                     SectionTitleTextBlock.Text = "Недавние";
@@ -432,32 +438,27 @@ namespace WhiteSpace.Pages
 
         private void ProfileButton_Click(object sender, RoutedEventArgs e)
         {
-            ProfilePopup.IsOpen = !ProfilePopup.IsOpen;
+            OpenSettings();
         }
 
-        private void ProfilePopup_Closed(object sender, EventArgs e)
+        private void OpenSettings()
         {
-        }
-
-        private void ProfileSettings_Click(object sender, RoutedEventArgs e)
-        {
-            ProfilePopup.IsOpen = false;
             NavigationService?.Navigate(new UserSettingsPage());
-        }
-
-        private async void RefreshDashboard_Click(object sender, RoutedEventArgs e)
-        {
-            ProfilePopup.IsOpen = false;
-            await LoadDashboardAsync();
         }
 
         private async void CreateBoard_Click(object sender, RoutedEventArgs e)
         {
-            string boardTitle = Microsoft.VisualBasic.Interaction.InputBox(
-                "Введите имя для новой доски:",
+            var boardTitle = AppDialogService.ShowTextInput(
                 "Создание новой доски",
-                "Новая доска",
-                -1, -1);
+                "Введите имя для новой доски:",
+                "Создать",
+                "Отмена",
+                "Новая доска");
+
+            if (boardTitle == null)
+            {
+                return;
+            }
 
             if (string.IsNullOrWhiteSpace(boardTitle))
             {
@@ -478,11 +479,17 @@ namespace WhiteSpace.Pages
 
         private async void JoinByCode_Click(object sender, RoutedEventArgs e)
         {
-            string accessCode = Microsoft.VisualBasic.Interaction.InputBox(
-                "Введите код доступа к доске:",
+            var accessCode = AppDialogService.ShowTextInput(
                 "Подключение по коду",
-                "",
-                -1, -1);
+                "Введите код доступа к доске:",
+                "Подключиться",
+                "Отмена",
+                "");
+
+            if (accessCode == null)
+            {
+                return;
+            }
 
             if (string.IsNullOrWhiteSpace(accessCode))
             {
@@ -561,15 +568,9 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            ProfilePopup.IsOpen = false;
             SessionStorage.ClearSession();
             SupabaseService.Client.Auth.SignOut();
             NavigationService?.Navigate(new LoginPage());
-        }
-
-        private void OpenSettings_Click(object sender, RoutedEventArgs e)
-        {
-            NavigationService?.Navigate(new UserSettingsPage());
         }
 
         private void SearchDebounceTimer_Tick(object? sender, EventArgs e)

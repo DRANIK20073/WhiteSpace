@@ -113,6 +113,15 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource HeaderActionButtonStyle}"
+                            Margin="0,0,10,0"
+                            Click="BackToMenu_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="←" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock Text="Меню"/>
+                        </StackPanel>
+                    </Button>
+
                     <Border Width="38"
                             Height="38"
                             CornerRadius="12"
@@ -138,6 +147,14 @@
                                    Margin="14,5,0,0"
                                    FontSize="15"
                                    Foreground="#6F768A"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock x:Name="ViewerModeText"
+                                   Text="Режим наблюдателя: редактирование недоступно"
+                                   Margin="14,5,0,0"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Foreground="#C47F00"
+                                   Visibility="Collapsed"
                                    VerticalAlignment="Center"/>
                     </StackPanel>
                 </StackPanel>
@@ -212,10 +229,10 @@
                         <Button Background="#AF52DE" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
                         <Button Background="#30B0C7" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
                         <Border Width="1" Height="32" Background="#E5E8F0" Margin="8,0,12,0"/>
-                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="↶" Click="Undo_Click"/>
-                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="↷" Click="Redo_Click"/>
-                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="🗑" Click="ClearBoard_Click"/>
-                        <Button Style="{StaticResource ToolbarButtonStyle}" Content="🖼" Click="AddImage_Click"/>
+                        <Button x:Name="UndoButton" Style="{StaticResource ToolbarButtonStyle}" Content="↶" Click="Undo_Click"/>
+                        <Button x:Name="RedoButton" Style="{StaticResource ToolbarButtonStyle}" Content="↷" Click="Redo_Click"/>
+                        <Button x:Name="ClearBoardButton" Style="{StaticResource ToolbarButtonStyle}" Content="🗑" Click="ClearBoard_Click"/>
+                        <Button x:Name="AddImageButton" Style="{StaticResource ToolbarButtonStyle}" Content="🖼" Click="AddImage_Click"/>
                         <Button Style="{StaticResource ToolbarButtonStyle}" Content="PNG" Click="ExportPng_Click"/>
                         <Button Style="{StaticResource ToolbarButtonStyle}" Content="PDF" Click="ExportPdf_Click"/>
                     </StackPanel>
@@ -345,7 +362,7 @@
                                                        VerticalAlignment="Center"/>
                                             <Ellipse Width="10"
                                                      Height="10"
-                                                     Fill="#22C55E"
+                                                     Fill="{Binding PresenceDotFill}"
                                                      Stroke="#FFFFFF"
                                                      StrokeThickness="2"
                                                      HorizontalAlignment="Right"
@@ -357,6 +374,15 @@
                                                        FontSize="16"
                                                        FontWeight="Medium"
                                                        Foreground="#171923"/>
+                                            <TextBlock Text="{Binding CurrentUserHint}"
+                                                       Margin="0,2,0,0"
+                                                       FontSize="12"
+                                                       Foreground="#6F768A"
+                                                       Visibility="{Binding CurrentUserHintVisibility}"/>
+                                            <TextBlock Text="{Binding PresenceLabel}"
+                                                       Margin="0,2,0,0"
+                                                       FontSize="12"
+                                                       Foreground="{Binding PresenceTextFill}"/>
                                             <Border Background="{Binding RoleBadgeBackground}"
                                                     HorizontalAlignment="Left"
                                                     CornerRadius="10"
@@ -370,12 +396,29 @@
                                         </StackPanel>
 
                                         <Button Grid.Column="2"
-                                                Content="{Binding ActionLabel}"
+                                                Content="⋯"
                                                 Style="{StaticResource ToolbarButtonStyle}"
-                                                Padding="10,6"
+                                                Width="34"
+                                                Height="34"
+                                                Padding="0"
                                                 Margin="8,0,0,0"
-                                                Click="ChangeRole_Click"
-                                                Visibility="{Binding ActionVisibility}"/>
+                                                Click="ParticipantActionsButton_Click"
+                                                Visibility="{Binding ActionVisibility}">
+                                            <Button.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="{Binding RoleActionLabel}"
+                                                              Visibility="{Binding RoleActionVisibility}"
+                                                              Click="ToggleParticipantRoleMenu_Click"/>
+                                                    <MenuItem Header="Скопировать ID пользователя"
+                                                              Click="CopyParticipantIdMenu_Click"/>
+                                                    <Separator Visibility="{Binding RemoveActionVisibility}"/>
+                                                    <MenuItem Header="Удалить с доски"
+                                                              Foreground="#D92D20"
+                                                              Visibility="{Binding RemoveActionVisibility}"
+                                                              Click="RemoveParticipantMenu_Click"/>
+                                                </ContextMenu>
+                                            </Button.ContextMenu>
+                                        </Button>
                                     </Grid>
                                 </Border>
                             </DataTemplate>

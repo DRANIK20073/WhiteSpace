@@ -134,31 +134,47 @@ namespace WhiteSpace
             return _client
                 .Child(MEMBERS_PATH)
                 .Child(boardId)
-                .AsObservable<Dictionary<string, FirebaseBoardMember>>()
-                .Select(dbevent =>
+                .AsObservable<object>()
+                .SelectMany(_ => Observable.FromAsync(async () =>
                 {
-                    if (dbevent.Object != null && dbevent.EventType != Firebase.Database.Streaming.FirebaseEventType.Delete)
+                    try
                     {
-                        Console.WriteLine($"Получено событие {dbevent.EventType} для участников");
-                        return dbevent.Object.Values.ToList();
+                        var snapshot = await _client
+                            .Child(MEMBERS_PATH)
+                            .Child(boardId)
+                            .OnceSingleAsync<Dictionary<string, FirebaseBoardMember>>();
+
+                        return snapshot?.Values.ToList() ?? new List<FirebaseBoardMember>();
                     }
-                    return new List<FirebaseBoardMember>();
-                });
+                    catch
+                    {
+                        return new List<FirebaseBoardMember>();
+                    }
+                }));
         }
 
         public async Task PushBoardMembersAsync(string boardId, List<FirebaseBoardMember> members)
         {
             try
             {
+                var currentSnapshot = await _client
+                    .Child(MEMBERS_PATH)
+                    .Child(boardId)
+                    .OnceSingleAsync<Dictionary<string, FirebaseBoardMember>>()
+                    ?? new Dictionary<string, FirebaseBoardMember>();
+
                 var membersDict = new Dictionary<string, object>();
 
                 foreach (var member in members)
                 {
+                    var hasCurrent = currentSnapshot.TryGetValue(member.UserId, out var currentMember);
                     membersDict[member.UserId] = new
                     {
                         member.UserId,
                         member.Role,
-                        member.JoinedAt
+                        member.JoinedAt,
+                        IsOnline = hasCurrent && currentMember?.IsOnline == true,
+                        LastSeenUtc = hasCurrent && currentMember != null ? currentMember.LastSeenUtc : DateTime.MinValue
                     };
                 }
 
@@ -185,7 +201,9 @@ namespace WhiteSpace
                     {
                         member.UserId,
                         member.Role,
-                        member.JoinedAt
+                        member.JoinedAt,
+                        member.IsOnline,
+                        member.LastSeenUtc
                     });
             }
             catch (Exception ex)
@@ -223,5 +241,7 @@ namespace WhiteSpace
         public string UserId { get; set; }
         public string Role { get; set; }
         public DateTime JoinedAt { get; set; }
+        public bool IsOnline { get; set; }
+        public DateTime LastSeenUtc { get; set; }
     }
 }

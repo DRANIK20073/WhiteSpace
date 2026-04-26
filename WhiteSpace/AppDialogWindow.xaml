@@ -229,6 +229,7 @@
                 CornerRadius="20"
                 BorderBrush="#E5E5E5"
                 BorderThickness="1.5"
+                ClipToBounds="True"
                 SnapsToDevicePixels="True">
             <Border.RenderTransform>
                 <TranslateTransform x:Name="DialogTranslate" Y="18"/>
@@ -246,8 +247,8 @@
 
                     <Border x:Name="AccentBar"
                             Grid.Row="0"
-                            Width="430"
                             Background="#333333"
+                            HorizontalAlignment="Stretch"
                             CornerRadius="18,18,0,0"/>
 
                     <StackPanel Grid.Row="1"
