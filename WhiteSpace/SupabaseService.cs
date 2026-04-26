@@ -192,6 +192,38 @@ public class SupabaseService
         }
     }
 
+    public async Task<bool> UpdatePasswordAsync(string newPassword)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < 6)
+            {
+                AppDialogService.ShowWarning("Новый пароль должен содержать минимум 6 символов.", "Профиль");
+                return false;
+            }
+
+            var user = _client.Auth.CurrentUser;
+            if (user == null)
+            {
+                AppDialogService.ShowWarning("Пользователь не авторизован.", "Профиль");
+                return false;
+            }
+
+            await _client.Auth.Update(new UserAttributes
+            {
+                Password = newPassword
+            });
+
+            AppDialogService.ShowSuccess("Пароль успешно обновлен.", "Профиль");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError($"Не удалось обновить пароль: {ex.Message}", "Профиль");
+            return false;
+        }
+    }
+
     //Логин
     public async Task<bool> SignInAsync(string email, string password, bool rememberMe)
     {

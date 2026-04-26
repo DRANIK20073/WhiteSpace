@@ -1,0 +1,122 @@
+<Page x:Class="WhiteSpace.Pages.UserSettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      Title="Настройки пользователя"
+      Background="#F6F7FB"
+      Loaded="Page_Loaded">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <DockPanel Margin="0,0,0,18">
+            <Button Width="130"
+                    Height="40"
+                    Content="← Назад"
+                    Click="Back_Click"/>
+            <TextBlock Margin="16,7,0,0"
+                       FontSize="28"
+                       FontWeight="Bold"
+                       Foreground="#111827"
+                       Text="Настройки пользователя"/>
+        </DockPanel>
+
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Border Background="#FFFFFF"
+                        BorderBrush="#E7EBF4"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        Padding="20"
+                        Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="Профиль"
+                                   FontSize="20"
+                                   FontWeight="Bold"
+                                   Foreground="#121A2F"/>
+                        <TextBlock Text="Имя пользователя"
+                                   Margin="0,12,0,4"
+                                   Foreground="#6B7488"/>
+                        <TextBox x:Name="UsernameBox"
+                                 Height="40"/>
+                        <TextBlock Text="Email"
+                                   Margin="0,12,0,4"
+                                   Foreground="#6B7488"/>
+                        <TextBox x:Name="EmailBox"
+                                 Height="40"
+                                 IsReadOnly="True"/>
+                        <Button Margin="0,14,0,0"
+                                Height="42"
+                                Content="Сохранить имя"
+                                Click="SaveUsername_Click"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#FFFFFF"
+                        BorderBrush="#E7EBF4"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        Padding="20"
+                        Margin="0,0,0,14">
+                    <StackPanel>
+                        <TextBlock Text="Безопасность"
+                                   FontSize="20"
+                                   FontWeight="Bold"
+                                   Foreground="#121A2F"/>
+                        <TextBlock Text="Новый пароль"
+                                   Margin="0,12,0,4"
+                                   Foreground="#6B7488"/>
+                        <PasswordBox x:Name="NewPasswordBox"
+                                     Height="40"/>
+                        <TextBlock Text="Повторите пароль"
+                                   Margin="0,12,0,4"
+                                   Foreground="#6B7488"/>
+                        <PasswordBox x:Name="ConfirmPasswordBox"
+                                     Height="40"/>
+                        <Button Margin="0,14,0,0"
+                                Height="42"
+                                Content="Обновить пароль"
+                                Click="SavePassword_Click"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#FFFFFF"
+                        BorderBrush="#E7EBF4"
+                        BorderThickness="1"
+                        CornerRadius="16"
+                        Padding="20">
+                    <StackPanel>
+                        <TextBlock Text="Поведение интерфейса"
+                                   FontSize="20"
+                                   FontWeight="Bold"
+                                   Foreground="#121A2F"/>
+                        <CheckBox x:Name="CompactViewCheckBox"
+                                  Margin="0,14,0,0"
+                                  Content="Компактный вид карточек по умолчанию"/>
+                        <CheckBox x:Name="ConfirmLogoutCheckBox"
+                                  Margin="0,10,0,0"
+                                  Content="Подтверждать выход из аккаунта"/>
+                        <CheckBox x:Name="AnimationsCheckBox"
+                                  Margin="0,10,0,0"
+                                  Content="Включить анимации интерфейса"/>
+
+                        <StackPanel Orientation="Horizontal"
+                                    Margin="0,16,0,0">
+                            <Button Width="180"
+                                    Height="42"
+                                    Margin="0,0,12,0"
+                                    Content="Сохранить настройки"
+                                    Click="SavePreferences_Click"/>
+                            <Button Width="220"
+                                    Height="42"
+                                    Content="Очистить недавние доски"
+                                    Click="ClearRecentBoards_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

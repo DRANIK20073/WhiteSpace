@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using Newtonsoft.Json;
 using Supabase;
+using IOPath = System.IO.Path;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -80,6 +81,11 @@ namespace WhiteSpace.Pages
         private readonly Stack<List<BoardShape>> _redoHistory = new Stack<List<BoardShape>>();
         private const double DefaultImageW = 280;
         private const double DefaultImageH = 180;
+        private static readonly string BoardSnapshotsRoot = IOPath.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "WhiteSpace",
+            "board-snapshots");
+        private bool _isPresentationMode;
 
         public BoardPage(Guid boardId)
         {
@@ -734,18 +740,95 @@ namespace WhiteSpace.Pages
 
         private void PresentationMode_Click(object sender, RoutedEventArgs e)
         {
-            AppDialogService.ShowInfo("Режим презентации можно подключить следующим шагом. Каркас меню уже готов.", "Презентация");
+            if (Application.Current.MainWindow is not Window window)
+            {
+                return;
+            }
+
+            _isPresentationMode = !_isPresentationMode;
+            window.WindowState = _isPresentationMode ? WindowState.Maximized : WindowState.Normal;
+            window.WindowStyle = _isPresentationMode ? WindowStyle.None : WindowStyle.SingleBorderWindow;
+            window.Topmost = _isPresentationMode;
+
+            AppDialogService.ShowInfo(
+                _isPresentationMode
+                    ? "Режим презентации включен. Нажмите пункт меню снова, чтобы выйти."
+                    : "Режим презентации выключен.",
+                "Презентация");
         }
 
-        private void SaveVersion_Click(object sender, RoutedEventArgs e)
+        private async void SaveVersion_Click(object sender, RoutedEventArgs e)
         {
+            if (_shapesOnBoard.Count == 0)
+            {
+                AppDialogService.ShowInfo("На доске пока нет объектов для сохранения версии.", "Версия доски");
+                return;
+            }
+
+            var snapshotDirectory = GetSnapshotDirectory();
+            Directory.CreateDirectory(snapshotDirectory);
+
+            var payload = new BoardVersionSnapshot
+            {
+                SavedAtUtc = DateTime.UtcNow,
+                Shapes = CloneShapes(_shapesOnBoard)
+            };
+
+            var fileName = $"version-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json";
+            var filePath = IOPath.Combine(snapshotDirectory, fileName);
+
+            await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(payload, Formatting.Indented));
             MarkSaved();
             AppDialogService.ShowSuccess("Текущая версия отмечена как сохранённая.", "Версия доски");
         }
 
-        private void VersionHistory_Click(object sender, RoutedEventArgs e)
+        private async void VersionHistory_Click(object sender, RoutedEventArgs e)
         {
-            AppDialogService.ShowInfo("Историю версий можно добавить следующим шагом. Сейчас доступно меню и общий UX.", "История версий");
+            var snapshotDirectory = GetSnapshotDirectory();
+            if (!Directory.Exists(snapshotDirectory))
+            {
+                AppDialogService.ShowInfo("Сохраненных версий пока нет.", "История версий");
+                return;
+            }
+
+            var snapshots = Directory
+                .GetFiles(snapshotDirectory, "version-*.json")
+                .OrderByDescending(path => path)
+                .Take(10)
+                .ToList();
+
+            if (snapshots.Count == 0)
+            {
+                AppDialogService.ShowInfo("Сохраненных версий пока нет.", "История версий");
+                return;
+            }
+
+            var versionsPreview = string.Join(
+                Environment.NewLine,
+                snapshots.Select((path, index) => $"{index + 1}. {IOPath.GetFileNameWithoutExtension(path)}"));
+
+            var shouldRestore = AppDialogService.ShowConfirmation(
+                $"Найдено версий: {snapshots.Count}\n\n{versionsPreview}\n\nВосстановить самую свежую версию?",
+                "История версий",
+                "Восстановить",
+                "Закрыть");
+
+            if (!shouldRestore)
+            {
+                return;
+            }
+
+            var latestSnapshot = await File.ReadAllTextAsync(snapshots[0]);
+            var payload = JsonConvert.DeserializeObject<BoardVersionSnapshot>(latestSnapshot);
+            if (payload?.Shapes == null)
+            {
+                AppDialogService.ShowError("Не удалось прочитать сохраненную версию.", "История версий");
+                return;
+            }
+
+            _undoHistory.Push(CloneShapes(_shapesOnBoard));
+            await RestoreBoardStateAsync(payload.Shapes);
+            AppDialogService.ShowSuccess("Последняя сохраненная версия восстановлена.", "История версий");
         }
 
         private async void DeleteBoardMenu_Click(object sender, RoutedEventArgs e)
@@ -764,12 +847,61 @@ namespace WhiteSpace.Pages
 
         private void ExportPng_Click(object sender, RoutedEventArgs e)
         {
-            AppDialogService.ShowInfo("Экспорт в PNG можно подключить следующим шагом. Сейчас сохранил для вас новый интерфейс доски.", "Экспорт PNG");
+            try
+            {
+                var saveFileDialog = new SaveFileDialog
+                {
+                    Title = "Экспорт доски в PNG",
+                    Filter = "PNG image|*.png",
+                    FileName = $"{(_boardInfo?.Title ?? "board")}-{DateTime.Now:yyyyMMdd-HHmm}.png"
+                };
+
+                if (saveFileDialog.ShowDialog() != true)
+                {
+                    return;
+                }
+
+                var bounds = new Rect(Viewport.RenderSize);
+                var renderBitmap = new RenderTargetBitmap(
+                    Math.Max(1, (int)bounds.Width),
+                    Math.Max(1, (int)bounds.Height),
+                    96,
+                    96,
+                    PixelFormats.Pbgra32);
+                renderBitmap.Render(Viewport);
+
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(renderBitmap));
+
+                using var stream = File.Create(saveFileDialog.FileName);
+                encoder.Save(stream);
+
+                AppDialogService.ShowSuccess("Доска экспортирована в PNG.", "Экспорт PNG");
+            }
+            catch (Exception ex)
+            {
+                AppDialogService.ShowError($"Не удалось экспортировать PNG: {ex.Message}", "Экспорт PNG");
+            }
         }
 
         private void ExportPdf_Click(object sender, RoutedEventArgs e)
         {
-            AppDialogService.ShowInfo("Экспорт в PDF можно подключить следующим шагом. Сейчас интерфейс доски уже перестроен под новый дизайн.", "Экспорт PDF");
+            try
+            {
+                var printDialog = new PrintDialog();
+                var result = printDialog.ShowDialog();
+                if (result != true)
+                {
+                    return;
+                }
+
+                printDialog.PrintVisual(Viewport, $"WhiteSpace board {_boardInfo?.Title}");
+                AppDialogService.ShowSuccess("Отправлено в печать. Для PDF выберите принтер 'Microsoft Print to PDF'.", "Экспорт PDF");
+            }
+            catch (Exception ex)
+            {
+                AppDialogService.ShowError($"Не удалось отправить на печать: {ex.Message}", "Экспорт PDF");
+            }
         }
 
         private async void Undo_Click(object sender, RoutedEventArgs e)
@@ -2259,6 +2391,17 @@ namespace WhiteSpace.Pages
             _currentBrush = Brushes.Black;
             _currentColorString = Brushes.Black.ToString();
         }
+
+        private string GetSnapshotDirectory()
+        {
+            return IOPath.Combine(BoardSnapshotsRoot, _boardId.ToString("N"));
+        }
+    }
+
+    public sealed class BoardVersionSnapshot
+    {
+        public DateTime SavedAtUtc { get; set; }
+        public List<BoardShape> Shapes { get; set; } = new();
     }
 
     public sealed class BoardParticipantCard

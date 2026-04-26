@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -35,6 +36,8 @@ namespace WhiteSpace.Pages
         private bool _isCompactView;
         private string _userName = "Пользователь";
         private string _userEmail = "email@example.com";
+        private readonly DispatcherTimer _searchDebounceTimer;
+        private AppPreferences _preferences = new();
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -57,10 +60,16 @@ namespace WhiteSpace.Pages
         {
             InitializeComponent();
             DataContext = this;
+            _searchDebounceTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(250)
+            };
+            _searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            LoadPreferences();
             ApplySidebarSelection();
             ApplyViewModeSelection();
             await LoadDashboardAsync();
@@ -150,6 +159,7 @@ namespace WhiteSpace.Pages
 
                 _allBoards = cards;
                 RefreshVisibleBoards();
+            ApplyAnimationPreference();
             }
             catch (Exception ex)
             {
@@ -366,6 +376,8 @@ namespace WhiteSpace.Pages
         private void SetSection(DashboardSection section)
         {
             _currentSection = section;
+            _preferences.LastSection = section.ToString();
+            _preferences.Save();
             RefreshVisibleBoards();
         }
 
@@ -375,10 +387,21 @@ namespace WhiteSpace.Pages
 
         private void RecentBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.RecentBoards);
 
-        private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e) => RefreshVisibleBoards();
+        private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            _searchDebounceTimer.Stop();
+            _searchDebounceTimer.Start();
+        }
 
         private void SortComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            var selectedSort = (SortComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString();
+            if (!string.IsNullOrWhiteSpace(selectedSort))
+            {
+                _preferences.SortMode = selectedSort;
+                _preferences.Save();
+            }
+
             if (IsLoaded)
             {
                 RefreshVisibleBoards();
@@ -391,6 +414,9 @@ namespace WhiteSpace.Pages
             OnPropertyChanged(nameof(BoardCardWidth));
             OnPropertyChanged(nameof(BoardCardHeight));
             ApplyViewModeSelection();
+            _preferences.UseCompactView = false;
+            _preferences.Save();
+            RefreshVisibleBoards();
         }
 
         private void CompactViewButton_Click(object sender, RoutedEventArgs e)
@@ -399,6 +425,9 @@ namespace WhiteSpace.Pages
             OnPropertyChanged(nameof(BoardCardWidth));
             OnPropertyChanged(nameof(BoardCardHeight));
             ApplyViewModeSelection();
+            _preferences.UseCompactView = true;
+            _preferences.Save();
+            RefreshVisibleBoards();
         }
 
         private void ProfileButton_Click(object sender, RoutedEventArgs e)
@@ -413,7 +442,7 @@ namespace WhiteSpace.Pages
         private void ProfileSettings_Click(object sender, RoutedEventArgs e)
         {
             ProfilePopup.IsOpen = false;
-            AppDialogService.ShowInfo($"Имя: {_userName}\nПочта: {_userEmail}", "Настройки пользователя");
+            NavigationService?.Navigate(new UserSettingsPage());
         }
 
         private async void RefreshDashboard_Click(object sender, RoutedEventArgs e)
@@ -526,10 +555,107 @@ namespace WhiteSpace.Pages
 
         private void Logout_Click(object sender, RoutedEventArgs e)
         {
+            if (_preferences.ConfirmBeforeLogout &&
+                !AppDialogService.ShowConfirmation("Выйти из аккаунта?", "Подтверждение выхода", "Выйти", "Отмена"))
+            {
+                return;
+            }
+
             ProfilePopup.IsOpen = false;
             SessionStorage.ClearSession();
             SupabaseService.Client.Auth.SignOut();
             NavigationService?.Navigate(new LoginPage());
+        }
+
+        private void OpenSettings_Click(object sender, RoutedEventArgs e)
+        {
+            NavigationService?.Navigate(new UserSettingsPage());
+        }
+
+        private void SearchDebounceTimer_Tick(object? sender, EventArgs e)
+        {
+            _searchDebounceTimer.Stop();
+            RefreshVisibleBoards();
+        }
+
+        private void LoadPreferences()
+        {
+            _preferences = AppPreferences.Load();
+            _isCompactView = _preferences.UseCompactView;
+
+            if (Enum.TryParse<DashboardSection>(_preferences.LastSection, out var section))
+            {
+                _currentSection = section;
+            }
+
+            if (SortComboBox != null)
+            {
+                foreach (var item in SortComboBox.Items.OfType<ComboBoxItem>())
+                {
+                    if (string.Equals(item.Content?.ToString(), _preferences.SortMode, StringComparison.Ordinal))
+                    {
+                        SortComboBox.SelectedItem = item;
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void ApplyAnimationPreference()
+        {
+            if (_preferences.EnableAnimations)
+            {
+                return;
+            }
+
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                foreach (var border in FindVisualChildren<Border>(BoardsItemsControl))
+                {
+                    border.Opacity = 1;
+                    if (border.RenderTransform is TranslateTransform transform)
+                    {
+                        transform.Y = 0;
+                    }
+                }
+            }), DispatcherPriority.Loaded);
+        }
+
+        private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+        {
+            if (root == null)
+            {
+                yield break;
+            }
+
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var child = VisualTreeHelper.GetChild(root, i);
+                if (child is T typed)
+                {
+                    yield return typed;
+                }
+
+                foreach (var nested in FindVisualChildren<T>(child))
+                {
+                    yield return nested;
+                }
+            }
+        }
+
+        public static void ClearRecentBoards()
+        {
+            try
+            {
+                if (File.Exists(RecentBoardsPath))
+                {
+                    File.Delete(RecentBoardsPath);
+                }
+            }
+            catch
+            {
+                // Nothing critical: history cleanup can fail silently.
+            }
         }
 
         private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
