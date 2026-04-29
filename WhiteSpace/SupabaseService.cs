@@ -59,7 +59,10 @@ public class SupabaseService
         _client = new Supabase.Client(url, key, options);
         _authClient = (Supabase.Gotrue.Client)_client.Auth;
         await _client.InitializeAsync();
-        EnsureLocalServerStarted();
+        if (!TryEnsureLocalServerStarted(out var listenErr))
+        {
+            Debug.WriteLine($"Локальный OAuth-сервер не запущен при старте: {listenErr}");
+        }
     }
 
     //Регистрация
@@ -282,7 +285,13 @@ public class SupabaseService
                 return false;
             }
 
-            EnsureLocalServerStarted();
+            if (!TryEnsureLocalServerStarted(out var listenErr))
+            {
+                AppDialogService.ShowError(
+                    listenErr ?? "Не удалось запустить локальный сервер для ссылки восстановления пароля.",
+                    "Восстановление пароля");
+                return false;
+            }
 
             var options = new ResetPasswordForEmailOptions(email.Trim())
             {
@@ -313,17 +322,31 @@ public class SupabaseService
     {
         try
         {
-            // Создаем URL для OAuth авторизации через Supabase
-            string oauthUrl = $"https://ceqnfiznaanuzojjgdcs.supabase.co/auth/v1/authorize" +
-                              $"?provider=google" +
-                              $"&redirect_to={Uri.EscapeDataString(GoogleCallbackPageUrl)}";
+            if (string.IsNullOrWhiteSpace(SupabaseUrl) || string.IsNullOrWhiteSpace(SupabaseKey))
+            {
+                AppDialogService.ShowError("Клиент Supabase не инициализирован. Перезапустите приложение.", "Вход через Google");
+                return false;
+            }
+
+            if (!TryEnsureLocalServerStarted(out var listenErr))
+            {
+                AppDialogService.ShowError(
+                    listenErr ?? "Не удалось запустить локальный сервер для входа через Google.",
+                    "Вход через Google");
+                return false;
+            }
+
+            // Браузерный GET на /auth/v1/authorize должен передавать apikey (шлюз Supabase). Иначе авторизация может завершиться ошибкой.
+            string oauthUrl =
+                $"{SupabaseUrl.TrimEnd('/')}/auth/v1/authorize" +
+                $"?provider=google" +
+                $"&redirect_to={Uri.EscapeDataString(GoogleCallbackPageUrl)}" +
+                $"&apikey={Uri.EscapeDataString(SupabaseKey)}";
 
             AppDialogService.ShowInfo(
                 "Сейчас откроется браузер для входа через Google.\n" +
                 "После авторизации данные будут автоматически отправлены в приложение.",
                 "Вход через Google");
-
-            EnsureLocalServerStarted();
 
             var completionSource = new TaskCompletionSource<Dictionary<string, object>?>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -452,36 +475,64 @@ public class SupabaseService
         }
     }
 
-    public static void EnsureLocalServerStarted()
+    public static bool TryEnsureLocalServerStarted(out string? errorMessage)
     {
+        errorMessage = null;
+
         if (_localServer != null && _localServer.IsListening)
         {
-            return;
+            return true;
         }
 
         lock (_localServerLock)
         {
             if (_localServer != null && _localServer.IsListening)
             {
-                return;
+                return true;
             }
 
-            _localServer = new HttpListener();
-            _localServer.Prefixes.Add($"{LocalServerBaseUrl}/");
-        }
+            DisposeLocalServerUnsafe();
 
-        try
-        {
+            HttpListener? listener = null;
             try
             {
-                _localServer!.Start();
+                listener = new HttpListener();
+                listener.Prefixes.Add($"{LocalServerBaseUrl}/");
+                listener.Start();
             }
-            catch (HttpListenerException)
+            catch (HttpListenerException ex)
             {
-                return;
+                try
+                {
+                    listener?.Abort();
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                errorMessage = BuildLocalServerErrorMessage(ex);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    listener?.Abort();
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                errorMessage =
+                    $"Не удалось запустить локальный сервер на {LocalServerBaseUrl}: {ex.Message}";
+                return false;
             }
 
-            Console.WriteLine($"Локальный сервер запущен на {LocalServerBaseUrl}");
+            _localServer = listener;
+
+            Debug.WriteLine($"Локальный сервер запущен на {LocalServerBaseUrl}");
 
             Task.Run(async () =>
             {
@@ -492,31 +543,101 @@ public class SupabaseService
                         var context = await _localServer.GetContextAsync();
                         await HandleLocalServerRequestAsync(context);
                     }
+                    catch (ObjectDisposedException)
+                    {
+                        break;
+                    }
+                    catch (HttpListenerException)
+                    {
+                        break;
+                    }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Ошибка в локальном сервере: {ex.Message}");
+                        if (_localServer?.IsListening == true)
+                        {
+                            Debug.WriteLine($"Ошибка в локальном сервере: {ex.Message}");
+                        }
                     }
                 }
             });
+
+            return true;
         }
-        catch (Exception ex)
+    }
+
+    public static void EnsureLocalServerStarted()
+    {
+        TryEnsureLocalServerStarted(out _);
+    }
+
+    private static void DisposeLocalServerUnsafe()
+    {
+        try
         {
-            Console.WriteLine($"Ошибка запуска сервера: {ex.Message}");
+            if (_localServer == null)
+            {
+                return;
+            }
+
+            if (_localServer.IsListening)
+            {
+                _localServer.Stop();
+            }
+
+            _localServer.Close();
         }
+        catch
+        {
+            // ignore
+        }
+        finally
+        {
+            _localServer = null;
+        }
+    }
+
+    private static string BuildLocalServerErrorMessage(HttpListenerException ex)
+    {
+        var details =
+            $"Не удалось открыть локальный адрес {LocalServerBaseUrl}.\n{ex.Message} (код {ex.ErrorCode}).";
+
+        var hints =
+            "\n\nБез этого сервера браузер покажет ошибку подключения после входа через Google.\n\n" +
+            "Проверьте:\n" +
+            "• закройте другую копию WhiteSpace;\n" +
+            "• свободен ли порт 54322;\n" +
+            "• при отказе в доступе выполните в командной строке от администратора:\n" +
+            $"  netsh http add urlacl url={LocalServerBaseUrl}/ user={Environment.UserName}";
+
+        return details + hints;
     }
 
     private static async Task HandleLocalServerRequestAsync(HttpListenerContext context)
     {
         try
         {
-            if (context.Request.HttpMethod != "GET")
+            var path = context.Request.Url?.AbsolutePath?.ToLowerInvariant();
+            var method = context.Request.HttpMethod;
+
+            if (path == "/auth/callback" || path == "/auth/callback/")
             {
+                if (method == "GET" || method == "POST")
+                {
+                    await HandleGoogleCallbackAsync(context);
+                    return;
+                }
+
                 context.Response.StatusCode = 405;
                 context.Response.Close();
                 return;
             }
 
-            var path = context.Request.Url?.AbsolutePath?.ToLowerInvariant();
+            if (method != "GET")
+            {
+                context.Response.StatusCode = 405;
+                context.Response.Close();
+                return;
+            }
 
             switch (path)
             {
@@ -525,10 +646,6 @@ public class SupabaseService
                     break;
                 case "/password-reset.html":
                     await ServeLocalHtmlAsync(context, "password-reset.html");
-                    break;
-                case "/auth/callback/":
-                case "/auth/callback":
-                    await HandleGoogleCallbackAsync(context);
                     break;
                 case "/auth/reset-password/":
                 case "/auth/reset-password":
@@ -572,12 +689,30 @@ public class SupabaseService
 
     private static async Task HandleGoogleCallbackAsync(HttpListenerContext context)
     {
-        string data = context.Request.QueryString["data"];
+        string? payload = null;
+
+        if (string.Equals(context.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding);
+            payload = await reader.ReadToEndAsync();
+        }
+        else
+        {
+            payload = context.Request.QueryString["data"];
+        }
+
         Dictionary<string, object>? userData = null;
 
-        if (!string.IsNullOrWhiteSpace(data))
+        if (!string.IsNullOrWhiteSpace(payload))
         {
-            userData = JsonConvert.DeserializeObject<Dictionary<string, object>>(data);
+            try
+            {
+                userData = JsonConvert.DeserializeObject<Dictionary<string, object>>(payload);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"OAuth callback JSON: {ex.Message}");
+            }
         }
 
         _googleAuthCompletionSource?.TrySetResult(userData);

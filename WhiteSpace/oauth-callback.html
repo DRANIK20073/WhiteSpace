@@ -194,11 +194,14 @@
                 }
             }
 
-            // Отправляем данные в приложение через специальный URL
-            const callbackUrl = `http://127.0.0.1:54322/auth/callback?data=${encodeURIComponent(JSON.stringify(data))}`;
+            // POST вместо GET: JWT в query может превысить лимит длины URL и обрывать обмен с приложением.
+            const callbackUrl = 'http://127.0.0.1:54322/auth/callback';
 
-            // Отправляем данные
-            return fetch(callbackUrl)
+            return fetch(callbackUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            })
                 .then(response => response.text())
                 .then(result => {
                     return true;

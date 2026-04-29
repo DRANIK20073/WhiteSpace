@@ -38,28 +38,28 @@ namespace WhiteSpace
             switch (type)
             {
                 case Services.AppDialogType.Success:
-                    accentColor = "#2E7D32";
-                    badgeColor = "#EAF6EC";
+                    accentColor = "#8B5CF6";
+                    badgeColor = "#F5F3FF";
                     icon = "OK";
                     break;
                 case Services.AppDialogType.Warning:
-                    accentColor = "#C47F00";
-                    badgeColor = "#FFF5DE";
+                    accentColor = "#3B82F6";
+                    badgeColor = "#EFF6FF";
                     icon = "!";
                     break;
                 case Services.AppDialogType.Error:
-                    accentColor = "#C62828";
-                    badgeColor = "#FDECEC";
+                    accentColor = "#DC2626";
+                    badgeColor = "#FEF2F2";
                     icon = "X";
                     break;
                 case Services.AppDialogType.Question:
-                    accentColor = "#1565C0";
-                    badgeColor = "#EAF2FD";
+                    accentColor = "#3B82F6";
+                    badgeColor = "#EFF6FF";
                     icon = "?";
                     break;
                 default:
-                    accentColor = "#333333";
-                    badgeColor = "#F2F2F2";
+                    accentColor = "#1E293B";
+                    badgeColor = "#F1F5F9";
                     icon = "i";
                     break;
             }

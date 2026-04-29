@@ -96,6 +96,7 @@ namespace WhiteSpace.Pages
         private readonly Dictionary<Guid, FirebaseBoardMember> _presenceByUserId = new();
         private readonly Dictionary<Guid, FirebaseCursorState> _cursorByUserId = new();
         private readonly Dictionary<Guid, FrameworkElement> _cursorVisuals = new();
+        private readonly Dictionary<Guid, Brush> _cursorAccentByUserId = new();
         private DateTime _lastCursorPublishUtc = DateTime.MinValue;
         private const int CursorPublishThrottleMs = 50;
         private static readonly TimeSpan CursorOfflineTimeout = TimeSpan.FromSeconds(8);
@@ -704,6 +705,27 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private Brush ResolveCursorAccentBrush(Guid userId)
+        {
+            if (_cursorAccentByUserId.TryGetValue(userId, out var brush) && brush != null)
+            {
+                return brush;
+            }
+
+            var (_, stroke) = GetParticipantPalette(Math.Abs(userId.GetHashCode()));
+            return stroke;
+        }
+
+        private static Brush CloneBrushForFill(Brush brush)
+        {
+            if (brush is SolidColorBrush scb)
+            {
+                return new SolidColorBrush(scb.Color);
+            }
+
+            return brush.Clone();
+        }
+
         private void DrawOrMoveRemoteCursor(Guid userId, FirebaseCursorState state)
         {
             if (!_cursorVisuals.TryGetValue(userId, out var visual))
@@ -722,7 +744,7 @@ namespace WhiteSpace.Pages
                         new Point(0, 14),
                         new Point(9, 9)
                     },
-                    Fill = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                    Fill = CloneBrushForFill(ResolveCursorAccentBrush(userId)),
                     Stroke = Brushes.White,
                     StrokeThickness = 1
                 };
@@ -754,6 +776,10 @@ namespace WhiteSpace.Pages
                 && tagBorder.Child is TextBlock tagText)
             {
                 tagText.Text = state.DisplayName;
+                if (existingStack.Children[0] is Polygon pointerPoly)
+                {
+                    pointerPoly.Fill = CloneBrushForFill(ResolveCursorAccentBrush(userId));
+                }
             }
 
             Canvas.SetLeft(visual, state.X);
@@ -1053,6 +1079,7 @@ namespace WhiteSpace.Pages
         {
             var cards = new List<BoardParticipantCard>();
             int colorIndex = 0;
+            _cursorAccentByUserId.Clear();
 
             foreach (var member in members)
             {
@@ -1065,6 +1092,7 @@ namespace WhiteSpace.Pages
                     var accountInitials = GetInitials(accountDisplayName);
 
                     var (accountFill, accountStroke) = GetParticipantPalette(colorIndex++);
+                    _cursorAccentByUserId[member.UserId] = accountStroke;
                     var accountIsCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
 
                     var accountIsOnline = false;
@@ -1137,6 +1165,7 @@ namespace WhiteSpace.Pages
                 string initials = cachedProfile.Initials;
 
                 var (fill, stroke) = GetParticipantPalette(colorIndex++);
+                _cursorAccentByUserId[member.UserId] = stroke;
                 var isCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
                 var isOnline = false;
                 if (presenceByUserId != null
@@ -1699,11 +1728,11 @@ namespace WhiteSpace.Pages
                         HeaderAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
                         BubbleAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
                         BubbleBackground = isMine
-                            ? new SolidColorBrush(Color.FromRgb(14, 16, 38))
-                            : new SolidColorBrush(Color.FromRgb(241, 243, 248)),
+                            ? new SolidColorBrush(Color.FromRgb(139, 92, 246))
+                            : new SolidColorBrush(Color.FromRgb(241, 245, 249)),
                         TextForeground = isMine
                             ? Brushes.White
-                            : new SolidColorBrush(Color.FromRgb(43, 50, 69))
+                            : new SolidColorBrush(Color.FromRgb(30, 41, 59))
                     };
                 })
                 .ToList();

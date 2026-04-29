@@ -1,5 +1,7 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media.Animation;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
@@ -21,9 +23,24 @@ public partial class UserSettingsPage : Page
         ConfirmLogoutCheckBox.IsChecked = _preferences.ConfirmBeforeLogout;
         AnimationsCheckBox.IsChecked = _preferences.EnableAnimations;
 
+        var fadeIn = _preferences.EnableAnimations;
+        if (fadeIn)
+        {
+            Opacity = 0;
+        }
+
         var profile = await _service.GetMyProfileAsync();
         UsernameBox.Text = profile?.Username ?? string.Empty;
         EmailBox.Text = profile?.Email ?? string.Empty;
+
+        if (fadeIn)
+        {
+            var anim = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            BeginAnimation(OpacityProperty, anim);
+        }
     }
 
     private void Back_Click(object sender, RoutedEventArgs e)

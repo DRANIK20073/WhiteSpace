@@ -3,7 +3,7 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       Title="Регистрация"
-      Background="#333333">
+      Background="{StaticResource WsLoginPageBgBrush}">
 
     <Page.Resources>
         <!-- Стиль для кнопки регистрации с анимацией цвета -->
@@ -30,7 +30,7 @@
                                         <ColorAnimation 
                                             Storyboard.TargetName="border"
                                             Storyboard.TargetProperty="Background.Color"
-                                            To="#666666" Duration="0:0:0.2"/>
+                                            To="#A78BFA" Duration="0:0:0.2"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -57,7 +57,7 @@
                                         <ColorAnimation 
                                             Storyboard.TargetName="border"
                                             Storyboard.TargetProperty="Background.Color"
-                                            To="#333333" Duration="0:0:0.2"/>
+                                            To="#8B5CF6" Duration="0:0:0.2"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -84,7 +84,7 @@
                                         <ColorAnimation 
                                             Storyboard.TargetName="border"
                                             Storyboard.TargetProperty="Background.Color"
-                                            To="#000000" Duration="0:0:0.1"/>
+                                            To="#6D28D9" Duration="0:0:0.1"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -111,7 +111,7 @@
                                         <ColorAnimation 
                                             Storyboard.TargetName="border"
                                             Storyboard.TargetProperty="Background.Color"
-                                            To="#666666" Duration="0:0:0.1"/>
+                                            To="#A78BFA" Duration="0:0:0.1"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -163,7 +163,7 @@
                                         <ColorAnimation 
                                             Storyboard.TargetName="border"
                                             Storyboard.TargetProperty="Background.Color"
-                                            To="#F0F0F0" Duration="0:0:0.2"/>
+                                            To="#F1F5F9" Duration="0:0:0.2"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -217,7 +217,7 @@
                                         <ColorAnimation 
                                             Storyboard.TargetName="border"
                                             Storyboard.TargetProperty="Background.Color"
-                                            To="#E0E0E0" Duration="0:0:0.1"/>
+                                            To="#E2E8F0" Duration="0:0:0.1"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -249,6 +249,8 @@
         <Grid Width="700" Height="600">
             <!-- Карточка с тенью -->
             <Border Background="#FFFFFF"
+                    BorderBrush="#E2E8F0"
+                    BorderThickness="1"
                     CornerRadius="16"
                     Width="450"
                     HorizontalAlignment="Center" 
@@ -272,12 +274,12 @@
                         <TextBlock Text="WHITESPACE"
                                    FontSize="48"
                                    FontWeight="Bold"
-                                   Foreground="#000000"
+                                   Foreground="#1E293B"
                                    HorizontalAlignment="Center"/>
 
                         <TextBlock Text="Создайте новый аккаунт"
                                    FontSize="16"
-                                   Foreground="#666666"
+                                   Foreground="#64748B"
                                    HorizontalAlignment="Center"
                                    Margin="0,10,0,0"/>
                     </StackPanel>
@@ -307,7 +309,7 @@
                                 Style="{StaticResource AnimatedRegisterButton}"
                                 Height="45"
                                 FontSize="18"
-                                Background="#333333"
+                                Background="#8B5CF6"
                                 Foreground="#FFFFFF"
                                 BorderThickness="0"
                                 Cursor="Hand"
@@ -324,17 +326,17 @@
 
                             <Border Grid.Column="0" 
                                     Height="1" 
-                                    Background="#CCCCCC"
+                                    Background="#E2E8F0"
                                     VerticalAlignment="Center"/>
 
                             <TextBlock Grid.Column="1" 
                                        Text="или" 
                                        Margin="10,0" 
-                                       Foreground="#999999"/>
+                                       Foreground="#94A3B8"/>
 
                             <Border Grid.Column="2" 
                                     Height="1" 
-                                    Background="#CCCCCC"
+                                    Background="#E2E8F0"
                                     VerticalAlignment="Center"/>
                         </Grid>
 
@@ -345,7 +347,7 @@
                                 Margin="0,0,0,25"
                                 Click="GoogleLogin_Click"
                                 Background="#FFFFFF"
-                                BorderBrush="#CCCCCC"
+                                BorderBrush="#E2E8F0"
                                 BorderThickness="1"
                                 Cursor="Hand">
                             <Button.Content>
@@ -355,19 +357,19 @@
                                            Height="20" 
                                            Margin="0,0,10,0"/>
                                     <TextBlock Text="Зарегистрироваться с Google" 
-                                               Foreground="#333333"/>
+                                               Foreground="#1E293B"/>
                                 </StackPanel>
                             </Button.Content>
                         </Button>
 
                         <!-- Ссылка на вход -->
                         <TextBlock HorizontalAlignment="Center"
-                                   Foreground="#666666"
+                                   Foreground="#64748B"
                                    Margin="0,0,0,0">
                             <Run Text="Уже есть аккаунт? "/>
                             <Hyperlink x:Name="LoginLink"
                                        Click="LoginLink_Click"
-                                       Foreground="#333333">
+                                       Foreground="#8B5CF6">
                                 <Run Text="Войти" 
                                      FontWeight="SemiBold"/>
                             </Hyperlink>

@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using WhiteSpace.Services;
 
@@ -144,12 +145,15 @@ namespace WhiteSpace.Pages
                         CreatedText = FormatRelativeDate(board.CreatedAt),
                         AccentStart = paletteItem.Start,
                         AccentEnd = paletteItem.End,
-                        RoleBadgeBackground = role == "owner"
-                            ? new SolidColorBrush(Color.FromRgb(245, 158, 11))
-                            : new SolidColorBrush(Color.FromRgb(238, 242, 255)),
-                        RoleBadgeForeground = role == "owner"
-                            ? Brushes.White
-                            : new SolidColorBrush(Color.FromRgb(67, 56, 202)),
+                        RoleBadgeBackground = role switch
+                        {
+                            "owner" => new SolidColorBrush(Color.FromRgb(139, 92, 246)),
+                            "editor" => new SolidColorBrush(Color.FromRgb(59, 130, 246)),
+                            _ => new SolidColorBrush(Color.FromRgb(241, 245, 249))
+                        },
+                        RoleBadgeForeground = role == "viewer"
+                            ? new SolidColorBrush(Color.FromRgb(100, 116, 139))
+                            : Brushes.White,
                         DeleteVisibility = role == "owner" ? Visibility.Visible : Visibility.Collapsed
                     });
                 }
@@ -274,7 +278,7 @@ namespace WhiteSpace.Pages
 
         private void ApplySidebarSelection()
         {
-            var activeBackground = new SolidColorBrush(Color.FromRgb(34, 45, 72));
+            var activeBackground = new SolidColorBrush(Color.FromRgb(51, 65, 85));
             var transparent = Brushes.Transparent;
 
             MyBoardsButton.Background = _currentSection == DashboardSection.MyBoards ? activeBackground : transparent;
@@ -284,13 +288,13 @@ namespace WhiteSpace.Pages
 
         private void ApplyViewModeSelection()
         {
-            LargeViewButton.Background = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(14, 16, 38));
-            LargeViewButton.Foreground = _isCompactView ? new SolidColorBrush(Color.FromRgb(15, 23, 42)) : Brushes.White;
-            LargeViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(228, 233, 243)) : new SolidColorBrush(Color.FromRgb(14, 16, 38));
+            LargeViewButton.Background = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(139, 92, 246));
+            LargeViewButton.Foreground = _isCompactView ? new SolidColorBrush(Color.FromRgb(30, 41, 59)) : Brushes.White;
+            LargeViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(226, 232, 240)) : new SolidColorBrush(Color.FromRgb(139, 92, 246));
 
-            CompactViewButton.Background = _isCompactView ? new SolidColorBrush(Color.FromRgb(14, 16, 38)) : Brushes.White;
-            CompactViewButton.Foreground = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(15, 23, 42));
-            CompactViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(14, 16, 38)) : new SolidColorBrush(Color.FromRgb(228, 233, 243));
+            CompactViewButton.Background = _isCompactView ? new SolidColorBrush(Color.FromRgb(139, 92, 246)) : Brushes.White;
+            CompactViewButton.Foreground = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            CompactViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(139, 92, 246)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
         }
 
         private void UpdateBoardsVisibility()
@@ -325,10 +329,10 @@ namespace WhiteSpace.Pages
         {
             return new[]
             {
-                (Color.FromRgb(108, 99, 255), Color.FromRgb(60, 183, 255)),
-                (Color.FromRgb(60, 183, 255), Color.FromRgb(155, 106, 255)),
-                (Color.FromRgb(87, 108, 188), Color.FromRgb(108, 99, 255)),
-                (Color.FromRgb(108, 99, 255), Color.FromRgb(196, 92, 255))
+                (Color.FromRgb(139, 92, 246), Color.FromRgb(59, 130, 246)),
+                (Color.FromRgb(124, 58, 237), Color.FromRgb(96, 165, 250)),
+                (Color.FromRgb(59, 130, 246), Color.FromRgb(139, 92, 246)),
+                (Color.FromRgb(30, 41, 59), Color.FromRgb(139, 92, 246))
             };
         }
 
@@ -438,7 +442,20 @@ namespace WhiteSpace.Pages
 
         private void ProfileButton_Click(object sender, RoutedEventArgs e)
         {
-            OpenSettings();
+            if (_preferences.EnableAnimations && RootPageGrid != null)
+            {
+                RootPageGrid.BeginAnimation(UIElement.OpacityProperty, null);
+                var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+                };
+                fade.Completed += (_, _) => OpenSettings();
+                RootPageGrid.BeginAnimation(UIElement.OpacityProperty, fade);
+            }
+            else
+            {
+                OpenSettings();
+            }
         }
 
         private void OpenSettings()
