@@ -16,6 +16,8 @@ namespace WhiteSpace
 
         private const string SHAPES_PATH = "shapes";
         private const string MEMBERS_PATH = "members";
+        private const string CURSORS_PATH = "cursors";
+        private const string CHAT_MESSAGES_PATH = "chat_messages";
 
         public FirebaseService()
         {
@@ -228,6 +230,135 @@ namespace WhiteSpace
             }
         }
 
+        public async Task<List<FirebaseBoardMember>> GetBoardMembersSnapshotAsync(string boardId)
+        {
+            try
+            {
+                var snapshot = await _client
+                    .Child(MEMBERS_PATH)
+                    .Child(boardId)
+                    .OnceSingleAsync<Dictionary<string, FirebaseBoardMember>>();
+
+                return snapshot?.Values.ToList() ?? new List<FirebaseBoardMember>();
+            }
+            catch
+            {
+                return new List<FirebaseBoardMember>();
+            }
+        }
+
+        #endregion
+
+        #region Chat
+
+        public IObservable<List<FirebaseChatMessage>> GetBoardChatMessagesObservable(string boardId)
+        {
+            return _client
+                .Child(CHAT_MESSAGES_PATH)
+                .Child(boardId)
+                .AsObservable<object>()
+                .SelectMany(_ => Observable.FromAsync(async () =>
+                {
+                    try
+                    {
+                        var snapshot = await _client
+                            .Child(CHAT_MESSAGES_PATH)
+                            .Child(boardId)
+                            .OnceSingleAsync<Dictionary<string, FirebaseChatMessage>>();
+
+                        return snapshot?.Values.ToList() ?? new List<FirebaseChatMessage>();
+                    }
+                    catch
+                    {
+                        return new List<FirebaseChatMessage>();
+                    }
+                }));
+        }
+
+        public async Task PushChatMessageAsync(string boardId, FirebaseChatMessage message)
+        {
+            try
+            {
+                await _client
+                    .Child(CHAT_MESSAGES_PATH)
+                    .Child(boardId)
+                    .Child(message.Id)
+                    .PutAsync(message);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки сообщения в Firebase: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Cursors
+
+        public IObservable<List<FirebaseCursorState>> GetBoardCursorsObservable(string boardId)
+        {
+            return _client
+                .Child(CURSORS_PATH)
+                .Child(boardId)
+                .AsObservable<object>()
+                .SelectMany(_ => Observable.FromAsync(async () =>
+                {
+                    try
+                    {
+                        var snapshot = await _client
+                            .Child(CURSORS_PATH)
+                            .Child(boardId)
+                            .OnceSingleAsync<Dictionary<string, FirebaseCursorState>>();
+
+                        return snapshot?.Values.ToList() ?? new List<FirebaseCursorState>();
+                    }
+                    catch
+                    {
+                        return new List<FirebaseCursorState>();
+                    }
+                }));
+        }
+
+        public async Task UpsertCursorAsync(string boardId, FirebaseCursorState cursorState)
+        {
+            try
+            {
+                await _client
+                    .Child(CURSORS_PATH)
+                    .Child(boardId)
+                    .Child(cursorState.UserId)
+                    .PutAsync(new
+                    {
+                        cursorState.UserId,
+                        cursorState.DisplayName,
+                        cursorState.X,
+                        cursorState.Y,
+                        cursorState.IsVisible,
+                        cursorState.UpdatedAtUtc
+                    });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка отправки курсора в Firebase: {ex.Message}");
+            }
+        }
+
+        public async Task DeleteCursorAsync(string boardId, string userId)
+        {
+            try
+            {
+                await _client
+                    .Child(CURSORS_PATH)
+                    .Child(boardId)
+                    .Child(userId)
+                    .DeleteAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка удаления курсора из Firebase: {ex.Message}");
+            }
+        }
+
         #endregion
 
         public void Dispose()
@@ -243,5 +374,24 @@ namespace WhiteSpace
         public DateTime JoinedAt { get; set; }
         public bool IsOnline { get; set; }
         public DateTime LastSeenUtc { get; set; }
+    }
+
+    public class FirebaseCursorState
+    {
+        public string UserId { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public double X { get; set; }
+        public double Y { get; set; }
+        public bool IsVisible { get; set; } = true;
+        public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    }
+
+    public class FirebaseChatMessage
+    {
+        public string Id { get; set; } = string.Empty;
+        public string UserId { get; set; } = string.Empty;
+        public string UserName { get; set; } = string.Empty;
+        public string Text { get; set; } = string.Empty;
+        public DateTime SentAtUtc { get; set; } = DateTime.UtcNow;
     }
 }

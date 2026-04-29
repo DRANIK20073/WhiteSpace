@@ -493,6 +493,7 @@
                             <TextBlock Text="Недавние" Margin="12,0,0,0"/>
                         </StackPanel>
                     </Button>
+
                 </StackPanel>
 
                 <Border Grid.Row="2"

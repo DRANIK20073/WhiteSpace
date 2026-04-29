@@ -17,6 +17,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using WhiteSpace;
 using WhiteSpace.Pages;
 using WhiteSpace.Services;
 using static Supabase.Gotrue.Constants;
@@ -32,6 +33,7 @@ public class SupabaseService
     private const string LocalServerBaseUrl = "http://127.0.0.1:54322";
     private const string GoogleCallbackPageUrl = $"{LocalServerBaseUrl}/oauth-callback.html";
     private const string PasswordResetPageUrl = $"{LocalServerBaseUrl}/password-reset.html";
+    private static bool _localAdminSessionActive;
 
     public static Supabase.Client Client => _client;
 
@@ -364,6 +366,8 @@ public class SupabaseService
 
                         var profile = await GetProfileByActorIdAsync(_client.Auth.CurrentUser.Id);
 
+                        var isAdmin = await IsCurrentUserAdminAsync();
+
                         Application.Current.Dispatcher.Invoke(() =>
                         {
                             if (profile != null && !string.IsNullOrEmpty(profile.Username))
@@ -375,7 +379,7 @@ public class SupabaseService
                                 AppDialogService.ShowSuccess($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}", "Вход через Google");
                             }
 
-                            currentPage.NavigationService.Navigate(new UserHomePage());
+                            currentPage.NavigationService.Navigate(isAdmin ? new AdminPage() : new UserHomePage());
                         });
 
                         return true;
@@ -1264,4 +1268,253 @@ public class SupabaseService
         }
     }
 
+    public async Task<bool> IsCurrentUserAdminAsync()
+    {
+        if (_localAdminSessionActive)
+        {
+            return true;
+        }
+
+        // Админ-режим теперь включается только через TryAdminLoginAsync (таблица admin_credentials).
+        await Task.CompletedTask;
+        return false;
+    }
+
+    public async Task<bool> TryAdminLoginAsync(string? login, string? password)
+    {
+        var normalizedLogin = login?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedLogin) || string.IsNullOrEmpty(password))
+        {
+            _localAdminSessionActive = false;
+            return false;
+        }
+
+        try
+        {
+            if (await EnsureClientReadyAsync())
+            {
+                var response = await _client.From<AdminCredential>()
+                    .Where(x => x.Login == normalizedLogin && x.IsActive == true)
+                    .Get();
+
+                var row = response.Models?.FirstOrDefault();
+                if (row != null && string.Equals(row.Password, password, StringComparison.Ordinal))
+                {
+                    _localAdminSessionActive = true;
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+            // fall back to env vars if table is unavailable
+        }
+
+        var adminLogin = Environment.GetEnvironmentVariable("WHITESPACE_ADMIN_LOGIN");
+        var adminPassword = Environment.GetEnvironmentVariable("WHITESPACE_ADMIN_PASSWORD");
+        var fallbackMatch =
+            !string.IsNullOrWhiteSpace(adminLogin) &&
+            !string.IsNullOrWhiteSpace(adminPassword) &&
+            string.Equals(normalizedLogin, adminLogin, StringComparison.Ordinal) &&
+            string.Equals(password, adminPassword, StringComparison.Ordinal);
+
+        _localAdminSessionActive = fallbackMatch;
+        return fallbackMatch;
+    }
+
+    public static void ClearLocalAdminSession()
+    {
+        _localAdminSessionActive = false;
+    }
+
+    private static async Task<bool> EnsureClientReadyAsync()
+    {
+        if (_client != null)
+        {
+            return true;
+        }
+
+        try
+        {
+            await InitAsync();
+            return _client != null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task<AdminDashboardData> GetAdminDashboardDataAsync()
+    {
+        try
+        {
+            var profilesResponse = await _client.From<Profile>().Get();
+            var boardsResponse = await _client.From<Board>().Get();
+            var membersResponse = await _client.From<BoardMember>().Get();
+            var shapesResponse = await _client.From<BoardShape>().Get();
+            var onlineUsers = await GetOnlineUsersSnapshotAsync(boardsResponse.Models?.ToList() ?? new List<Board>());
+
+            return new AdminDashboardData
+            {
+                Profiles = profilesResponse.Models?.ToList() ?? new List<Profile>(),
+                Boards = boardsResponse.Models?.ToList() ?? new List<Board>(),
+                Members = membersResponse.Models?.ToList() ?? new List<BoardMember>(),
+                Shapes = shapesResponse.Models?.ToList() ?? new List<BoardShape>(),
+                OnlineUsers = onlineUsers,
+                LoadedAtUtc = DateTime.UtcNow
+            };
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError(
+                $"Не удалось загрузить данные админки: {ex.Message}\n\nПроверьте, что политики RLS в Supabase разрешают администратору читать таблицы profiles, boards, board_members и boardshape.",
+                "Админка");
+
+            return new AdminDashboardData
+            {
+                LoadedAtUtc = DateTime.UtcNow
+            };
+        }
+    }
+
+    private static async Task<List<AdminOnlineUserSnapshot>> GetOnlineUsersSnapshotAsync(List<Board> boards)
+    {
+        var result = new Dictionary<Guid, DateTime>();
+
+        try
+        {
+            using var firebaseService = new FirebaseService();
+
+            foreach (var board in boards)
+            {
+                var members = await firebaseService.GetBoardMembersSnapshotAsync(board.Id.ToString());
+                foreach (var member in members)
+                {
+                    if (!member.IsOnline || !Guid.TryParse(member.UserId, out var userId))
+                    {
+                        continue;
+                    }
+
+                    var lastSeen = member.LastSeenUtc == DateTime.MinValue ? DateTime.UtcNow : member.LastSeenUtc;
+                    if (!result.TryGetValue(userId, out var existingSeen) || lastSeen > existingSeen)
+                    {
+                        result[userId] = lastSeen;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Presence is best-effort for the admin dashboard.
+        }
+
+        return result
+            .Select(x => new AdminOnlineUserSnapshot
+            {
+                UserId = x.Key,
+                LastSeenUtc = x.Value
+            })
+            .ToList();
+    }
+
+    public async Task<bool> AdminDeleteBoardAsync(Guid boardId)
+    {
+        try
+        {
+            var board = await _client.From<Board>()
+                .Where(b => b.Id == boardId)
+                .Single();
+
+            if (board == null)
+            {
+                AppDialogService.ShowWarning("Доска не найдена.", "Админка");
+                return false;
+            }
+
+            await _client.From<BoardMember>()
+                .Where(m => m.BoardId == boardId)
+                .Delete();
+
+            await _client.From<BoardShape>()
+                .Where(s => s.BoardId == boardId)
+                .Delete();
+
+            await _client.From<Board>()
+                .Where(b => b.Id == boardId)
+                .Delete();
+
+            AppDialogService.ShowSuccess($"Доска \"{board.Title}\" удалена.", "Админка");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError($"Ошибка удаления доски администратором: {ex.Message}", "Админка");
+            return false;
+        }
+    }
+
+    public async Task<bool> AdminDeleteProfileAsync(Guid userId)
+    {
+        try
+        {
+            var currentUser = _client.Auth.CurrentUser;
+            if (currentUser != null && Guid.TryParse(currentUser.Id, out var currentUserId) && currentUserId == userId)
+            {
+                AppDialogService.ShowWarning("Нельзя удалить текущий профиль администратора из админки.", "Админка");
+                return false;
+            }
+
+            var ownedBoards = await _client.From<Board>()
+                .Where(b => b.OwnerId == userId)
+                .Get();
+
+            if (ownedBoards.Models?.Any() == true)
+            {
+                AppDialogService.ShowWarning(
+                    "У пользователя есть собственные доски. Сначала удалите эти доски или переназначьте владельца в базе данных.",
+                    "Админка");
+                return false;
+            }
+
+            await _client.From<BoardMember>()
+                .Where(m => m.UserId == userId)
+                .Delete();
+
+            await _client.From<Profile>()
+                .Where(p => p.Id == userId)
+                .Delete();
+
+            AppDialogService.ShowSuccess("Профиль и его доступы к доскам удалены.", "Админка");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError($"Ошибка удаления профиля: {ex.Message}", "Админка");
+            return false;
+        }
+    }
+
+}
+
+public sealed class AdminDashboardData
+{
+    public List<Profile> Profiles { get; set; } = new();
+
+    public List<Board> Boards { get; set; } = new();
+
+    public List<BoardMember> Members { get; set; } = new();
+
+    public List<BoardShape> Shapes { get; set; } = new();
+
+    public List<AdminOnlineUserSnapshot> OnlineUsers { get; set; } = new();
+
+    public DateTime LoadedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class AdminOnlineUserSnapshot
+{
+    public Guid UserId { get; set; }
+
+    public DateTime LastSeenUtc { get; set; }
 }

@@ -17,9 +17,14 @@ namespace WhiteSpace.Pages
 
         private async void Login_Click(object sender, RoutedEventArgs e)
         {
-            var service = new SupabaseService();
+            if (await _supabaseService.TryAdminLoginAsync(EmailBox.Text, PasswordBox.Password))
+            {
+                AppDialogService.ShowSuccess("Вход администратора выполнен.", "Админка");
+                NavigateAndClear(new AdminPage());
+                return;
+            }
 
-            bool success = await service.SignInAsync(
+            bool success = await _supabaseService.SignInAsync(
                 EmailBox.Text,
                 PasswordBox.Password,
                 RememberMeCheckBox.IsChecked == true
@@ -27,7 +32,8 @@ namespace WhiteSpace.Pages
 
             if (success)
             {
-                NavigationService.Navigate(new UserHomePage());
+                var isAdmin = await _supabaseService.IsCurrentUserAdminAsync();
+                NavigateAndClear(isAdmin ? new AdminPage() : new UserHomePage());
             }
         }
 

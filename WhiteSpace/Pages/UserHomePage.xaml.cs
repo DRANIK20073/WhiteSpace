@@ -569,6 +569,7 @@ namespace WhiteSpace.Pages
             }
 
             SessionStorage.ClearSession();
+            SupabaseService.ClearLocalAdminSession();
             SupabaseService.Client.Auth.SignOut();
             NavigationService?.Navigate(new LoginPage());
         }

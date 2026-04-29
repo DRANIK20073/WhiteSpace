@@ -269,6 +269,19 @@
                             </TransformGroup>
                         </Canvas.RenderTransform>
                     </Canvas>
+                    <Canvas x:Name="CursorCanvas"
+                            Width="50000"
+                            Height="50000"
+                            IsHitTestVisible="False">
+                        <Canvas.RenderTransform>
+                            <TransformGroup>
+                                <ScaleTransform ScaleX="{Binding ElementName=BoardScale, Path=ScaleX}"
+                                                ScaleY="{Binding ElementName=BoardScale, Path=ScaleY}"/>
+                                <TranslateTransform X="{Binding ElementName=BoardTranslate, Path=X}"
+                                                    Y="{Binding ElementName=BoardTranslate, Path=Y}"/>
+                            </TransformGroup>
+                        </Canvas.RenderTransform>
+                    </Canvas>
                 </Grid>
             </Border>
 
@@ -472,38 +485,32 @@
                                         Content="×"/>
                             </Grid>
 
-                            <StackPanel Grid.Row="1" Margin="16,0,16,12">
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                    <Border Width="30" Height="30" CornerRadius="15" Background="#E8FFF4" BorderBrush="#10B981" BorderThickness="2">
-                                        <TextBlock Text="A" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#0F8A5F"/>
-                                    </Border>
-                                    <StackPanel Margin="10,0,0,0">
-                                        <TextBlock Text="Анна Смирнова 16:39" FontSize="12" Foreground="#8A93A5"/>
-                                        <Border Background="#F1F3F8" CornerRadius="14" Padding="12,8" Margin="0,4,0,0">
-                                            <TextBlock Text="Привет! Отличная идея для проекта" TextWrapping="Wrap" Foreground="#2B3245"/>
-                                        </Border>
-                                    </StackPanel>
-                                </StackPanel>
-
-                                <StackPanel HorizontalAlignment="Right" Margin="0,0,0,12">
-                                    <TextBlock Text="Вы 16:40" FontSize="12" Foreground="#8A93A5" HorizontalAlignment="Right"/>
-                                    <Border Background="#0E1026" CornerRadius="14" Padding="12,8" Margin="0,4,0,0">
-                                        <TextBlock Text="Спасибо! Давайте начнем с диаграммы" TextWrapping="Wrap" Foreground="#FFFFFF"/>
-                                    </Border>
-                                </StackPanel>
-
-                                <StackPanel Orientation="Horizontal">
-                                    <Border Width="30" Height="30" CornerRadius="15" Background="#FFF5E9" BorderBrush="#F59E0B" BorderThickness="2">
-                                        <TextBlock Text="M" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#B86B00"/>
-                                    </Border>
-                                    <StackPanel Margin="10,0,0,0">
-                                        <TextBlock Text="Михаил Козлов 16:42" FontSize="12" Foreground="#8A93A5"/>
-                                        <Border Background="#F1F3F8" CornerRadius="14" Padding="12,8" Margin="0,4,0,0">
-                                            <TextBlock Text="Я добавлю схему архитектуры" TextWrapping="Wrap" Foreground="#2B3245"/>
-                                        </Border>
-                                    </StackPanel>
-                                </StackPanel>
-                            </StackPanel>
+                            <ScrollViewer Grid.Row="1"
+                                          Margin="16,0,16,12"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsControl x:Name="ChatMessagesItemsControl">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,0,0,10">
+                                                <TextBlock Text="{Binding HeaderText}"
+                                                           FontSize="12"
+                                                           Foreground="#8A93A5"
+                                                           HorizontalAlignment="{Binding HeaderAlignment}"/>
+                                                <Border Background="{Binding BubbleBackground}"
+                                                        CornerRadius="14"
+                                                        Padding="12,8"
+                                                        Margin="0,4,0,0"
+                                                        HorizontalAlignment="{Binding BubbleAlignment}"
+                                                        MaxWidth="280">
+                                                    <TextBlock Text="{Binding Text}"
+                                                               TextWrapping="Wrap"
+                                                               Foreground="{Binding TextForeground}"/>
+                                                </Border>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
 
                             <Grid Grid.Row="2" Margin="16,0,16,16">
                                 <Grid.ColumnDefinitions>
@@ -518,7 +525,8 @@
                                          Background="#F6F7FB"
                                          BorderBrush="#E6E8EF"
                                          BorderThickness="1"
-                                         Text="Введите сообщение..."/>
+                                         Text=""
+                                         KeyDown="ChatInputBox_KeyDown"/>
 
                                 <Button Grid.Column="1"
                                         Width="42"

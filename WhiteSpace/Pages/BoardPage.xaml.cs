@@ -6,6 +6,7 @@ using Supabase;
 using IOPath = System.IO.Path;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -34,6 +35,8 @@ namespace WhiteSpace.Pages
 
         private IDisposable _shapesSubscription;
         private IDisposable _membersSubscription;
+        private IDisposable _cursorsSubscription;
+        private IDisposable _chatSubscription;
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
 
@@ -91,11 +94,34 @@ namespace WhiteSpace.Pages
         private readonly DispatcherTimer _accessMonitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private bool _isAccessCheckRunning;
         private readonly Dictionary<Guid, FirebaseBoardMember> _presenceByUserId = new();
+        private readonly Dictionary<Guid, FirebaseCursorState> _cursorByUserId = new();
+        private readonly Dictionary<Guid, FrameworkElement> _cursorVisuals = new();
+        private DateTime _lastCursorPublishUtc = DateTime.MinValue;
+        private const int CursorPublishThrottleMs = 50;
+        private static readonly TimeSpan CursorOfflineTimeout = TimeSpan.FromSeconds(8);
+        private static readonly TimeSpan PresenceHeartbeatInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan PresenceOfflineTimeout = TimeSpan.FromSeconds(15);
+        private readonly DispatcherTimer _presenceHeartbeatTimer = new() { Interval = PresenceHeartbeatInterval };
+        private readonly DispatcherTimer _presenceUiRefreshTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+        private bool _isPresenceHeartbeatInFlight;
+        private bool _isPresenceUiRefreshInFlight;
+        private bool _isPageUnloading;
+        private Guid? _myUserId;
+        private string? _myUserRole;
+        private DateTime _myJoinedAtUtc = DateTime.MinValue;
+        private List<BoardMember> _cachedBoardMembers = new();
+        private Guid? _cachedCurrentUserId;
+        private readonly Dictionary<Guid, (string DisplayName, string Initials)> _profileDisplayNameCache = new();
+        private readonly bool _returnToAdminPage;
+        private bool _isAdminSession;
+        private string _cursorDisplayName = "Участник";
+        private readonly ObservableCollection<ChatMessageViewModel> _chatMessages = new();
 
-        public BoardPage(Guid boardId)
+        public BoardPage(Guid boardId, bool returnToAdminPage = false)
         {
             InitializeComponent();
             _boardId = boardId;
+            _returnToAdminPage = returnToAdminPage;
             _supabaseService = new SupabaseService();
             _firebaseService = new FirebaseService();
 
@@ -104,21 +130,25 @@ namespace WhiteSpace.Pages
             Viewport.MouseMove += Viewport_MouseMove;
             Viewport.MouseUp += Viewport_MouseUp;
             Viewport.MouseWheel += Viewport_MouseWheel;
+            Viewport.MouseLeave += Viewport_MouseLeave;
 
             Loaded += Page_Loaded;
             Unloaded += Page_Unloaded;
             _accessMonitorTimer.Tick += AccessMonitorTimer_Tick;
+            _presenceHeartbeatTimer.Tick += PresenceHeartbeatTimer_Tick;
+            _presenceUiRefreshTimer.Tick += PresenceUiRefreshTimer_Tick;
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             await LoadBoardMetadataAsync();
+            _isAdminSession = await _supabaseService.IsCurrentUserAdminAsync();
 
             // Загружаем фигуры из Supabase
             await LoadShapesFromSupabase();
 
             // Определяем роль пользователя
-            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+            var userRole = _isAdminSession ? "owner" : await _supabaseService.GetUserRoleForBoardAsync(_boardId);
 
             if (userRole == "viewer" || userRole == "editor")
             {
@@ -147,8 +177,14 @@ namespace WhiteSpace.Pages
             // Подписываемся на изменения фигур из Firebase (только для получения обновлений)
             SubscribeToShapes();
             SubscribeToBoardMembers();
+            SubscribeToCursors();
+            SubscribeToChatMessages();
             await SetCurrentUserPresenceAsync(true);
+            await InitCursorIdentityAsync();
+            ChatMessagesItemsControl.ItemsSource = _chatMessages;
             _accessMonitorTimer.Start();
+            _presenceHeartbeatTimer.Start();
+            _presenceUiRefreshTimer.Start();
         }
 
         private async Task LoadBoardMetadataAsync()
@@ -260,18 +296,77 @@ namespace WhiteSpace.Pages
             BoardTranslate.Y = viewportCenter.Y - canvasCenter.Y;
         }
 
-        private void Page_Unloaded(object sender, RoutedEventArgs e)
+        private async void Page_Unloaded(object sender, RoutedEventArgs e)
         {
+            _isPageUnloading = true;
+
             // Отписываемся от событий при выходе
             _shapesSubscription?.Dispose();
             _membersSubscription?.Dispose();
+            _cursorsSubscription?.Dispose();
+            _chatSubscription?.Dispose();
             _accessMonitorTimer.Stop();
-            _ = SetCurrentUserPresenceAsync(false);
+            _presenceHeartbeatTimer.Stop();
+            _presenceUiRefreshTimer.Stop();
+            await RemoveCurrentUserCursorAsync();
+
+            try
+            {
+                await SetCurrentUserPresenceAsync(false);
+            }
+            catch
+            {
+                // Не критично: при закрытии приложения запрос presence может не успеть завершиться.
+            }
         }
 
         private async void AccessMonitorTimer_Tick(object? sender, EventArgs e)
         {
             await RefreshCurrentUserPermissionsAsync();
+        }
+
+        private async void PresenceHeartbeatTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_isPageUnloading || _isPresenceHeartbeatInFlight)
+            {
+                return;
+            }
+
+            _isPresenceHeartbeatInFlight = true;
+            try
+            {
+                await SetCurrentUserPresenceAsync(true);
+            }
+            finally
+            {
+                _isPresenceHeartbeatInFlight = false;
+            }
+        }
+
+        private async void PresenceUiRefreshTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_isPageUnloading || _isPresenceUiRefreshInFlight)
+            {
+                return;
+            }
+
+            if (_cachedBoardMembers.Count == 0)
+            {
+                return;
+            }
+
+            _isPresenceUiRefreshInFlight = true;
+            try
+            {
+                UsersListView.ItemsSource = await CreateParticipantCardsAsync(
+                    _cachedBoardMembers,
+                    _cachedCurrentUserId,
+                    _presenceByUserId);
+            }
+            finally
+            {
+                _isPresenceUiRefreshInFlight = false;
+            }
         }
 
         // Загрузка фигур из Supabase
@@ -492,23 +587,35 @@ namespace WhiteSpace.Pages
         {
             try
             {
-                var profile = await _supabaseService.GetMyProfileAsync();
-                if (profile == null)
+                if (_isAdminSession)
                 {
                     return;
                 }
 
-                var role = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
-                if (string.IsNullOrWhiteSpace(role))
+                _myUserId ??= (await _supabaseService.GetMyProfileAsync())?.Id;
+                if (_myUserId == null)
                 {
                     return;
                 }
+
+                _myUserRole ??= await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+                if (string.IsNullOrWhiteSpace(_myUserRole))
+                {
+                    return;
+                }
+
+                if (_myJoinedAtUtc == DateTime.MinValue)
+                {
+                    _myJoinedAtUtc = DateTime.UtcNow;
+                }
+
+                var joinedAtUtc = _myJoinedAtUtc;
 
                 await _firebaseService.PushBoardMemberAsync(_boardId.ToString(), new FirebaseBoardMember
                 {
-                    UserId = profile.Id.ToString(),
-                    Role = role,
-                    JoinedAt = DateTime.UtcNow,
+                    UserId = _myUserId.ToString(),
+                    Role = _myUserRole,
+                    JoinedAt = joinedAtUtc,
                     IsOnline = isOnline,
                     LastSeenUtc = DateTime.UtcNow
                 });
@@ -517,6 +624,183 @@ namespace WhiteSpace.Pages
             {
                 System.Diagnostics.Debug.WriteLine($"Ошибка отправки presence в Firebase: {ex.Message}");
             }
+        }
+
+        private async Task InitCursorIdentityAsync()
+        {
+            if (_isAdminSession)
+            {
+                return;
+            }
+
+            var profile = await _supabaseService.GetMyProfileAsync();
+            _myUserId ??= profile?.Id;
+            if (_myUserId == null)
+            {
+                return;
+            }
+
+            _cursorDisplayName = !string.IsNullOrWhiteSpace(profile?.Username)
+                ? profile.Username
+                : (!string.IsNullOrWhiteSpace(profile?.Email) ? profile.Email : $"User {_myUserId.Value.ToString("N")[..6]}");
+        }
+
+        private void SubscribeToCursors()
+        {
+            try
+            {
+                _cursorsSubscription = _firebaseService
+                    .GetBoardCursorsObservable(_boardId.ToString())
+                    .Where(states => states != null)
+                    .Subscribe(states =>
+                    {
+                        Application.Current.Dispatcher.Invoke(() => UpdateRemoteCursors(states));
+                    });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка подписки на курсоры: {ex.Message}");
+            }
+        }
+
+        private void UpdateRemoteCursors(List<FirebaseCursorState> states)
+        {
+            var now = DateTime.UtcNow;
+            var currentStates = new Dictionary<Guid, FirebaseCursorState>();
+
+            foreach (var state in states)
+            {
+                if (!Guid.TryParse(state.UserId, out var userId))
+                {
+                    continue;
+                }
+
+                if (_myUserId.HasValue && userId == _myUserId.Value)
+                {
+                    continue;
+                }
+
+                var isFresh = state.IsVisible && (now - state.UpdatedAtUtc) <= CursorOfflineTimeout;
+                if (!isFresh)
+                {
+                    continue;
+                }
+
+                currentStates[userId] = state;
+                _cursorByUserId[userId] = state;
+                DrawOrMoveRemoteCursor(userId, state);
+            }
+
+            foreach (var userId in _cursorVisuals.Keys.ToList())
+            {
+                if (currentStates.ContainsKey(userId))
+                {
+                    continue;
+                }
+
+                CursorCanvas.Children.Remove(_cursorVisuals[userId]);
+                _cursorVisuals.Remove(userId);
+                _cursorByUserId.Remove(userId);
+            }
+        }
+
+        private void DrawOrMoveRemoteCursor(Guid userId, FirebaseCursorState state)
+        {
+            if (!_cursorVisuals.TryGetValue(userId, out var visual))
+            {
+                var stack = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    IsHitTestVisible = false
+                };
+
+                var pointer = new Polygon
+                {
+                    Points = new PointCollection
+                    {
+                        new Point(0, 0),
+                        new Point(0, 14),
+                        new Point(9, 9)
+                    },
+                    Fill = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                    Stroke = Brushes.White,
+                    StrokeThickness = 1
+                };
+
+                var nameTag = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Margin = new Thickness(0, 2, 0, 0),
+                    Child = new TextBlock
+                    {
+                        Foreground = Brushes.White,
+                        FontSize = 11,
+                        FontWeight = FontWeights.SemiBold,
+                        Text = state.DisplayName
+                    }
+                };
+
+                stack.Children.Add(pointer);
+                stack.Children.Add(nameTag);
+                _cursorVisuals[userId] = stack;
+                CursorCanvas.Children.Add(stack);
+                visual = stack;
+            }
+            else if (visual is StackPanel existingStack
+                && existingStack.Children.Count > 1
+                && existingStack.Children[1] is Border tagBorder
+                && tagBorder.Child is TextBlock tagText)
+            {
+                tagText.Text = state.DisplayName;
+            }
+
+            Canvas.SetLeft(visual, state.X);
+            Canvas.SetTop(visual, state.Y);
+        }
+
+        private async Task PublishCursorAsync(Point worldPoint, bool isVisible)
+        {
+            if (_isAdminSession)
+            {
+                return;
+            }
+
+            if (_myUserId == null)
+            {
+                await InitCursorIdentityAsync();
+            }
+
+            if (_myUserId == null)
+            {
+                return;
+            }
+
+            await _firebaseService.UpsertCursorAsync(_boardId.ToString(), new FirebaseCursorState
+            {
+                UserId = _myUserId.ToString()!,
+                DisplayName = _cursorDisplayName,
+                X = worldPoint.X,
+                Y = worldPoint.Y,
+                IsVisible = isVisible,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+        }
+
+        private async Task RemoveCurrentUserCursorAsync()
+        {
+            if (_myUserId == null)
+            {
+                return;
+            }
+
+            await _firebaseService.DeleteCursorAsync(_boardId.ToString(), _myUserId.ToString()!);
+        }
+
+        private async void Viewport_MouseLeave(object sender, MouseEventArgs e)
+        {
+            await RemoveCurrentUserCursorAsync();
         }
 
         // Обновление списка участников из Firebase
@@ -528,7 +812,7 @@ namespace WhiteSpace.Pages
                 Console.WriteLine($"Получено обновление участников из Firebase. Количество: {members?.Count ?? 0}");
 
                 await RefreshCurrentUserPermissionsAsync();
-                var currentUser = await _supabaseService.GetMyProfileAsync();
+                var currentUser = _isAdminSession ? null : await _supabaseService.GetMyProfileAsync();
                 _presenceByUserId.Clear();
                 if (members != null)
                 {
@@ -562,6 +846,8 @@ namespace WhiteSpace.Pages
                     Console.WriteLine($"Отображаем участников: {displayMembers.Count}");
 
                     UsersListView.ItemsSource = null;
+                    _cachedBoardMembers = displayMembers;
+                    _cachedCurrentUserId = currentUser?.Id;
                     UsersListView.ItemsSource = await CreateParticipantCardsAsync(displayMembers, currentUser?.Id, _presenceByUserId);
                     UsersListView.Visibility = Visibility.Visible;
                     MembersCountText.Text = displayMembers.Count.ToString();
@@ -580,6 +866,7 @@ namespace WhiteSpace.Pages
                     UsersListView.Visibility = Visibility.Collapsed;
                     MembersCountText.Text = "0";
                     Console.WriteLine("Нет участников для отображения");
+                    _cachedBoardMembers.Clear();
                 }
             }
             catch (Exception ex)
@@ -620,10 +907,31 @@ namespace WhiteSpace.Pages
                 var boardMembers = await _supabaseService.GetBoardMembersAsync(_boardId);
 
                 // Получаем текущего пользователя
-                var currentUser = await _supabaseService.GetMyProfileAsync();
+                var currentUser = _isAdminSession ? null : await _supabaseService.GetMyProfileAsync();
 
                 if (boardMembers != null && boardMembers.Any())
                 {
+                    _cachedBoardMembers = boardMembers;
+                    _cachedCurrentUserId = currentUser?.Id;
+
+                    // Пока Firebase-подписка не успела заполнить _presenceByUserId,
+                    // отметим себя как онлайн локально, чтобы карточка сразу отображалась корректно.
+                    if (currentUser != null)
+                    {
+                        var myMember = boardMembers.FirstOrDefault(m => m.UserId == currentUser.Id);
+                        if (myMember != null)
+                        {
+                            _presenceByUserId[currentUser.Id] = new FirebaseBoardMember
+                            {
+                                UserId = currentUser.Id.ToString(),
+                                Role = myMember.Role,
+                                JoinedAt = DateTime.UtcNow,
+                                IsOnline = true,
+                                LastSeenUtc = DateTime.UtcNow
+                            };
+                        }
+                    }
+
                     UsersListView.ItemsSource = await CreateParticipantCardsAsync(boardMembers, currentUser?.Id, _presenceByUserId);
                     UsersListView.Visibility = Visibility.Visible;
                     MembersCountText.Text = boardMembers.Count.ToString();
@@ -635,6 +943,7 @@ namespace WhiteSpace.Pages
                     UsersListView.ItemsSource = null;
                     UsersListView.Visibility = Visibility.Collapsed;
                     MembersCountText.Text = "0";
+                    _cachedBoardMembers.Clear();
                 }
             }
             catch (Exception ex)
@@ -747,21 +1056,108 @@ namespace WhiteSpace.Pages
 
             foreach (var member in members)
             {
-                var profile = await _supabaseService.GetProfileByUserIdAsync(member.UserId);
-                string displayName = !string.IsNullOrWhiteSpace(profile?.Username)
-                    ? profile.Username
-                    : member.UserId.ToString()[..8];
+                var accountUsername = member.AccountUsername;
+
+                // Если в board_members есть снимок username — берём его и не трогаем profiles.
+                if (!string.IsNullOrWhiteSpace(accountUsername))
+                {
+                    var accountDisplayName = accountUsername;
+                    var accountInitials = GetInitials(accountDisplayName);
+
+                    var (accountFill, accountStroke) = GetParticipantPalette(colorIndex++);
+                    var accountIsCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
+
+                    var accountIsOnline = false;
+                    if (presenceByUserId != null
+                        && presenceByUserId.TryGetValue(member.UserId, out var accountPresence))
+                    {
+                        if (accountPresence.IsOnline)
+                        {
+                            var lastSeenUtc = accountPresence.LastSeenUtc;
+                            if (lastSeenUtc != DateTime.MinValue)
+                            {
+                                var age = DateTime.UtcNow - lastSeenUtc;
+                                accountIsOnline = age <= PresenceOfflineTimeout;
+                            }
+                        }
+                    }
+
+                    cards.Add(new BoardParticipantCard
+                    {
+                        UserId = member.UserId,
+                        DisplayName = accountDisplayName,
+                        Initials = accountInitials,
+                        Role = member.Role,
+                        RoleLabel = member.Role switch
+                        {
+                            "owner" => "Ведущий",
+                            "editor" => "Редактор",
+                            _ => "Наблюдатель"
+                        },
+                        RoleActionLabel = member.Role == "viewer" ? "Сделать редактором" : "Сделать наблюдателем",
+                        RoleActionVisibility = member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                        ActionVisibility = accountIsCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                        RemoveActionVisibility = accountIsCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                        CurrentUserHint = accountIsCurrentUser ? "Вы" : string.Empty,
+                        CurrentUserHintVisibility = accountIsCurrentUser ? Visibility.Visible : Visibility.Collapsed,
+                        PresenceLabel = accountIsOnline ? "Онлайн" : "Не в сети",
+                        PresenceDotFill = accountIsOnline
+                            ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
+                            : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                        PresenceTextFill = accountIsOnline
+                            ? new SolidColorBrush(Color.FromRgb(22, 163, 74))
+                            : new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                        IsCurrentUser = accountIsCurrentUser,
+                        IsOnline = accountIsOnline,
+                        AvatarFill = accountFill,
+                        AvatarStroke = accountStroke,
+                        RoleBadgeBackground = member.Role == "owner"
+                            ? new SolidColorBrush(Color.FromRgb(14, 16, 38))
+                            : new SolidColorBrush(Color.FromRgb(244, 246, 251)),
+                        RoleBadgeForeground = member.Role == "owner"
+                            ? Brushes.White
+                            : new SolidColorBrush(Color.FromRgb(73, 80, 96))
+                    });
+
+                    continue;
+                }
+
+                if (!_profileDisplayNameCache.TryGetValue(member.UserId, out var cachedProfile))
+                {
+                    var profile = await _supabaseService.GetProfileByUserIdAsync(member.UserId);
+                    string computedDisplayName = !string.IsNullOrWhiteSpace(profile?.Username)
+                        ? profile.Username
+                        : member.UserId.ToString()[..8];
+
+                    cachedProfile = (computedDisplayName, GetInitials(computedDisplayName));
+                    _profileDisplayNameCache[member.UserId] = cachedProfile;
+                }
+
+                string displayName = cachedProfile.DisplayName;
+                string initials = cachedProfile.Initials;
 
                 var (fill, stroke) = GetParticipantPalette(colorIndex++);
                 var isCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
-                var isOnline = presenceByUserId != null
-                    && presenceByUserId.TryGetValue(member.UserId, out var presence)
-                    && presence?.IsOnline == true;
+                var isOnline = false;
+                if (presenceByUserId != null
+                    && presenceByUserId.TryGetValue(member.UserId, out var presence))
+                {
+                    // Если явно выставили IsOnline=false — считаем офлайн сразу.
+                    if (presence.IsOnline)
+                    {
+                        var lastSeenUtc = presence.LastSeenUtc;
+                        if (lastSeenUtc != DateTime.MinValue)
+                        {
+                            var age = DateTime.UtcNow - lastSeenUtc;
+                            isOnline = age <= PresenceOfflineTimeout;
+                        }
+                    }
+                }
                 cards.Add(new BoardParticipantCard
                 {
                     UserId = member.UserId,
                     DisplayName = displayName,
-                    Initials = GetInitials(displayName),
+                    Initials = initials,
                     Role = member.Role,
                     RoleLabel = member.Role switch
                     {
@@ -895,6 +1291,12 @@ namespace WhiteSpace.Pages
                 return;
             }
 
+            if (_isAdminSession)
+            {
+                SetViewerMode(false);
+                return;
+            }
+
             _isAccessCheckRunning = true;
             try
             {
@@ -917,7 +1319,7 @@ namespace WhiteSpace.Pages
                     _removalHandled = true;
                     _accessMonitorTimer.Stop();
                     AppDialogService.ShowWarning("Вы были удалены с этой доски.", "Доступ к доске");
-                    NavigationService?.Navigate(new UserHomePage());
+                    NavigateBackFromBoard();
                     return;
                 }
 
@@ -940,7 +1342,7 @@ namespace WhiteSpace.Pages
 
         private void BackToMenu_Click(object sender, RoutedEventArgs e)
         {
-            NavigationService?.Navigate(new UserHomePage());
+            NavigateBackFromBoard();
         }
 
         private void SaveBoard_Click(object sender, RoutedEventArgs e)
@@ -1056,8 +1458,13 @@ namespace WhiteSpace.Pages
             bool success = await _supabaseService.DeleteBoardAsync(_boardId);
             if (success)
             {
-                NavigationService?.Navigate(new UserHomePage());
+                NavigateBackFromBoard();
             }
+        }
+
+        private void NavigateBackFromBoard()
+        {
+            NavigationService?.Navigate(_returnToAdminPage ? new AdminPage() : new UserHomePage());
         }
 
         private void Invite_Click(object sender, RoutedEventArgs e)
@@ -1205,12 +1612,107 @@ namespace WhiteSpace.Pages
         private void ChatSend_Click(object sender, RoutedEventArgs e)
         {
             ChatWidget.Visibility = Visibility.Visible;
-            if (ChatInputBox.Text == "Введите сообщение...")
+            _ = SendChatMessageAsync();
+        }
+
+        private async Task SendChatMessageAsync()
+        {
+            var text = ChatInputBox.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(text))
             {
-                ChatInputBox.Text = string.Empty;
+                ChatInputBox.Focus();
+                return;
             }
 
+            if (_myUserId == null)
+            {
+                await InitCursorIdentityAsync();
+            }
+
+            if (_myUserId == null)
+            {
+                return;
+            }
+
+            var message = new FirebaseChatMessage
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                UserId = _myUserId.ToString()!,
+                UserName = _cursorDisplayName,
+                Text = text,
+                SentAtUtc = DateTime.UtcNow
+            };
+
+            await _firebaseService.PushChatMessageAsync(_boardId.ToString(), message);
+            ChatInputBox.Text = string.Empty;
             ChatInputBox.Focus();
+        }
+
+        private async void ChatInputBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            await SendChatMessageAsync();
+        }
+
+        private void SubscribeToChatMessages()
+        {
+            try
+            {
+                _chatSubscription = _firebaseService
+                    .GetBoardChatMessagesObservable(_boardId.ToString())
+                    .Where(messages => messages != null)
+                    .Subscribe(messages =>
+                    {
+                        Application.Current.Dispatcher.Invoke(() => UpdateChatMessages(messages));
+                    });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка подписки на чат: {ex.Message}");
+            }
+        }
+
+        private void UpdateChatMessages(List<FirebaseChatMessage> messages)
+        {
+            var myUserIdString = _myUserId?.ToString();
+            var normalized = messages
+                .Where(message => !string.IsNullOrWhiteSpace(message.Text))
+                .OrderBy(message => message.SentAtUtc)
+                .TakeLast(150)
+                .Select(message =>
+                {
+                    var isMine = !string.IsNullOrWhiteSpace(myUserIdString)
+                        && string.Equals(message.UserId, myUserIdString, StringComparison.OrdinalIgnoreCase);
+
+                    var senderName = string.IsNullOrWhiteSpace(message.UserName) ? "Участник" : message.UserName.Trim();
+                    var time = message.SentAtUtc.ToLocalTime().ToString("HH:mm");
+
+                    return new ChatMessageViewModel
+                    {
+                        HeaderText = isMine ? $"Вы {time}" : $"{senderName} {time}",
+                        Text = message.Text,
+                        HeaderAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+                        BubbleAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+                        BubbleBackground = isMine
+                            ? new SolidColorBrush(Color.FromRgb(14, 16, 38))
+                            : new SolidColorBrush(Color.FromRgb(241, 243, 248)),
+                        TextForeground = isMine
+                            ? Brushes.White
+                            : new SolidColorBrush(Color.FromRgb(43, 50, 69))
+                    };
+                })
+                .ToList();
+
+            _chatMessages.Clear();
+            foreach (var item in normalized)
+            {
+                _chatMessages.Add(item);
+            }
         }
 
         private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true)
@@ -1640,6 +2142,13 @@ namespace WhiteSpace.Pages
         {
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
+
+            var now = DateTime.UtcNow;
+            if ((now - _lastCursorPublishUtc).TotalMilliseconds >= CursorPublishThrottleMs)
+            {
+                _lastCursorPublishUtc = now;
+                _ = PublishCursorAsync(world, true);
+            }
 
             if (_isResizing && _resizeTarget != null)
             {
@@ -2696,5 +3205,15 @@ namespace WhiteSpace.Pages
         public Brush AvatarStroke { get; set; } = Brushes.Black;
         public Brush RoleBadgeBackground { get; set; } = Brushes.White;
         public Brush RoleBadgeForeground { get; set; } = Brushes.Black;
+    }
+
+    public sealed class ChatMessageViewModel
+    {
+        public string HeaderText { get; set; } = string.Empty;
+        public string Text { get; set; } = string.Empty;
+        public HorizontalAlignment HeaderAlignment { get; set; } = HorizontalAlignment.Left;
+        public HorizontalAlignment BubbleAlignment { get; set; } = HorizontalAlignment.Left;
+        public Brush BubbleBackground { get; set; } = Brushes.White;
+        public Brush TextForeground { get; set; } = Brushes.Black;
     }
 }
