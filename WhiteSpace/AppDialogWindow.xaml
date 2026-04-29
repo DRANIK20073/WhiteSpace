@@ -19,7 +19,7 @@
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="#8B5CF6"/>
+            <Setter Property="Background" Value="#333333"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -41,7 +41,7 @@
                                     <Storyboard>
                                         <ColorAnimation Storyboard.TargetName="border"
                                                         Storyboard.TargetProperty="Background.Color"
-                                                        To="#A78BFA"
+                                                        To="#666666"
                                                         Duration="0:0:0.2"/>
                                         <DoubleAnimation Storyboard.TargetName="scaleTransform"
                                                          Storyboard.TargetProperty="ScaleX"
@@ -59,7 +59,7 @@
                                     <Storyboard>
                                         <ColorAnimation Storyboard.TargetName="border"
                                                         Storyboard.TargetProperty="Background.Color"
-                                                        To="#8B5CF6"
+                                                        To="#333333"
                                                         Duration="0:0:0.2"/>
                                         <DoubleAnimation Storyboard.TargetName="scaleTransform"
                                                          Storyboard.TargetProperty="ScaleX"
@@ -77,7 +77,7 @@
                                     <Storyboard>
                                         <ColorAnimation Storyboard.TargetName="border"
                                                         Storyboard.TargetProperty="Background.Color"
-                                                        To="#6D28D9"
+                                                        To="#000000"
                                                         Duration="0:0:0.1"/>
                                         <DoubleAnimation Storyboard.TargetName="scaleTransform"
                                                          Storyboard.TargetProperty="ScaleX"
@@ -95,7 +95,7 @@
                                     <Storyboard>
                                         <ColorAnimation Storyboard.TargetName="border"
                                                         Storyboard.TargetProperty="Background.Color"
-                                                        To="#A78BFA"
+                                                        To="#666666"
                                                         Duration="0:0:0.1"/>
                                         <DoubleAnimation Storyboard.TargetName="scaleTransform"
                                                          Storyboard.TargetProperty="ScaleX"
@@ -121,7 +121,7 @@
             <Setter Property="Height" Value="42"/>
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="#1E293B"/>
+            <Setter Property="Foreground" Value="#333333"/>
             <Setter Property="Background" Value="#FFFFFF"/>
             <Setter Property="BorderBrush" Value="#E2E8F0"/>
             <Setter Property="BorderThickness" Value="1"/>
@@ -247,7 +247,7 @@
 
                     <Border x:Name="AccentBar"
                             Grid.Row="0"
-                            Background="#8B5CF6"
+                            Background="#333333"
                             HorizontalAlignment="Stretch"
                             CornerRadius="18,18,0,0"/>
 
@@ -257,13 +257,13 @@
                                 Width="54"
                                 Height="54"
                                 CornerRadius="27"
-                                Background="#F1F5F9"
+                                Background="#F2F2F2"
                                 HorizontalAlignment="Left">
                             <TextBlock x:Name="IconText"
                                        Text="i"
                                        FontSize="28"
                                        FontWeight="Bold"
-                                       Foreground="#8B5CF6"
+                                       Foreground="#333333"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
                                        Margin="0,6,0,0"/>
@@ -273,12 +273,12 @@
                                    Margin="0,18,0,10"
                                    FontSize="28"
                                    FontWeight="Bold"
-                                   Foreground="#1E293B"
+                                   Foreground="#111111"
                                    TextWrapping="Wrap"/>
 
                         <TextBlock x:Name="MessageText"
                                    FontSize="15"
-                                   Foreground="#64748B"
+                                   Foreground="#6B7280"
                                    TextWrapping="Wrap"/>
                     </StackPanel>
 
