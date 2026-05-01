@@ -58,16 +58,24 @@ namespace WhiteSpace
                     icon = "?";
                     break;
                 default:
-                    accentColor = "#333333";
-                    badgeColor = "#F2F2F2";
-                    icon = "i";
-                    break;
+                    ApplyInfoDialogChromeFromTheme();
+                    return;
             }
 
             AccentBar.Background = CreateBrush(accentColor);
             IconBadge.Background = CreateBrush(badgeColor);
             IconText.Foreground = CreateBrush(accentColor);
             IconText.Text = icon;
+        }
+
+        /// <summary>Обычный диалог (инфо): полоса и значок из палитры текущей темы.</summary>
+        private void ApplyInfoDialogChromeFromTheme()
+        {
+            var app = Application.Current;
+            AccentBar.Background = app?.TryFindResource("WsPurpleBrush") as Brush ?? CreateBrush("#8B5CF6");
+            IconBadge.Background = app?.TryFindResource("WsSurfaceMutedBrush") as Brush ?? CreateBrush("#F2F2F2");
+            IconText.Foreground = app?.TryFindResource("WsPurpleBrush") as Brush ?? CreateBrush("#333333");
+            IconText.Text = "i";
         }
 
         private static SolidColorBrush CreateBrush(string hex)

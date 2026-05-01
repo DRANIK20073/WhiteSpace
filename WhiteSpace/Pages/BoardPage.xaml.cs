@@ -6,8 +6,11 @@ using Supabase;
 using IOPath = System.IO.Path;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Linq;
 using System.Net;
 using System.Reactive.Linq;
@@ -16,9 +19,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using WhiteSpace;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -89,6 +94,10 @@ namespace WhiteSpace.Pages
             "WhiteSpace",
             "board-snapshots");
         private bool _isPresentationMode;
+        private Rect _presentationRestoreBounds;
+        private WindowState _presentationRestoreWindowState = WindowState.Normal;
+        private ResizeMode _presentationRestoreResizeMode = ResizeMode.CanResize;
+        private bool _presentationStoredState;
         private DateTime _lastResizeRealtimePushUtc = DateTime.MinValue;
         private bool _removalHandled;
         private readonly DispatcherTimer _accessMonitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -142,6 +151,9 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            var prefs = AppPreferences.Load();
+            UiAnimationHelper.ApplyFadeIn(BoardRootGrid, prefs.EnableAnimations);
+
             await LoadBoardMetadataAsync();
             _isAdminSession = await _supabaseService.IsCurrentUserAdminAsync();
 
@@ -1397,15 +1409,62 @@ namespace WhiteSpace.Pages
             }
 
             _isPresentationMode = !_isPresentationMode;
-            window.WindowState = _isPresentationMode ? WindowState.Maximized : WindowState.Normal;
-            window.WindowStyle = _isPresentationMode ? WindowStyle.None : WindowStyle.SingleBorderWindow;
-            window.Topmost = _isPresentationMode;
 
-            AppDialogService.ShowInfo(
-                _isPresentationMode
-                    ? "Режим презентации включен. Нажмите пункт меню снова, чтобы выйти."
-                    : "Режим презентации выключен.",
-                "Презентация");
+            if (_isPresentationMode)
+            {
+                _presentationRestoreWindowState = window.WindowState;
+                _presentationRestoreResizeMode = window.ResizeMode;
+                if (window.WindowState == WindowState.Maximized)
+                {
+                    var rb = window.RestoreBounds;
+                    _presentationRestoreBounds = new Rect(rb.Left, rb.Top, rb.Width, rb.Height);
+                }
+                else
+                {
+                    _presentationRestoreBounds = new Rect(window.Left, window.Top, window.Width, window.Height);
+                }
+
+                _presentationStoredState = true;
+
+                window.Topmost = true;
+                window.WindowStyle = WindowStyle.None;
+                window.ResizeMode = ResizeMode.NoResize;
+                window.WindowState = WindowState.Normal;
+
+                if (!TryPlaceWindowOnContainingMonitorFullscreen(window))
+                {
+                    window.Left = SystemParameters.WorkArea.Left;
+                    window.Top = SystemParameters.WorkArea.Top;
+                    window.Width = SystemParameters.WorkArea.Width;
+                    window.Height = SystemParameters.WorkArea.Height;
+                }
+
+                AppDialogService.ShowInfo(
+                    "Режим презентации: окно на весь текущий монитор. Повторите команду в меню, чтобы выйти.",
+                    "Презентация");
+            }
+            else
+            {
+                window.Topmost = false;
+                window.WindowStyle = WindowStyle.SingleBorderWindow;
+                window.ResizeMode = _presentationStoredState
+                    ? _presentationRestoreResizeMode
+                    : ResizeMode.CanResize;
+
+                if (_presentationStoredState)
+                {
+                    window.WindowState = WindowState.Normal;
+                    window.Left = _presentationRestoreBounds.Left;
+                    window.Top = _presentationRestoreBounds.Top;
+                    window.Width = _presentationRestoreBounds.Width;
+                    window.Height = _presentationRestoreBounds.Height;
+                    window.WindowState = _presentationRestoreWindowState;
+                }
+
+                _presentationStoredState = false;
+
+                AppDialogService.ShowInfo("Режим презентации выключен.", "Презентация");
+            }
         }
 
         private async void SaveVersion_Click(object sender, RoutedEventArgs e)
@@ -1628,19 +1687,25 @@ namespace WhiteSpace.Pages
 
         private void ToggleChat_Click(object sender, RoutedEventArgs e)
         {
-            ChatWidget.Visibility = ChatWidget.Visibility == Visibility.Visible
-                ? Visibility.Collapsed
-                : Visibility.Visible;
+            var prefs = AppPreferences.Load();
+            var show = ChatWidget.Visibility != Visibility.Visible;
+            UiAnimationHelper.ApplyFadeVisibilityToggle(ChatWidget, show, prefs.EnableAnimations);
         }
 
         private void CloseChat_Click(object sender, RoutedEventArgs e)
         {
-            ChatWidget.Visibility = Visibility.Collapsed;
+            var prefs = AppPreferences.Load();
+            UiAnimationHelper.ApplyFadeVisibilityToggle(ChatWidget, false, prefs.EnableAnimations);
         }
 
         private void ChatSend_Click(object sender, RoutedEventArgs e)
         {
-            ChatWidget.Visibility = Visibility.Visible;
+            var prefs = AppPreferences.Load();
+            if (ChatWidget.Visibility != Visibility.Visible)
+            {
+                UiAnimationHelper.ApplyFadeVisibilityToggle(ChatWidget, true, prefs.EnableAnimations);
+            }
+
             _ = SendChatMessageAsync();
         }
 
@@ -1709,6 +1774,7 @@ namespace WhiteSpace.Pages
         private void UpdateChatMessages(List<FirebaseChatMessage> messages)
         {
             var myUserIdString = _myUserId?.ToString();
+
             var normalized = messages
                 .Where(message => !string.IsNullOrWhiteSpace(message.Text))
                 .OrderBy(message => message.SentAtUtc)
@@ -1721,19 +1787,27 @@ namespace WhiteSpace.Pages
                     var senderName = string.IsNullOrWhiteSpace(message.UserName) ? "Участник" : message.UserName.Trim();
                     var time = message.SentAtUtc.ToLocalTime().ToString("HH:mm");
 
-                    return new ChatMessageViewModel
+                    var vm = new ChatMessageViewModel
                     {
-                        HeaderText = isMine ? $"Вы {time}" : $"{senderName} {time}",
+                        MessageId = string.IsNullOrWhiteSpace(message.Id) ? string.Empty : message.Id.Trim(),
+                        IsMine = isMine,
+                        UserId = message.UserId ?? string.Empty,
+                        UserName = message.UserName ?? string.Empty,
+                        SentAtUtc = message.SentAtUtc,
+                        EditedAtUtc = message.EditedAtUtc,
+                        HeaderText = isMine ? $"Вы • {time}" : $"{senderName} • {time}",
                         Text = message.Text,
                         HeaderAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
                         BubbleAlignment = isMine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
                         BubbleBackground = isMine
-                            ? new SolidColorBrush(Color.FromRgb(139, 92, 246))
-                            : new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+                            ? FindThemeBrush("WsChatMineBubbleBrush", new SolidColorBrush(Color.FromRgb(139, 92, 246)))
+                            : FindThemeBrush("WsChatPeerBubbleBrush", new SolidColorBrush(Color.FromRgb(241, 245, 249))),
                         TextForeground = isMine
                             ? Brushes.White
-                            : new SolidColorBrush(Color.FromRgb(30, 41, 59))
+                            : FindThemeBrush("WsChatPeerTextBrush", new SolidColorBrush(Color.FromRgb(30, 41, 59)))
                     };
+
+                    return vm;
                 })
                 .ToList();
 
@@ -1742,6 +1816,100 @@ namespace WhiteSpace.Pages
             {
                 _chatMessages.Add(item);
             }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                var sv = ChatMessagesScrollViewer;
+                if (sv != null)
+                {
+                    sv.ScrollToVerticalOffset(sv.ExtentHeight);
+                }
+            }, DispatcherPriority.Background);
+        }
+
+        private void ChatBubble_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || fe.DataContext is not ChatMessageViewModel vm)
+            {
+                return;
+            }
+
+            if (!vm.IsMine)
+            {
+                e.Handled = true;
+            }
+        }
+
+        private async void ChatMessageEdit_Click(object sender, RoutedEventArgs e)
+        {
+            var vm = GetChatMessageViewModelFromMenu(sender);
+            if (vm == null || !vm.IsMine || string.IsNullOrWhiteSpace(vm.MessageId))
+            {
+                return;
+            }
+
+            var edited = AppDialogService.ShowTextInput(
+                "Редактировать сообщение",
+                "Текст сообщения:",
+                "Сохранить",
+                "Отмена",
+                vm.Text);
+
+            if (edited == null)
+            {
+                return;
+            }
+
+            var trimmed = edited.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                AppDialogService.ShowWarning("Сообщение не может быть пустым.", "Чат");
+                return;
+            }
+
+            await _firebaseService.UpdateChatMessageAsync(
+                _boardId.ToString(),
+                new FirebaseChatMessage
+                {
+                    Id = vm.MessageId,
+                    UserId = vm.UserId,
+                    UserName = string.IsNullOrWhiteSpace(vm.UserName) ? _cursorDisplayName : vm.UserName,
+                    Text = trimmed,
+                    SentAtUtc = vm.SentAtUtc,
+                    EditedAtUtc = DateTime.UtcNow
+                });
+        }
+
+        private async void ChatMessageDelete_Click(object sender, RoutedEventArgs e)
+        {
+            var vm = GetChatMessageViewModelFromMenu(sender);
+            if (vm == null || !vm.IsMine || string.IsNullOrWhiteSpace(vm.MessageId))
+            {
+                return;
+            }
+
+            if (!AppDialogService.ShowConfirmation(
+                    "Удалить это сообщение?",
+                    "Чат",
+                    "Удалить",
+                    "Отмена"))
+            {
+                return;
+            }
+
+            await _firebaseService.DeleteChatMessageAsync(_boardId.ToString(), vm.MessageId);
+        }
+
+        private static ChatMessageViewModel? GetChatMessageViewModelFromMenu(object sender)
+        {
+            if (sender is not MenuItem menuItem)
+            {
+                return null;
+            }
+
+            var menu = menuItem.Parent as ContextMenu;
+            var target = menu?.PlacementTarget as FrameworkElement;
+            return target?.DataContext as ChatMessageViewModel;
         }
 
         private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true)
@@ -3204,6 +3372,92 @@ namespace WhiteSpace.Pages
         {
             return IOPath.Combine(BoardSnapshotsRoot, _boardId.ToString("N"));
         }
+
+        private static Brush FindThemeBrush(string key, Brush fallback)
+        {
+            try
+            {
+                if (Application.Current?.TryFindResource(key) is Brush brush)
+                {
+                    return brush;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return fallback;
+        }
+
+        /// <summary>
+        /// Разворачивает окно на границы того монитора, где оно сейчас находится (не на все мониторы сразу).
+        /// </summary>
+        private static bool TryPlaceWindowOnContainingMonitorFullscreen(Window window)
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(window).EnsureHandle();
+                var hMonitor = PresentationNative.MonitorFromWindow(hwnd, PresentationNative.MonitorDefaultToNearest);
+                var mi = new PresentationNative.MONITORINFO
+                {
+                    cbSize = (uint)Marshal.SizeOf<PresentationNative.MONITORINFO>()
+                };
+
+                if (!PresentationNative.GetMonitorInfo(hMonitor, ref mi))
+                {
+                    return false;
+                }
+
+                var src = HwndSource.FromHwnd(hwnd);
+                if (src?.CompositionTarget == null)
+                {
+                    return false;
+                }
+
+                var fromDevice = src.CompositionTarget.TransformFromDevice;
+                var topLeft = fromDevice.Transform(new Point(mi.rcMonitor.Left, mi.rcMonitor.Top));
+                var bottomRight = fromDevice.Transform(new Point(mi.rcMonitor.Right, mi.rcMonitor.Bottom));
+                window.Left = topLeft.X;
+                window.Top = topLeft.Y;
+                window.Width = Math.Max(1, bottomRight.X - topLeft.X);
+                window.Height = Math.Max(1, bottomRight.Y - topLeft.Y);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static class PresentationNative
+        {
+            public const uint MonitorDefaultToNearest = 2;
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct MONITORINFO
+            {
+                public uint cbSize;
+                public RECT rcMonitor;
+                public RECT rcWork;
+                public uint dwFlags;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct RECT
+            {
+                public int Left;
+                public int Top;
+                public int Right;
+                public int Bottom;
+            }
+        }
     }
 
     public sealed class BoardVersionSnapshot
@@ -3236,13 +3490,55 @@ namespace WhiteSpace.Pages
         public Brush RoleBadgeForeground { get; set; } = Brushes.Black;
     }
 
-    public sealed class ChatMessageViewModel
+    public sealed class ChatMessageViewModel : INotifyPropertyChanged
     {
+        private string _text = string.Empty;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public string MessageId { get; set; } = string.Empty;
+
+        public bool IsMine { get; set; }
+
+        public string UserId { get; set; } = string.Empty;
+
+        public string UserName { get; set; } = string.Empty;
+
+        public DateTime SentAtUtc { get; set; }
+
+        public DateTime? EditedAtUtc { get; set; }
+
+        public Visibility EditedBadgeVisibility =>
+            EditedAtUtc.HasValue ? Visibility.Visible : Visibility.Collapsed;
+
         public string HeaderText { get; set; } = string.Empty;
-        public string Text { get; set; } = string.Empty;
+
+        public string Text
+        {
+            get => _text;
+            set
+            {
+                if (string.Equals(_text, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _text = value;
+                NotifyPropertyChanged();
+            }
+        }
+
         public HorizontalAlignment HeaderAlignment { get; set; } = HorizontalAlignment.Left;
+
         public HorizontalAlignment BubbleAlignment { get; set; } = HorizontalAlignment.Left;
+
         public Brush BubbleBackground { get; set; } = Brushes.White;
+
         public Brush TextForeground { get; set; } = Brushes.Black;
+
+        private void NotifyPropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
     }
 }

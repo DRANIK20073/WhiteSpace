@@ -251,6 +251,33 @@ namespace WhiteSpace
 
         #region Chat
 
+        private static List<FirebaseChatMessage> NormalizeChatMessages(Dictionary<string, FirebaseChatMessage>? snapshot)
+        {
+            if (snapshot == null || snapshot.Count == 0)
+            {
+                return new List<FirebaseChatMessage>();
+            }
+
+            var list = new List<FirebaseChatMessage>();
+            foreach (var kv in snapshot)
+            {
+                var message = kv.Value;
+                if (message == null)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(message.Id))
+                {
+                    message.Id = kv.Key;
+                }
+
+                list.Add(message);
+            }
+
+            return list;
+        }
+
         public IObservable<List<FirebaseChatMessage>> GetBoardChatMessagesObservable(string boardId)
         {
             return _client
@@ -266,7 +293,7 @@ namespace WhiteSpace
                             .Child(boardId)
                             .OnceSingleAsync<Dictionary<string, FirebaseChatMessage>>();
 
-                        return snapshot?.Values.ToList() ?? new List<FirebaseChatMessage>();
+                        return NormalizeChatMessages(snapshot);
                     }
                     catch
                     {
@@ -288,6 +315,48 @@ namespace WhiteSpace
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Ошибка отправки сообщения в Firebase: {ex.Message}");
+            }
+        }
+
+        public async Task UpdateChatMessageAsync(string boardId, FirebaseChatMessage message)
+        {
+            if (string.IsNullOrWhiteSpace(message.Id))
+            {
+                return;
+            }
+
+            try
+            {
+                await _client
+                    .Child(CHAT_MESSAGES_PATH)
+                    .Child(boardId)
+                    .Child(message.Id)
+                    .PutAsync(message);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка обновления сообщения в Firebase: {ex.Message}");
+            }
+        }
+
+        public async Task DeleteChatMessageAsync(string boardId, string messageId)
+        {
+            if (string.IsNullOrWhiteSpace(messageId))
+            {
+                return;
+            }
+
+            try
+            {
+                await _client
+                    .Child(CHAT_MESSAGES_PATH)
+                    .Child(boardId)
+                    .Child(messageId)
+                    .DeleteAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка удаления сообщения из Firebase: {ex.Message}");
             }
         }
 
@@ -393,5 +462,8 @@ namespace WhiteSpace
         public string UserName { get; set; } = string.Empty;
         public string Text { get; set; } = string.Empty;
         public DateTime SentAtUtc { get; set; } = DateTime.UtcNow;
+
+        /// <summary>Время последнего редактирования (UTC), если сообщение меняли.</summary>
+        public DateTime? EditedAtUtc { get; set; }
     }
 }

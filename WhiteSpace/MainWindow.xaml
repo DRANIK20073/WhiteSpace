@@ -4,9 +4,10 @@
         Title="Главное окно"
         MinWidth="1280" MinHeight="800"
         WindowStartupLocation="CenterScreen"
-        Background="#F8FAFC">
+        Background="{DynamicResource WsPageBgBrush}"
+        Loaded="Window_Loaded">
 
-    <Grid Background="#F8FAFC">
+    <Grid x:Name="WindowRoot" Background="{DynamicResource WsPageBgBrush}">
         <!-- Контейнер для страниц -->
         <Frame Name="MainFrame" NavigationUIVisibility="Hidden" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
     </Grid>

@@ -3,7 +3,8 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
       Title="Вход"
-      Background="{StaticResource WsLoginPageBgBrush}">
+      Background="{DynamicResource WsLoginPageBgBrush}"
+      Loaded="Page_Loaded">
 
     <Page.Resources>
         <!-- Стиль для кнопки входа с анимацией цвета -->
@@ -137,7 +138,7 @@
             </Setter>
         </Style>
 
-        <!-- Стиль для кнопки Google с анимацией цвета -->
+        <!-- Стиль для кнопки Google с адаптацией к теме -->
         <Style x:Key="AnimatedGoogleButton" TargetType="Button">
             <Setter Property="Template">
                 <Setter.Value>
@@ -156,14 +157,9 @@
                                             VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <!-- Анимация при наведении - меняем цвет фона -->
                             <EventTrigger RoutedEvent="MouseEnter">
                                 <BeginStoryboard>
                                     <Storyboard>
-                                        <ColorAnimation 
-                                            Storyboard.TargetName="border"
-                                            Storyboard.TargetProperty="Background.Color"
-                                            To="#F1F5F9" Duration="0:0:0.2"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -187,10 +183,6 @@
                             <EventTrigger RoutedEvent="MouseLeave">
                                 <BeginStoryboard>
                                     <Storyboard>
-                                        <ColorAnimation 
-                                            Storyboard.TargetName="border"
-                                            Storyboard.TargetProperty="Background.Color"
-                                            To="#FFFFFF" Duration="0:0:0.2"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -210,14 +202,9 @@
                                     </Storyboard>
                                 </BeginStoryboard>
                             </EventTrigger>
-                            <!-- Анимация при нажатии - полностью меняем цвет -->
                             <EventTrigger RoutedEvent="MouseDown">
                                 <BeginStoryboard>
                                     <Storyboard>
-                                        <ColorAnimation 
-                                            Storyboard.TargetName="border"
-                                            Storyboard.TargetProperty="Background.Color"
-                                            To="#E2E8F0" Duration="0:0:0.1"/>
                                         <DoubleAnimation 
                                             Storyboard.TargetName="scaleTransform"
                                             Storyboard.TargetProperty="ScaleX"
@@ -237,6 +224,12 @@
                                     </Storyboard>
                                 </BeginStoryboard>
                             </EventTrigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource WsTopButtonPressBrush}"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -246,10 +239,10 @@
 
     <!-- Адаптивный контейнер -->
     <Viewbox Stretch="Uniform" MaxWidth="800" MaxHeight="700">
-        <Grid Width="700" Height="600">
+        <Grid x:Name="AuthRootGrid" Width="700" Height="600">
             <!-- Карточка с тенью -->
-            <Border Background="#FFFFFF"
-                    BorderBrush="#E2E8F0"
+            <Border Background="{DynamicResource WsSurfaceBrush}"
+                    BorderBrush="{DynamicResource WsBorderBrush}"
                     BorderThickness="1"
                     CornerRadius="16"
                     HorizontalAlignment="Center" 
@@ -273,12 +266,12 @@
                         <TextBlock Text="WHITESPACE"
                                    FontSize="48"
                                    FontWeight="Bold"
-                                   Foreground="#1E293B"
+                                   Foreground="{DynamicResource WsTextPrimaryBrush}"
                                    HorizontalAlignment="Center"/>
 
                         <TextBlock Text="Войдите в свою учетную запись"
                                    FontSize="16"
-                                   Foreground="#64748B"
+                                   Foreground="{DynamicResource WsTextSecondaryBrush}"
                                    HorizontalAlignment="Center"
                                    Margin="0,10,0,0"/>
                     </StackPanel>
@@ -312,7 +305,7 @@
 
                             <CheckBox x:Name="RememberMeCheckBox"
                                       Content="Оставаться в системе"
-                                      Foreground="#1E293B"/>
+                                      Foreground="{DynamicResource WsTextPrimaryBrush}"/>
 
                             <Button Grid.Column="1"
                                     Background="Transparent"
@@ -321,7 +314,7 @@
                                     Click="ForgotPassword_Click">
                                 <TextBlock Text="Забыли пароль?" 
                                            FontSize="14"
-                                           Foreground="#64748B"
+                                           Foreground="{DynamicResource WsTextSecondaryBrush}"
                                            TextDecorations="Underline"/>
                             </Button>
                         </Grid>
@@ -348,17 +341,17 @@
 
                             <Border Grid.Column="0" 
                                     Height="1" 
-                                    Background="#E2E8F0"
+                                    Background="{DynamicResource WsBorderBrush}"
                                     VerticalAlignment="Center"/>
 
                             <TextBlock Grid.Column="1" 
                                        Text="или" 
                                        Margin="10,0" 
-                                       Foreground="#94A3B8"/>
+                                       Foreground="{DynamicResource WsTextMutedBrush}"/>
 
                             <Border Grid.Column="2" 
                                     Height="1" 
-                                    Background="#E2E8F0"
+                                    Background="{DynamicResource WsBorderBrush}"
                                     VerticalAlignment="Center"/>
                         </Grid>
 
@@ -368,8 +361,8 @@
                                 FontSize="16"
                                 Margin="0,0,0,25"
                                 Click="GoogleLogin_Click"
-                                Background="#FFFFFF"
-                                BorderBrush="#E2E8F0"
+                                Background="{DynamicResource WsSurfaceBrush}"
+                                BorderBrush="{DynamicResource WsBorderBrush}"
                                 BorderThickness="1"
                                 Cursor="Hand">
                             <Button.Content>
@@ -379,18 +372,18 @@
                                            Height="20" 
                                            Margin="0,0,10,0"/>
                                     <TextBlock Text="Продолжить с Google" 
-                                               Foreground="#1E293B"/>
+                                               Foreground="{DynamicResource WsTextPrimaryBrush}"/>
                                 </StackPanel>
                             </Button.Content>
                         </Button>
 
                         <!-- Ссылка на регистрацию -->
                         <TextBlock HorizontalAlignment="Center"
-                                   Foreground="#64748B">
+                                   Foreground="{DynamicResource WsTextSecondaryBrush}">
                             <Run Text="У вас нет аккаунта? "/>
                             <Hyperlink x:Name="RegisterLink"
                                        Click="RegisterLink_Click"
-                                       Foreground="#8B5CF6">
+                                       Foreground="{DynamicResource WsPurpleBrush}">
                                 <Run Text="Зарегистрируйтесь" 
                                      FontWeight="SemiBold"/>
                             </Hyperlink>

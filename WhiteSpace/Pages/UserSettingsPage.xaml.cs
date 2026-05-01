@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
+using WhiteSpace;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
@@ -10,6 +11,7 @@ public partial class UserSettingsPage : Page
 {
     private readonly SupabaseService _service = new();
     private AppPreferences _preferences = new();
+    private bool _isThemeInitializing;
 
     public UserSettingsPage()
     {
@@ -19,9 +21,13 @@ public partial class UserSettingsPage : Page
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
         _preferences = AppPreferences.Load();
+        _isThemeInitializing = true;
         CompactViewCheckBox.IsChecked = _preferences.UseCompactView;
         ConfirmLogoutCheckBox.IsChecked = _preferences.ConfirmBeforeLogout;
         AnimationsCheckBox.IsChecked = _preferences.EnableAnimations;
+
+        SyncThemeComboFromPreferences();
+        _isThemeInitializing = false;
 
         var fadeIn = _preferences.EnableAnimations;
         if (fadeIn)
@@ -32,6 +38,10 @@ public partial class UserSettingsPage : Page
         var profile = await _service.GetMyProfileAsync();
         UsernameBox.Text = profile?.Username ?? string.Empty;
         EmailBox.Text = profile?.Email ?? string.Empty;
+        EmailBox.IsReadOnly = true;
+        EmailBox.Focusable = false;
+
+        SyncThemeComboFromPreferences();
 
         if (fadeIn)
         {
@@ -80,12 +90,54 @@ public partial class UserSettingsPage : Page
         }
     }
 
+    private void SyncThemeComboFromPreferences()
+    {
+        var isDark = WhiteSpaceThemeManager.HasAppliedTheme
+            ? WhiteSpaceThemeManager.IsDarkApplied
+            : string.Equals(_preferences.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
+
+        ThemeComboBox.SelectedIndex = isDark ? 1 : 0;
+    }
+
+    private void ThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isThemeInitializing || !IsLoaded)
+        {
+            return;
+        }
+
+        var selectedTheme = ThemeComboBox.SelectedIndex == 1 ? "Dark" : "Light";
+        if (string.Equals(_preferences.Theme, selectedTheme, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _preferences.Theme = selectedTheme;
+        if (_preferences.TrySave(out _))
+        {
+            WhiteSpaceThemeManager.Apply(_preferences);
+        }
+    }
+
     private void SavePreferences_Click(object sender, RoutedEventArgs e)
     {
         _preferences.UseCompactView = CompactViewCheckBox.IsChecked == true;
         _preferences.ConfirmBeforeLogout = ConfirmLogoutCheckBox.IsChecked == true;
         _preferences.EnableAnimations = AnimationsCheckBox.IsChecked == true;
-        _preferences.Save();
+        _preferences.Theme = ThemeComboBox.SelectedIndex == 1 ? "Dark" : "Light";
+
+        if (!_preferences.TrySave(out var err))
+        {
+            AppDialogService.ShowError(
+                string.IsNullOrWhiteSpace(err)
+                    ? "Не удалось сохранить файл настроек."
+                    : $"Не удалось сохранить настройки: {err}",
+                "Настройки");
+            return;
+        }
+
+        WhiteSpaceThemeManager.Apply(_preferences);
+
         AppDialogService.ShowSuccess("Настройки интерфейса сохранены.", "Настройки");
     }
 

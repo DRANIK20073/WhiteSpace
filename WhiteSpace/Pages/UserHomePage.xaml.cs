@@ -71,6 +71,7 @@ namespace WhiteSpace.Pages
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             LoadPreferences();
+            UiAnimationHelper.ApplyFadeIn(RootPageGrid, _preferences.EnableAnimations);
             ApplySidebarSelection();
             ApplyViewModeSelection();
             await LoadDashboardAsync();
@@ -278,7 +279,7 @@ namespace WhiteSpace.Pages
 
         private void ApplySidebarSelection()
         {
-            var activeBackground = new SolidColorBrush(Color.FromRgb(51, 65, 85));
+            var activeBackground = ResolveBrush("WsSurfaceMutedBrush", new SolidColorBrush(Color.FromRgb(51, 65, 85)));
             var transparent = Brushes.Transparent;
 
             MyBoardsButton.Background = _currentSection == DashboardSection.MyBoards ? activeBackground : transparent;
@@ -288,13 +289,24 @@ namespace WhiteSpace.Pages
 
         private void ApplyViewModeSelection()
         {
-            LargeViewButton.Background = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(139, 92, 246));
-            LargeViewButton.Foreground = _isCompactView ? new SolidColorBrush(Color.FromRgb(30, 41, 59)) : Brushes.White;
-            LargeViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(226, 232, 240)) : new SolidColorBrush(Color.FromRgb(139, 92, 246));
+            var activeBackground = ResolveBrush("WsPurpleBrush", new SolidColorBrush(Color.FromRgb(139, 92, 246)));
+            var activeBorder = ResolveBrush("WsPurpleBrush", new SolidColorBrush(Color.FromRgb(139, 92, 246)));
+            var inactiveBackground = ResolveBrush("WsSurfaceBrush", new SolidColorBrush(Color.FromRgb(255, 255, 255)));
+            var inactiveForeground = ResolveBrush("WsTextPrimaryBrush", new SolidColorBrush(Color.FromRgb(30, 41, 59)));
+            var inactiveBorder = ResolveBrush("WsBorderBrush", new SolidColorBrush(Color.FromRgb(226, 232, 240)));
 
-            CompactViewButton.Background = _isCompactView ? new SolidColorBrush(Color.FromRgb(139, 92, 246)) : Brushes.White;
-            CompactViewButton.Foreground = _isCompactView ? Brushes.White : new SolidColorBrush(Color.FromRgb(30, 41, 59));
-            CompactViewButton.BorderBrush = _isCompactView ? new SolidColorBrush(Color.FromRgb(139, 92, 246)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
+            LargeViewButton.Background = _isCompactView ? inactiveBackground : activeBackground;
+            LargeViewButton.Foreground = _isCompactView ? inactiveForeground : Brushes.White;
+            LargeViewButton.BorderBrush = _isCompactView ? inactiveBorder : activeBorder;
+
+            CompactViewButton.Background = _isCompactView ? activeBackground : inactiveBackground;
+            CompactViewButton.Foreground = _isCompactView ? Brushes.White : inactiveForeground;
+            CompactViewButton.BorderBrush = _isCompactView ? activeBorder : inactiveBorder;
+        }
+
+        private static Brush ResolveBrush(string resourceKey, Brush fallback)
+        {
+            return Application.Current?.TryFindResource(resourceKey) as Brush ?? fallback;
         }
 
         private void UpdateBoardsVisibility()
@@ -635,6 +647,12 @@ namespace WhiteSpace.Pages
                     if (border.RenderTransform is TranslateTransform transform)
                     {
                         transform.Y = 0;
+                    }
+                    else if (border.RenderTransform is TransformGroup transformGroup &&
+                             transformGroup.Children.Count > 1 &&
+                             transformGroup.Children[1] is TranslateTransform translateTransform)
+                    {
+                        translateTransform.Y = 0;
                     }
                 }
             }), DispatcherPriority.Loaded);

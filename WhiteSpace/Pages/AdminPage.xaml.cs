@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using WhiteSpace;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
@@ -33,6 +34,9 @@ public partial class AdminPage : Page
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
+        var prefs = AppPreferences.Load();
+        UiAnimationHelper.ApplyFadeIn(AdminRootGrid, prefs.EnableAnimations);
+
         _isConfiguredAdmin = await _service.IsCurrentUserAdminAsync();
         AccessHintTextBlock.Text = _isConfiguredAdmin
             ? "Администратор: полный доступ к управлению данными"

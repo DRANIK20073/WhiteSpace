@@ -1,0 +1,72 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Тёмная тема: Gray 900 фон, Gray 800 карточки, текст белый -->
+    <Color x:Key="WsPageBgColor">#FF111827</Color>
+    <Color x:Key="WsSurfaceColor">#FF1F2937</Color>
+    <Color x:Key="WsSurfaceMutedColor">#FF374151</Color>
+    <Color x:Key="WsTextPrimaryColor">#FFFFFFFF</Color>
+    <Color x:Key="WsTextSecondaryColor">#FF9CA3AF</Color>
+    <Color x:Key="WsTextMutedColor">#FF6B7280</Color>
+    <Color x:Key="WsBorderColor">#FF374151</Color>
+
+    <SolidColorBrush x:Key="WsPageBgBrush" Color="{StaticResource WsPageBgColor}"/>
+    <SolidColorBrush x:Key="WsSurfaceBrush" Color="{StaticResource WsSurfaceColor}"/>
+    <SolidColorBrush x:Key="WsSurfaceMutedBrush" Color="{StaticResource WsSurfaceMutedColor}"/>
+    <SolidColorBrush x:Key="WsTextPrimaryBrush" Color="{StaticResource WsTextPrimaryColor}"/>
+    <SolidColorBrush x:Key="WsTextSecondaryBrush" Color="{StaticResource WsTextSecondaryColor}"/>
+    <SolidColorBrush x:Key="WsTextMutedBrush" Color="{StaticResource WsTextMutedColor}"/>
+    <SolidColorBrush x:Key="WsBorderBrush" Color="{StaticResource WsBorderColor}"/>
+
+    <SolidColorBrush x:Key="WsSidebarBgBrush" Color="#FF0F172A"/>
+    <SolidColorBrush x:Key="WsSidebarBorderBrush" Color="#FF334155"/>
+
+    <SolidColorBrush x:Key="WsChatPanelBgBrush" Color="{StaticResource WsSurfaceColor}"/>
+    <SolidColorBrush x:Key="WsChatPeerBubbleBrush" Color="#FF374151"/>
+    <SolidColorBrush x:Key="WsChatMineBubbleBrush" Color="#FF7C3AED"/>
+    <SolidColorBrush x:Key="WsChatPeerTextBrush" Color="#FFF9FAFB"/>
+    <SolidColorBrush x:Key="WsChatInputBgBrush" Color="#FF111827"/>
+
+    <Color x:Key="WsPurpleColor">#FFA78BFA</Color>
+    <Color x:Key="WsBlueColor">#FF60A5FA</Color>
+    <Color x:Key="WsDarkSlateColor">#FFF9FAFB</Color>
+    <Color x:Key="WsNeutralGrayColor">#FF9CA3AF</Color>
+    <SolidColorBrush x:Key="WsPurpleBrush" Color="{StaticResource WsPurpleColor}"/>
+    <SolidColorBrush x:Key="WsBlueBrush" Color="{StaticResource WsBlueColor}"/>
+    <SolidColorBrush x:Key="WsDarkSlateBrush" Color="{StaticResource WsDarkSlateColor}"/>
+    <SolidColorBrush x:Key="WsNeutralGrayBrush" Color="{StaticResource WsNeutralGrayColor}"/>
+
+    <LinearGradientBrush x:Key="WsPurpleBlueGradientBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#7C3AED" Offset="0"/>
+        <GradientStop Color="#3B82F6" Offset="1"/>
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="WsLoginPageBgBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#111827" Offset="0"/>
+        <GradientStop Color="#1E1B4B" Offset="1"/>
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="WsViewportGradientBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#1F2937" Offset="0"/>
+        <GradientStop Color="#111827" Offset="1"/>
+    </LinearGradientBrush>
+
+    <Duration x:Key="WsUiFadeDuration">0:0:0.28</Duration>
+    <QuadraticEase x:Key="WsEaseOut" EasingMode="EaseOut"/>
+
+    <SolidColorBrush x:Key="WsTopButtonPressBrush" Color="#FF4B5563"/>
+
+    <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource WsSurfaceColor}"/>
+    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource WsSurfaceMutedColor}"/>
+    <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="{StaticResource WsSurfaceColor}"/>
+    <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="{StaticResource WsPageBgColor}"/>
+    <SolidColorBrush x:Key="ComboBoxBorderBrushDisabled" Color="{StaticResource WsBorderColor}"/>
+    <SolidColorBrush x:Key="ComboBoxForeground" Color="{StaticResource WsTextPrimaryColor}"/>
+    <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="{StaticResource WsSurfaceColor}"/>
+    <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="{StaticResource WsBorderColor}"/>
+    <SolidColorBrush x:Key="ComboBoxDropDownGlyphForeground" Color="{StaticResource WsTextSecondaryColor}"/>
+    <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="{StaticResource WsPurpleColor}"/>
+    <SolidColorBrush x:Key="ComboBoxItemPillFillBrush" Color="{StaticResource WsPurpleColor}"/>
+    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="{StaticResource WsSurfaceMutedColor}"/>
+    <SolidColorBrush x:Key="ComboBoxItemForegroundSelected" Color="{StaticResource WsTextPrimaryColor}"/>
+    <SolidColorBrush x:Key="ComboBoxForegroundDisabled" Color="{StaticResource WsTextMutedColor}"/>
+</ResourceDictionary>

@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using WhiteSpace.Pages;
+using WhiteSpace.Services;
 
 namespace WhiteSpace
 {
@@ -8,6 +9,8 @@ namespace WhiteSpace
         protected override async void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            WhiteSpaceThemeManager.Apply(AppPreferences.Load());
 
             await SupabaseService.InitAsync();
 

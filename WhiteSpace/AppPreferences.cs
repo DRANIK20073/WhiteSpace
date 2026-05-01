@@ -12,10 +12,28 @@ public sealed class AppPreferences
     public bool ConfirmBeforeLogout { get; set; } = true;
     public bool EnableAnimations { get; set; } = true;
 
+    /// <summary>Светлая или тёмная тема интерфейса.</summary>
+    public string Theme { get; set; } = "Light";
+
+    /// <summary>Приводит значение к Light или Dark после загрузки из JSON.</summary>
+    public void NormalizeTheme()
+    {
+        Theme = string.Equals(Theme, "Dark", StringComparison.OrdinalIgnoreCase) ? "Dark" : "Light";
+    }
+
     private static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "WhiteSpace",
         "preferences.json");
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
+    };
 
     public static AppPreferences Load()
     {
@@ -27,7 +45,9 @@ public sealed class AppPreferences
             }
 
             var json = File.ReadAllText(FilePath);
-            return JsonSerializer.Deserialize<AppPreferences>(json) ?? new AppPreferences();
+            var prefs = JsonSerializer.Deserialize<AppPreferences>(json, JsonOptions) ?? new AppPreferences();
+            prefs.NormalizeTheme();
+            return prefs;
         }
         catch
         {
@@ -37,7 +57,42 @@ public sealed class AppPreferences
 
     public void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+        TrySave(out _);
+    }
+
+    /// <summary>
+    /// Сохраняет настройки атомарно (через временный файл).
+    /// </summary>
+    public bool TrySave(out string? errorMessage)
+    {
+        errorMessage = null;
+        try
+        {
+            var dir = Path.GetDirectoryName(FilePath);
+            if (!string.IsNullOrEmpty(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            var json = JsonSerializer.Serialize(this, JsonOptions);
+            var tempPath = FilePath + ".tmp";
+            File.WriteAllText(tempPath, json);
+            File.Copy(tempPath, FilePath, overwrite: true);
+            try
+            {
+                File.Delete(tempPath);
+            }
+            catch
+            {
+                // временный файл можно оставить
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            return false;
+        }
     }
 }

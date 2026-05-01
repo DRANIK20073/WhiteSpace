@@ -19,7 +19,7 @@
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="#333333"/>
+            <Setter Property="Background" Value="{DynamicResource WsPurpleBrush}"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -36,78 +36,12 @@
                                               VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <EventTrigger RoutedEvent="MouseEnter">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#666666"
-                                                        Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1.03"
-                                                         Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1.03"
-                                                         Duration="0:0:0.2"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                            <EventTrigger RoutedEvent="MouseLeave">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#333333"
-                                                        Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1"
-                                                         Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1"
-                                                         Duration="0:0:0.2"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                            <EventTrigger RoutedEvent="PreviewMouseLeftButtonDown">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#000000"
-                                                        Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="0.97"
-                                                         Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="0.97"
-                                                         Duration="0:0:0.1"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                            <EventTrigger RoutedEvent="PreviewMouseLeftButtonUp">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#666666"
-                                                        Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1.03"
-                                                         Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1.03"
-                                                         Duration="0:0:0.1"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#A78BFA"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#7C3AED"/>
+                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="border" Property="Opacity" Value="0.6"/>
                             </Trigger>
@@ -121,9 +55,9 @@
             <Setter Property="Height" Value="42"/>
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#E2E8F0"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -142,78 +76,12 @@
                                               VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <EventTrigger RoutedEvent="MouseEnter">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#F3F5FA"
-                                                        Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1.02"
-                                                         Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1.02"
-                                                         Duration="0:0:0.2"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                            <EventTrigger RoutedEvent="MouseLeave">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#FFFFFF"
-                                                        Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1"
-                                                         Duration="0:0:0.2"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1"
-                                                         Duration="0:0:0.2"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                            <EventTrigger RoutedEvent="PreviewMouseLeftButtonDown">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#E8ECF5"
-                                                        Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="0.98"
-                                                         Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="0.98"
-                                                         Duration="0:0:0.1"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
-                            <EventTrigger RoutedEvent="PreviewMouseLeftButtonUp">
-                                <BeginStoryboard>
-                                    <Storyboard>
-                                        <ColorAnimation Storyboard.TargetName="border"
-                                                        Storyboard.TargetProperty="Background.Color"
-                                                        To="#F3F5FA"
-                                                        Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleX"
-                                                         To="1.02"
-                                                         Duration="0:0:0.1"/>
-                                        <DoubleAnimation Storyboard.TargetName="scaleTransform"
-                                                         Storyboard.TargetProperty="ScaleY"
-                                                         To="1.02"
-                                                         Duration="0:0:0.1"/>
-                                    </Storyboard>
-                                </BeginStoryboard>
-                            </EventTrigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -227,7 +95,7 @@
                 Margin="18"
                 Background="Transparent"
                 CornerRadius="20"
-                BorderBrush="#E2E8F0"
+                BorderBrush="{DynamicResource WsBorderBrush}"
                 BorderThickness="1.5"
                 ClipToBounds="True"
                 SnapsToDevicePixels="True">
@@ -235,7 +103,7 @@
                 <TranslateTransform x:Name="DialogTranslate" Y="18"/>
             </Border.RenderTransform>
 
-            <Border Background="#FFFFFF"
+            <Border Background="{DynamicResource WsSurfaceBrush}"
                     CornerRadius="18"
                     ClipToBounds="True">
                 <Grid>
@@ -247,7 +115,7 @@
 
                     <Border x:Name="AccentBar"
                             Grid.Row="0"
-                            Background="#333333"
+                            Background="{DynamicResource WsPurpleBrush}"
                             HorizontalAlignment="Stretch"
                             CornerRadius="18,18,0,0"/>
 
@@ -257,13 +125,13 @@
                                 Width="54"
                                 Height="54"
                                 CornerRadius="27"
-                                Background="#F2F2F2"
+                                Background="{DynamicResource WsSurfaceMutedBrush}"
                                 HorizontalAlignment="Left">
                             <TextBlock x:Name="IconText"
                                        Text="i"
                                        FontSize="28"
                                        FontWeight="Bold"
-                                       Foreground="#333333"
+                                       Foreground="{DynamicResource WsTextPrimaryBrush}"
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
                                        Margin="0,6,0,0"/>
@@ -273,12 +141,12 @@
                                    Margin="0,18,0,10"
                                    FontSize="28"
                                    FontWeight="Bold"
-                                   Foreground="#111111"
+                                   Foreground="{DynamicResource WsTextPrimaryBrush}"
                                    TextWrapping="Wrap"/>
 
                         <TextBlock x:Name="MessageText"
                                    FontSize="15"
-                                   Foreground="#6B7280"
+                                   Foreground="{DynamicResource WsTextSecondaryBrush}"
                                    TextWrapping="Wrap"/>
                     </StackPanel>
 

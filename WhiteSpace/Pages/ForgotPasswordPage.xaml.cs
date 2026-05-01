@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using WhiteSpace;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -14,6 +15,12 @@ namespace WhiteSpace.Pages
             InitializeComponent();
             _supabaseService = new SupabaseService();
             EmailBox.Text = email?.Trim() ?? string.Empty;
+        }
+
+        private void Page_Loaded(object sender, RoutedEventArgs e)
+        {
+            var prefs = AppPreferences.Load();
+            UiAnimationHelper.ApplyFadeIn(AuthRootGrid, prefs.EnableAnimations);
         }
 
         private async void SendResetLink_Click(object sender, RoutedEventArgs e)
