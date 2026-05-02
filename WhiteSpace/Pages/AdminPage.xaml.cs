@@ -35,6 +35,7 @@ public partial class AdminPage : Page
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
         var prefs = AppPreferences.Load();
+        WhiteSpaceThemeManager.Apply(prefs);
         UiAnimationHelper.ApplyFadeIn(AdminRootGrid, prefs.EnableAnimations);
 
         _isConfiguredAdmin = await _service.IsCurrentUserAdminAsync();
@@ -58,6 +59,9 @@ public partial class AdminPage : Page
         SupabaseService.Client.Auth.SignOut();
         NavigationService?.Navigate(new LoginPage());
     }
+
+    private void Help_Click(object sender, RoutedEventArgs e) =>
+        HelpService.Show(Window.GetWindow(this), "admin");
 
     private void AdminPage_Unloaded(object sender, RoutedEventArgs e)
     {

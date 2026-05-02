@@ -1,4 +1,6 @@
-﻿using System.Windows;
+﻿using System;
+using System.Threading;
+using System.Windows;
 using WhiteSpace.Pages;
 using WhiteSpace.Services;
 
@@ -6,8 +8,40 @@ namespace WhiteSpace
 {
     public partial class App : Application
     {
+        private static Mutex? _singleInstanceMutex;
+
         protected override async void OnStartup(StartupEventArgs e)
         {
+            bool owned;
+            try
+            {
+                _singleInstanceMutex = new Mutex(true, @"Local\WhiteSpace_SingleInstance", out owned);
+            }
+            catch
+            {
+                owned = false;
+            }
+
+            if (!owned)
+            {
+                var relayCode = InviteLaunchArgs.TryParseInviteCode(e.Args);
+                if (!string.IsNullOrEmpty(relayCode))
+                {
+                    InviteRelay.WritePendingInvite(relayCode);
+                }
+
+                Environment.Exit(0);
+                return;
+            }
+
+            GC.KeepAlive(_singleInstanceMutex);
+
+            var inviteFromArgs = InviteLaunchArgs.TryParseInviteCode(e.Args);
+            if (!string.IsNullOrEmpty(inviteFromArgs))
+            {
+                PendingBoardInvite.Set(inviteFromArgs);
+            }
+
             base.OnStartup(e);
 
             WhiteSpaceThemeManager.Apply(AppPreferences.Load());

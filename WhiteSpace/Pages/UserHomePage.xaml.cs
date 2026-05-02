@@ -12,6 +12,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using System.Windows.Navigation;
+using WhiteSpace;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -39,6 +41,7 @@ namespace WhiteSpace.Pages
         private string _userEmail = "email@example.com";
         private readonly DispatcherTimer _searchDebounceTimer;
         private AppPreferences _preferences = new();
+        private bool _suppressPreferenceEvents;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -57,10 +60,14 @@ namespace WhiteSpace.Pages
 
         public double BoardCardHeight => _isCompactView ? 214 : 248;
 
+        private bool _boardsLoadedOnce;
+        private bool _homeNavHooked;
+
         public UserHomePage()
         {
             InitializeComponent();
             DataContext = this;
+            Unloaded += UserHomePage_Unloaded;
             _searchDebounceTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(250)
@@ -68,13 +75,42 @@ namespace WhiteSpace.Pages
             _searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
         }
 
+        private void UserHomePage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (NavigationService != null && _homeNavHooked)
+            {
+                NavigationService.LoadCompleted -= HomeNavigation_LoadCompleted;
+                _homeNavHooked = false;
+            }
+        }
+
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             LoadPreferences();
+            WhiteSpaceThemeManager.Apply(_preferences);
             UiAnimationHelper.ApplyFadeIn(RootPageGrid, _preferences.EnableAnimations);
             ApplySidebarSelection();
             ApplyViewModeSelection();
             await LoadDashboardAsync();
+            _boardsLoadedOnce = true;
+
+            await BoardInviteNavigation.TryNavigateFromPendingAsync(NavigationService);
+
+            if (NavigationService != null && !_homeNavHooked)
+            {
+                NavigationService.LoadCompleted += HomeNavigation_LoadCompleted;
+                _homeNavHooked = true;
+            }
+        }
+
+        private async void HomeNavigation_LoadCompleted(object sender, NavigationEventArgs e)
+        {
+            if (!_boardsLoadedOnce || NavigationService?.Content != this)
+            {
+                return;
+            }
+
+            await LoadBoardsAsync();
         }
 
         private async Task LoadDashboardAsync()
@@ -125,6 +161,14 @@ namespace WhiteSpace.Pages
                     var (board, role) = boardsWithRoles[index];
                     var paletteItem = palette[index % palette.Length];
 
+                    var createdUtc = board.CreatedAt.Kind == DateTimeKind.Utc
+                        ? board.CreatedAt
+                        : board.CreatedAt.ToUniversalTime();
+                    var lastUtc = BoardActivityStorage.TryGetLastActivityUtc(board.Id);
+                    var displayUtc = lastUtc.HasValue && lastUtc.Value >= createdUtc
+                        ? lastUtc.Value
+                        : createdUtc;
+
                     cards.Add(new HomeBoardCard
                     {
                         Id = board.Id,
@@ -143,7 +187,7 @@ namespace WhiteSpace.Pages
                             _ => $"Только просмотр • Код {board.AccessCode}"
                         },
                         CreatedAt = board.CreatedAt,
-                        CreatedText = FormatRelativeDate(board.CreatedAt),
+                        CreatedText = FormatRelativeDate(displayUtc.ToLocalTime()),
                         AccentStart = paletteItem.Start,
                         AccentEnd = paletteItem.End,
                         RoleBadgeBackground = role switch
@@ -279,12 +323,11 @@ namespace WhiteSpace.Pages
 
         private void ApplySidebarSelection()
         {
-            var activeBackground = ResolveBrush("WsSurfaceMutedBrush", new SolidColorBrush(Color.FromRgb(51, 65, 85)));
+            // Без постоянного «выбранного» фона: подсветка только из шаблона кнопки при наведении
             var transparent = Brushes.Transparent;
-
-            MyBoardsButton.Background = _currentSection == DashboardSection.MyBoards ? activeBackground : transparent;
-            SharedBoardsButton.Background = _currentSection == DashboardSection.SharedBoards ? activeBackground : transparent;
-            RecentBoardsButton.Background = _currentSection == DashboardSection.RecentBoards ? activeBackground : transparent;
+            MyBoardsButton.Background = transparent;
+            SharedBoardsButton.Background = transparent;
+            RecentBoardsButton.Background = transparent;
         }
 
         private void ApplyViewModeSelection()
@@ -389,17 +432,21 @@ namespace WhiteSpace.Pages
 
         private static void RememberBoard(Guid boardId)
         {
+            BoardActivityStorage.Touch(boardId);
             var boardIds = LoadRecentBoardIds();
             boardIds.Remove(boardId);
             boardIds.Insert(0, boardId);
             SaveRecentBoardIds(boardIds.Take(20).ToList());
         }
 
+        /// <summary>Обновляет недавние доски при переходе по ссылке-приглашению.</summary>
+        public static void RememberBoardActivity(Guid boardId) => RememberBoard(boardId);
+
         private void SetSection(DashboardSection section)
         {
             _currentSection = section;
-            _preferences.LastSection = section.ToString();
-            _preferences.Save();
+            AppPreferences.MutateAndSave(p => p.LastSection = section.ToString(), out _);
+            _preferences = AppPreferences.Load();
             RefreshVisibleBoards();
         }
 
@@ -417,11 +464,16 @@ namespace WhiteSpace.Pages
 
         private void SortComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_suppressPreferenceEvents)
+            {
+                return;
+            }
+
             var selectedSort = (SortComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString();
             if (!string.IsNullOrWhiteSpace(selectedSort))
             {
-                _preferences.SortMode = selectedSort;
-                _preferences.Save();
+                AppPreferences.MutateAndSave(p => p.SortMode = selectedSort, out _);
+                _preferences = AppPreferences.Load();
             }
 
             if (IsLoaded)
@@ -436,8 +488,8 @@ namespace WhiteSpace.Pages
             OnPropertyChanged(nameof(BoardCardWidth));
             OnPropertyChanged(nameof(BoardCardHeight));
             ApplyViewModeSelection();
-            _preferences.UseCompactView = false;
-            _preferences.Save();
+            AppPreferences.MutateAndSave(p => p.UseCompactView = false, out _);
+            _preferences = AppPreferences.Load();
             RefreshVisibleBoards();
         }
 
@@ -447,8 +499,8 @@ namespace WhiteSpace.Pages
             OnPropertyChanged(nameof(BoardCardWidth));
             OnPropertyChanged(nameof(BoardCardHeight));
             ApplyViewModeSelection();
-            _preferences.UseCompactView = true;
-            _preferences.Save();
+            AppPreferences.MutateAndSave(p => p.UseCompactView = true, out _);
+            _preferences = AppPreferences.Load();
             RefreshVisibleBoards();
         }
 
@@ -542,6 +594,47 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private async void JoinByLink_Click(object sender, RoutedEventArgs e)
+        {
+            var pasted = AppDialogService.ShowTextInput(
+                "Приглашение по ссылке",
+                "Вставьте ссылку на доску или 6-значный код доступа:",
+                "Подключиться",
+                "Отмена",
+                "");
+
+            if (pasted == null)
+            {
+                return;
+            }
+
+            var code = BoardInviteLinkParser.TryGetAccessCode(pasted);
+            if (string.IsNullOrEmpty(code))
+            {
+                AppDialogService.ShowWarning(
+                    "Не удалось распознать код в ссылке. Укажите полную ссылку или только код из 6 символов.",
+                    "Подключение к доске");
+                return;
+            }
+
+            var board = await _service.JoinBoardAsync(code);
+            if (board == null)
+            {
+                AppDialogService.ShowError(
+                    "Не удалось присоединиться к доске. Проверьте ссылку или код доступа.",
+                    "Подключение к доске");
+                return;
+            }
+
+            await LoadBoardsAsync();
+            RememberBoard(board.Id);
+
+            if (AppDialogService.ShowConfirmation($"Вы подключились к доске \"{board.Title}\". Открыть её сейчас?", "Подключение к доске"))
+            {
+                NavigationService?.Navigate(new BoardPage(board.Id));
+            }
+        }
+
         private void OpenBoard_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not Button button || button.CommandParameter is not Guid boardId)
@@ -603,6 +696,9 @@ namespace WhiteSpace.Pages
             NavigationService?.Navigate(new LoginPage());
         }
 
+        private void Help_Click(object sender, RoutedEventArgs e) =>
+            HelpService.Show(Window.GetWindow(this), "home");
+
         private void SearchDebounceTimer_Tick(object? sender, EventArgs e)
         {
             _searchDebounceTimer.Stop();
@@ -611,24 +707,32 @@ namespace WhiteSpace.Pages
 
         private void LoadPreferences()
         {
-            _preferences = AppPreferences.Load();
-            _isCompactView = _preferences.UseCompactView;
-
-            if (Enum.TryParse<DashboardSection>(_preferences.LastSection, out var section))
+            _suppressPreferenceEvents = true;
+            try
             {
-                _currentSection = section;
-            }
+                _preferences = AppPreferences.Load();
+                _isCompactView = _preferences.UseCompactView;
 
-            if (SortComboBox != null)
-            {
-                foreach (var item in SortComboBox.Items.OfType<ComboBoxItem>())
+                if (Enum.TryParse<DashboardSection>(_preferences.LastSection, out var section))
                 {
-                    if (string.Equals(item.Content?.ToString(), _preferences.SortMode, StringComparison.Ordinal))
+                    _currentSection = section;
+                }
+
+                if (SortComboBox != null)
+                {
+                    foreach (var item in SortComboBox.Items.OfType<ComboBoxItem>())
                     {
-                        SortComboBox.SelectedItem = item;
-                        break;
+                        if (string.Equals(item.Content?.ToString(), _preferences.SortMode, StringComparison.Ordinal))
+                        {
+                            SortComboBox.SelectedItem = item;
+                            break;
+                        }
                     }
                 }
+            }
+            finally
+            {
+                _suppressPreferenceEvents = false;
             }
         }
 

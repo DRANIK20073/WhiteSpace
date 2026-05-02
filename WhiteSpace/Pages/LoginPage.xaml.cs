@@ -19,8 +19,12 @@ namespace WhiteSpace.Pages
         private void Page_Loaded(object sender, RoutedEventArgs e)
         {
             var prefs = AppPreferences.Load();
+            WhiteSpaceThemeManager.Apply(prefs);
             UiAnimationHelper.ApplyFadeIn(AuthRootGrid, prefs.EnableAnimations);
         }
+
+        private void Help_Click(object sender, RoutedEventArgs e) =>
+            HelpService.Show(Window.GetWindow(this), "auth");
 
         private async void Login_Click(object sender, RoutedEventArgs e)
         {

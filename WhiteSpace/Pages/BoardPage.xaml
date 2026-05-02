@@ -312,6 +312,9 @@
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
                             VerticalAlignment="Center">
+                    <Button Style="{StaticResource HelpRoundButtonStyle}"
+                            Margin="0,0,8,0"
+                            Click="Help_Click"/>
                     <Button Style="{StaticResource HeaderActionButtonStyle}"
                             Click="Share_Click">
                         <TextBlock Text="Поделиться"/>
@@ -399,34 +402,213 @@
             <Border Grid.Column="0"
                     Background="{DynamicResource WsSurfaceBrush}"
                     ClipToBounds="True">
-                <Grid x:Name="Viewport"
-                      MouseDown="Viewport_MouseDown"
-                      MouseMove="Viewport_MouseMove"
-                      MouseUp="Viewport_MouseUp"
-                      MouseWheel="Viewport_MouseWheel"
-                      Background="{DynamicResource WsViewportGradientBrush}">
+                <Grid>
+                    <Grid x:Name="Viewport"
+                          MouseDown="Viewport_MouseDown"
+                          MouseMove="Viewport_MouseMove"
+                          MouseUp="Viewport_MouseUp"
+                          MouseWheel="Viewport_MouseWheel"
+                          Background="{DynamicResource WsViewportGradientBrush}">
 
-                    <Canvas x:Name="BoardCanvas" Width="50000" Height="50000">
-                        <Canvas.RenderTransform>
-                            <TransformGroup>
-                                <ScaleTransform x:Name="BoardScale" ScaleX="1" ScaleY="1"/>
-                                <TranslateTransform x:Name="BoardTranslate" X="0" Y="0"/>
-                            </TransformGroup>
-                        </Canvas.RenderTransform>
-                    </Canvas>
-                    <Canvas x:Name="CursorCanvas"
-                            Width="50000"
-                            Height="50000"
-                            IsHitTestVisible="False">
-                        <Canvas.RenderTransform>
-                            <TransformGroup>
-                                <ScaleTransform ScaleX="{Binding ElementName=BoardScale, Path=ScaleX}"
-                                                ScaleY="{Binding ElementName=BoardScale, Path=ScaleY}"/>
-                                <TranslateTransform X="{Binding ElementName=BoardTranslate, Path=X}"
-                                                    Y="{Binding ElementName=BoardTranslate, Path=Y}"/>
-                            </TransformGroup>
-                        </Canvas.RenderTransform>
-                    </Canvas>
+                        <Canvas x:Name="BoardCanvas" Width="50000" Height="50000">
+                            <Canvas.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform x:Name="BoardScale" ScaleX="1" ScaleY="1"/>
+                                    <TranslateTransform x:Name="BoardTranslate" X="0" Y="0"/>
+                                </TransformGroup>
+                            </Canvas.RenderTransform>
+                        </Canvas>
+                        <Canvas x:Name="CursorCanvas"
+                                Width="50000"
+                                Height="50000"
+                                IsHitTestVisible="False">
+                            <Canvas.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform ScaleX="{Binding ElementName=BoardScale, Path=ScaleX}"
+                                                    ScaleY="{Binding ElementName=BoardScale, Path=ScaleY}"/>
+                                    <TranslateTransform X="{Binding ElementName=BoardTranslate, Path=X}"
+                                                        Y="{Binding ElementName=BoardTranslate, Path=Y}"/>
+                                </TransformGroup>
+                            </Canvas.RenderTransform>
+                        </Canvas>
+                    </Grid>
+
+                    <!-- Плавающая панель над выбранной фигурой (как в Figma) -->
+                    <Border x:Name="SelectionToolbarPanel"
+                            Visibility="Collapsed"
+                            VerticalAlignment="Top"
+                            HorizontalAlignment="Left"
+                            Margin="0"
+                            Padding="8,6"
+                            CornerRadius="10"
+                            Background="#2C2C2E"
+                            BorderBrush="#555555"
+                            BorderThickness="1"
+                            Panel.ZIndex="10">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.35" Color="#000000"/>
+                        </Border.Effect>
+                        <StackPanel Orientation="Horizontal">
+                            <ComboBox x:Name="SelectionToolbarShapeCombo"
+                                      Width="138"
+                                      Height="28"
+                                      Margin="0,0,10,0"
+                                      Padding="8,2"
+                                      VerticalAlignment="Center"
+                                      Visibility="Collapsed"
+                                      SelectionChanged="SelectionToolbarShape_SelectionChanged">
+                                <ComboBoxItem Content="Прямоугольник" Tag="rectangle"/>
+                                <ComboBoxItem Content="Эллипс" Tag="ellipse"/>
+                            </ComboBox>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center">
+                                <Button x:Name="SelectionToolbarFillButton"
+                                        Width="56"
+                                        Height="30"
+                                        Padding="4,2"
+                                        Cursor="Hand"
+                                        Background="#FFFFFF"
+                                        BorderBrush="#555555"
+                                        BorderThickness="1"
+                                        VerticalAlignment="Center"
+                                        Click="SelectionToolbarFillButton_Click"
+                                        ToolTip="Заливка и контур (палитра)">
+                                    <Grid Width="48" Height="22">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="4"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Ellipse x:Name="SelectionToolbarFillSwatch"
+                                                 Grid.Column="0"
+                                                 Width="16"
+                                                 Height="16"
+                                                 VerticalAlignment="Center"
+                                                 Fill="#111111"
+                                                 ToolTip="Заливка"/>
+                                        <Ellipse x:Name="SelectionToolbarStrokeSwatch"
+                                                 Grid.Column="2"
+                                                 Width="16"
+                                                 Height="16"
+                                                 VerticalAlignment="Center"
+                                                 Fill="#111111"
+                                                 ToolTip="Контур"/>
+                                        <TextBlock Grid.ColumnSpan="3"
+                                                   Text="▼"
+                                                   FontSize="8"
+                                                   Foreground="#444444"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Bottom"/>
+                                    </Grid>
+                                </Button>
+                                <Popup x:Name="SelectionToolbarFillPopup"
+                                       StaysOpen="False"
+                                       Placement="Bottom"
+                                       AllowsTransparency="True"
+                                       PopupAnimation="Fade">
+                                    <Border Background="#000000"
+                                            CornerRadius="12"
+                                            Padding="12,10"
+                                            BorderBrush="#404040"
+                                            BorderThickness="1">
+                                        <Border.Effect>
+                                            <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.5" Color="#000000"/>
+                                        </Border.Effect>
+                                        <StackPanel MinWidth="300">
+                                            <StackPanel x:Name="FillModeButtonRow"
+                                                        Orientation="Horizontal"
+                                                        HorizontalAlignment="Center"
+                                                        Margin="0,0,0,12">
+                                                <Button x:Name="FillModeSolidBtn"
+                                                        Tag="solid"
+                                                        Margin="4,0"
+                                                        Padding="14,8"
+                                                        Cursor="Hand"
+                                                        Click="FillModeButton_Click"
+                                                        Content="Заливка"/>
+                                                <Button x:Name="FillModeTintBtn"
+                                                        Tag="tint"
+                                                        Margin="4,0"
+                                                        Padding="14,8"
+                                                        Cursor="Hand"
+                                                        Click="FillModeButton_Click"
+                                                        Content="Прозрачная"/>
+                                                <Button x:Name="FillModeStrokeBtn"
+                                                        Tag="stroke"
+                                                        Margin="4,0"
+                                                        Padding="14,8"
+                                                        Cursor="Hand"
+                                                        Click="FillModeButton_Click"
+                                                        Content="Без заливки"/>
+                                            </StackPanel>
+                                            <TextBlock Text="Цвет заливки"
+                                                       Foreground="#CCCCCC"
+                                                       Margin="0,0,0,6"
+                                                       FontSize="12"/>
+                                            <UniformGrid x:Name="FillPaletteGridFill" Rows="2" Columns="11"/>
+                                            <TextBlock Text="Цвет контура"
+                                                       Foreground="#CCCCCC"
+                                                       Margin="0,12,0,6"
+                                                       FontSize="12"/>
+                                            <UniformGrid x:Name="FillPaletteGridStroke" Rows="2" Columns="11"/>
+                                            <TextBlock Text="Стиль контура"
+                                                       Foreground="#CCCCCC"
+                                                       Margin="0,12,0,6"
+                                                       FontSize="12"/>
+                                            <StackPanel x:Name="StrokeStyleRow"
+                                                        Orientation="Horizontal"
+                                                        HorizontalAlignment="Center"
+                                                        Margin="0,0,0,2">
+                                                <Button x:Name="StrokeStyleSolidBtn"
+                                                        Tag="solid"
+                                                        Margin="3,0"
+                                                        Padding="10,6"
+                                                        Cursor="Hand"
+                                                        Click="StrokeStyleButton_Click"
+                                                        Content="Сплошная"/>
+                                                <Button x:Name="StrokeStyleDashBtn"
+                                                        Tag="dash"
+                                                        Margin="3,0"
+                                                        Padding="10,6"
+                                                        Cursor="Hand"
+                                                        Click="StrokeStyleButton_Click"
+                                                        Content="Штрих"/>
+                                                <Button x:Name="StrokeStyleDotBtn"
+                                                        Tag="dot"
+                                                        Margin="3,0"
+                                                        Padding="10,6"
+                                                        Cursor="Hand"
+                                                        Click="StrokeStyleButton_Click"
+                                                        Content="Точки"/>
+                                                <Button x:Name="StrokeStyleDashDotBtn"
+                                                        Tag="dashdot"
+                                                        Margin="3,0"
+                                                        Padding="10,6"
+                                                        Cursor="Hand"
+                                                        Click="StrokeStyleButton_Click"
+                                                        Content="Штрих-пунктир"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                            </StackPanel>
+                            <Button x:Name="SelectionToolbarDeleteButton"
+                                    Width="36"
+                                    Height="32"
+                                    Padding="0"
+                                    Cursor="Hand"
+                                    Background="#3A3A3C"
+                                    BorderThickness="0"
+                                    ToolTip="Удалить (Del)"
+                                    Click="SelectionToolbarDelete_Click">
+                                <TextBlock FontFamily="Segoe MDL2 Assets"
+                                           Text="&#xE74D;"
+                                           FontSize="16"
+                                           Foreground="#FF6B6B"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </Border>
 
@@ -487,7 +669,19 @@
                                 <Setter Property="Template">
                                     <Setter.Value>
                                         <ControlTemplate TargetType="ListViewItem">
-                                            <ContentPresenter/>
+                                            <Border x:Name="ItemBd"
+                                                    Background="Transparent"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="ItemBd" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="ItemBd" Property="Background" Value="Transparent"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Setter.Value>
                                 </Setter>

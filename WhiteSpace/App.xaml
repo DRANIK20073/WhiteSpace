@@ -6,11 +6,46 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <!-- WPF UI темы -->
+                <!-- Явный слой темы WPF UI (обязателен для ApplicationThemeManager); фактическая тема задаётся в WhiteSpaceThemeManager.Apply из preferences.json -->
                 <ui:ThemesDictionary Theme="Light" />
                 <ui:ControlsDictionary />
                 <!-- Палитра WhiteSpace подставляется в коде (WhiteSpaceThemeManager) при старте -->
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Кнопка «?» для вызова справки с любого экрана -->
+            <Style x:Key="HelpRoundButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="36"/>
+                <Setter Property="Height" Value="36"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="ToolTip" Value="Справка"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Root"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="18">
+                                <TextBlock Text="?"
+                                           FontSize="16"
+                                           FontWeight="Bold"
+                                           Foreground="{DynamicResource WsTextPrimaryBrush}"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Root" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -10,17 +10,28 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <DockPanel Margin="0,0,0,18">
+        <Grid Margin="0,0,0,18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
             <Button Width="130"
                     Height="40"
                     Content="← Назад"
                     Click="Back_Click"/>
-            <TextBlock Margin="16,7,0,0"
+            <TextBlock Grid.Column="1"
+                       Margin="16,7,16,0"
                        FontSize="28"
                        FontWeight="Bold"
                        Foreground="{DynamicResource WsTextPrimaryBrush}"
-                       Text="Настройки пользователя"/>
-        </DockPanel>
+                       Text="Настройки пользователя"
+                       TextTrimming="CharacterEllipsis"/>
+            <Button Grid.Column="2"
+                    Style="{StaticResource HelpRoundButtonStyle}"
+                    VerticalAlignment="Center"
+                    Click="Help_Click"/>
+        </Grid>
 
         <ScrollViewer Grid.Row="1"
                       VerticalScrollBarVisibility="Auto">

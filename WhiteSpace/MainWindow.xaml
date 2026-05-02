@@ -9,6 +9,9 @@
 
     <Grid x:Name="WindowRoot" Background="{DynamicResource WsPageBgBrush}">
         <!-- Контейнер для страниц -->
-        <Frame Name="MainFrame" NavigationUIVisibility="Hidden" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+        <Frame Name="MainFrame"
+               NavigationUIVisibility="Hidden"
+               HorizontalAlignment="Stretch"
+               VerticalAlignment="Stretch"/>
     </Grid>
 </Window>

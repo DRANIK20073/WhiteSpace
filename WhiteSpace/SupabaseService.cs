@@ -1096,6 +1096,25 @@ public class SupabaseService
         }
     }
 
+    /// <summary>Удаляет одну фигуру по идентификатору.</summary>
+    public async Task<bool> DeleteShapeAsync(int shapeId)
+    {
+        try
+        {
+            await _client
+                .From<BoardShape>()
+                .Where(s => s.Id == shapeId)
+                .Delete();
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError($"Не удалось удалить фигуру: {ex.Message}", "Доска");
+            return false;
+        }
+    }
+
     public async Task<bool> ClearBoardShapesAsync(Guid boardId)
     {
         try

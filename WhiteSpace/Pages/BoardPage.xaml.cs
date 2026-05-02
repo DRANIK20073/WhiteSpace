@@ -17,6 +17,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
@@ -24,6 +25,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using WhiteSpace;
+using WhiteSpace.Models;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -66,6 +68,22 @@ namespace WhiteSpace.Pages
         private const double DefaultRectW = 140;
         private const double DefaultRectH = 90;
         private const double DefaultEllipse = 100;
+
+        /// <summary>21 цвет + кнопка «свой» на каждую палитру (заливка и контур).</summary>
+        private static readonly string[] FillPaletteHexes =
+        {
+            "#5C5C5C", "#BDBDBD", "#F44336", "#FF9800", "#FFEB3B", "#4CAF50", "#009688", "#29B6F6", "#9C27B0", "#E91E63", "#FFFFFF",
+            "#EEEEEE", "#F5F5F5", "#FFCDD2", "#FFE0B2", "#FFF9C4", "#C8E6C9", "#B2DFDB", "#B3E5FC", "#E1BEE7", "#F8BBD0"
+        };
+
+        private bool _fillPaletteBuilt;
+        private string _nextRectFillMode = "stroke";
+
+        /// <summary>Рисование прямоугольника/эллипса перетаскиванием (как в Figma).</summary>
+        private bool _isPlacingRectEllipse;
+        private Point _rectPlacementStartWorld;
+
+        private bool _suppressSelectionToolbarSync;
 
         // Изменение размеров фигуры
         private bool _isResizing;
@@ -142,6 +160,8 @@ namespace WhiteSpace.Pages
             Viewport.MouseWheel += Viewport_MouseWheel;
             Viewport.MouseLeave += Viewport_MouseLeave;
 
+            PreviewKeyDown += BoardPage_PreviewKeyDown;
+
             Loaded += Page_Loaded;
             Unloaded += Page_Unloaded;
             _accessMonitorTimer.Tick += AccessMonitorTimer_Tick;
@@ -152,7 +172,15 @@ namespace WhiteSpace.Pages
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             var prefs = AppPreferences.Load();
+            WhiteSpaceThemeManager.Apply(prefs);
             UiAnimationHelper.ApplyFadeIn(BoardRootGrid, prefs.EnableAnimations);
+
+            if (SelectionToolbarFillPopup != null && SelectionToolbarFillButton != null)
+            {
+                SelectionToolbarFillPopup.PlacementTarget = SelectionToolbarFillButton;
+            }
+
+            EnsureFillPaletteBuilt();
 
             await LoadBoardMetadataAsync();
             _isAdminSession = await _supabaseService.IsCurrentUserAdminAsync();
@@ -162,6 +190,7 @@ namespace WhiteSpace.Pages
 
             // Определяем роль пользователя
             var userRole = _isAdminSession ? "owner" : await _supabaseService.GetUserRoleForBoardAsync(_boardId);
+            _myUserRole = userRole;
 
             if (userRole == "viewer" || userRole == "editor")
             {
@@ -195,6 +224,7 @@ namespace WhiteSpace.Pages
             await SetCurrentUserPresenceAsync(true);
             await InitCursorIdentityAsync();
             ChatMessagesItemsControl.ItemsSource = _chatMessages;
+            UsersListView.SelectedItem = null;
             _accessMonitorTimer.Start();
             _presenceHeartbeatTimer.Start();
             _presenceUiRefreshTimer.Start();
@@ -213,6 +243,7 @@ namespace WhiteSpace.Pages
 
         private void MarkSaved()
         {
+            BoardActivityStorage.Touch(_boardId);
             if (SaveStatusText != null)
             {
                 SaveStatusText.Text = $"Сохранено {DateTime.Now:HH:mm}";
@@ -260,6 +291,7 @@ namespace WhiteSpace.Pages
             RemoveResizeFrame();
             RemovePreviewShape();
 
+            _isPlacingRectEllipse = false;
             _currentStroke = null;
             _isDrawing = false;
             _isDraggingElement = false;
@@ -397,7 +429,7 @@ namespace WhiteSpace.Pages
             }
             catch (Exception ex)
             {
-                AppDialogService.ShowError($"Ошибка загрузки фигур: {ex.Message}", "Доска");
+                System.Diagnostics.Debug.WriteLine($"LoadShapesFromSupabase: {ex}");
             }
             finally
             {
@@ -464,9 +496,11 @@ namespace WhiteSpace.Pages
                     if (shape.Type == "line" && !string.IsNullOrEmpty(shape.Points))
                     {
                         existingShape.Points = shape.Points;
-                        existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                    existingShape.DeserializedPoints = string.IsNullOrEmpty(shape.Points)
+                        ? new List<Point>()
+                        : JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
 
-                        if (uiElement is Polyline targetPolyline)
+                    if (uiElement is Polyline targetPolyline)
                         {
                             targetPolyline.Points.Clear();
                             foreach (var point in existingShape.DeserializedPoints)
@@ -491,9 +525,16 @@ namespace WhiteSpace.Pages
         {
             var brush = GetBrushFromColor(shape.Color);
 
-            if (element is Shape shapeElement)
+            if (element is Shape sh)
             {
-                shapeElement.Stroke = brush;
+                if (shape.Type is "rectangle" or "ellipse")
+                {
+                    ApplyRectEllipseVisual(sh, shape);
+                }
+                else
+                {
+                    sh.Stroke = brush;
+                }
             }
             else if (element is Polyline polyline)
             {
@@ -526,10 +567,13 @@ namespace WhiteSpace.Pages
                 if (element is Polyline targetPolyline && !string.IsNullOrEmpty(shape.Points))
                 {
                     var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-                    targetPolyline.Points.Clear();
-                    foreach (var point in points)
+                    if (points != null)
                     {
-                        targetPolyline.Points.Add(point);
+                        targetPolyline.Points.Clear();
+                        foreach (var point in points)
+                        {
+                            targetPolyline.Points.Add(point);
+                        }
                     }
                 }
             }
@@ -1374,17 +1418,27 @@ namespace WhiteSpace.Pages
 
         private void Share_Click(object sender, RoutedEventArgs e)
         {
-            string accessCode = string.IsNullOrWhiteSpace(_boardInfo?.AccessCode)
-                ? "Код доски пока недоступен."
-                : $"Код доступа к доске: {_boardInfo.AccessCode}";
+            if (string.IsNullOrWhiteSpace(_boardInfo?.AccessCode))
+            {
+                AppDialogService.ShowInfo("Код доски пока недоступен.", "Поделиться доской");
+                return;
+            }
 
-            AppDialogService.ShowInfo(accessCode, "Поделиться доской");
+            var link = BoardInviteLinkBuilder.BuildInviteLink(_boardInfo.AccessCode);
+            var win = new BoardShareWindow(_boardInfo.AccessCode, link)
+            {
+                Owner = Window.GetWindow(this)
+            };
+            win.ShowDialog();
         }
 
         private void BackToMenu_Click(object sender, RoutedEventArgs e)
         {
             NavigateBackFromBoard();
         }
+
+        private void Help_Click(object sender, RoutedEventArgs e) =>
+            HelpService.Show(Window.GetWindow(this), "board");
 
         private void SaveBoard_Click(object sender, RoutedEventArgs e)
         {
@@ -1918,6 +1972,26 @@ namespace WhiteSpace.Pages
 
             if (shape.Type == "line")
             {
+                if (string.IsNullOrWhiteSpace(shape.Points))
+                {
+                    return;
+                }
+
+                List<Point>? points;
+                try
+                {
+                    points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                }
+                catch
+                {
+                    return;
+                }
+
+                if (points == null || points.Count == 0)
+                {
+                    return;
+                }
+
                 var polyline = new Polyline
                 {
                     Stroke = brush,
@@ -1928,7 +2002,6 @@ namespace WhiteSpace.Pages
                     Uid = shape.Id.ToString()
                 };
 
-                var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
                 foreach (var point in points)
                 {
                     polyline.Points.Add(new Point(point.X, point.Y));
@@ -1994,24 +2067,8 @@ namespace WhiteSpace.Pages
             {
                 UIElement element = shape.Type switch
                 {
-                    "rectangle" => new Rectangle
-                    {
-                        Width = shape.Width,
-                        Height = shape.Height,
-                        Stroke = brush,
-                        StrokeThickness = 2,
-                        Fill = Brushes.Transparent,
-                        Uid = shape.Id.ToString()
-                    },
-                    "ellipse" => new Ellipse
-                    {
-                        Width = shape.Width,
-                        Height = shape.Height,
-                        Stroke = brush,
-                        StrokeThickness = 2,
-                        Fill = Brushes.Transparent,
-                        Uid = shape.Id.ToString()
-                    },
+                    "rectangle" => CreateRectEllipseVisual(shape, true),
+                    "ellipse" => CreateRectEllipseVisual(shape, false),
                     _ => null
                 };
 
@@ -2135,6 +2192,7 @@ namespace WhiteSpace.Pages
             _isPanning = false;
             _isDraggingElement = false;
             _dragElement = null;
+            _isPlacingRectEllipse = false;
 
             RemoveResizeFrame();
             RemovePreviewShape();
@@ -2185,6 +2243,864 @@ namespace WhiteSpace.Pages
                 (screenPoint.X - BoardTranslate.X) / s,
                 (screenPoint.Y - BoardTranslate.Y) / s
             );
+        }
+
+        /// <summary>Координаты мира → координаты внутри области просмотра (без масштаба содержимого).</summary>
+        private Point WorldToViewport(Point world)
+        {
+            var s = BoardScale.ScaleX;
+            return new Point(world.X * s + BoardTranslate.X, world.Y * s + BoardTranslate.Y);
+        }
+
+        private void HideSelectionToolbar()
+        {
+            if (SelectionToolbarPanel != null)
+            {
+                SelectionToolbarPanel.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void UpdateSelectionToolbarPosition()
+        {
+            if (SelectionToolbarPanel == null || SelectionToolbarPanel.Visibility != Visibility.Visible || _resizeBorder == null)
+            {
+                return;
+            }
+
+            double left = Canvas.GetLeft(_resizeBorder);
+            double top = Canvas.GetTop(_resizeBorder);
+            double w = _resizeBorder.Width;
+            double h = _resizeBorder.Height;
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+
+            var worldTopCenter = new Point(left + w / 2, top);
+            var vp = WorldToViewport(worldTopCenter);
+
+            SelectionToolbarPanel.UpdateLayout();
+            double toolbarW = SelectionToolbarPanel.ActualWidth > 1 ? SelectionToolbarPanel.ActualWidth : 160;
+            double toolbarH = SelectionToolbarPanel.ActualHeight > 1 ? SelectionToolbarPanel.ActualHeight : 36;
+
+            double marginLeft = vp.X - toolbarW / 2;
+            double marginTop = vp.Y - toolbarH - 12;
+            marginLeft = Math.Max(8, Math.Min(marginLeft, Math.Max(0, Viewport.ActualWidth - toolbarW - 8)));
+            marginTop = Math.Max(8, marginTop);
+
+            SelectionToolbarPanel.Margin = new Thickness(marginLeft, marginTop, 0, 0);
+        }
+
+        private void EnsureFillPaletteBuilt()
+        {
+            if (_fillPaletteBuilt || FillPaletteGridFill == null || FillPaletteGridStroke == null)
+            {
+                return;
+            }
+
+            _fillPaletteBuilt = true;
+            FillPaletteGridFill.Children.Clear();
+            FillPaletteGridStroke.Children.Clear();
+
+            foreach (var hex in FillPaletteHexes)
+            {
+                FillPaletteGridFill.Children.Add(CreatePaletteSwatchButton(hex, true));
+                FillPaletteGridStroke.Children.Add(CreatePaletteSwatchButton(hex, false));
+            }
+
+            FillPaletteGridFill.Children.Add(CreatePaletteCustomButton(true));
+            FillPaletteGridStroke.Children.Add(CreatePaletteCustomButton(false));
+        }
+
+        private Button CreatePaletteSwatchButton(string hex, bool isFillColumn)
+        {
+            var bc = new BrushConverter();
+            Brush fill = Brushes.Gray;
+            try
+            {
+                if (bc.ConvertFromString(hex) is Brush b)
+                {
+                    fill = b;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            var ring = new Ellipse
+            {
+                Width = 28,
+                Height = 28,
+                Stroke = Brushes.Transparent,
+                StrokeThickness = 0
+            };
+            var inner = new Ellipse
+            {
+                Width = 22,
+                Height = 22,
+                Fill = fill
+            };
+            var host = new Grid { Width = 32, Height = 32, Background = Brushes.Transparent };
+            host.Children.Add(ring);
+            host.Children.Add(inner);
+            var wrap = new Button
+            {
+                Tag = hex,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Content = host,
+                ToolTip = hex
+            };
+            wrap.Click += (_, _) =>
+            {
+                _ = ApplyToolbarPaletteHexAsync(hex, !isFillColumn);
+            };
+            return wrap;
+        }
+
+        private Button CreatePaletteCustomButton(bool isFillColumn)
+        {
+            var customHost = new Grid { Width = 32, Height = 32 };
+            var grad = new Ellipse
+            {
+                Width = 24,
+                Height = 24,
+                Stroke = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99)),
+                StrokeThickness = 1
+            };
+            grad.Fill = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0),
+                EndPoint = new Point(1, 1),
+                GradientStops =
+                {
+                    new GradientStop(Color.FromRgb(0xFF, 0x3B, 0x30), 0),
+                    new GradientStop(Color.FromRgb(0xFF, 0xD6, 0x0A), 0.25),
+                    new GradientStop(Color.FromRgb(0x34, 0xC7, 0x59), 0.5),
+                    new GradientStop(Color.FromRgb(0x00, 0x7A, 0xFF), 0.75),
+                    new GradientStop(Color.FromRgb(0xAF, 0x52, 0xDE), 1)
+                }
+            };
+            customHost.Children.Add(grad);
+            var customBtn = new Button
+            {
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Content = customHost,
+                ToolTip = isFillColumn ? "Свой цвет заливки" : "Свой цвет контура"
+            };
+            customBtn.Click += (_, _) =>
+            {
+                _ = ApplyCustomColorFromDialogAsync(isStrokeContour: !isFillColumn);
+            };
+            return customBtn;
+        }
+
+        private void HighlightPaletteGrid(UniformGrid? grid, string? preferredHex)
+        {
+            if (grid == null)
+            {
+                return;
+            }
+
+            var key = NormalizeColorKey(preferredHex);
+            foreach (var child in grid.Children)
+            {
+                if (child is not Button wrap || wrap.Content is not Grid g || g.Children.Count < 2)
+                {
+                    continue;
+                }
+
+                if (g.Children[0] is not Ellipse ring || g.Children[1] is not Ellipse inner)
+                {
+                    continue;
+                }
+
+                var hx = wrap.Tag as string;
+                if (string.IsNullOrEmpty(hx))
+                {
+                    ring.Stroke = Brushes.Transparent;
+                    ring.StrokeThickness = 0;
+                    continue;
+                }
+
+                var match = NormalizeColorKey(hx) == key;
+                ring.Stroke = match ? new SolidColorBrush(Color.FromRgb(0x8B, 0x5C, 0xF6)) : Brushes.Transparent;
+                ring.StrokeThickness = match ? 3 : 0;
+            }
+        }
+
+        private void SyncPaletteGridRingHighlights(string? fillHex, string? strokeHex)
+        {
+            HighlightPaletteGrid(FillPaletteGridFill, fillHex);
+            HighlightPaletteGrid(FillPaletteGridStroke, strokeHex);
+        }
+
+        private void SelectionToolbarFillButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (SelectionToolbarFillPopup == null || SelectionToolbarFillButton == null)
+            {
+                return;
+            }
+
+            SelectionToolbarFillPopup.PlacementTarget = SelectionToolbarFillButton;
+            SelectionToolbarFillPopup.IsOpen = !SelectionToolbarFillPopup.IsOpen;
+            if (SelectionToolbarFillPopup.IsOpen)
+            {
+                RefreshFillPopupRingHighlight();
+            }
+        }
+
+        private void RefreshFillPopupRingHighlight()
+        {
+            if (_resizeTarget == null)
+            {
+                SyncPaletteGridRingHighlights(_currentColorString, _currentColorString);
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape == null)
+            {
+                return;
+            }
+
+            if (shape.Type is not ("rectangle" or "ellipse"))
+            {
+                var c = shape.Color;
+                SyncPaletteGridRingHighlights(c, c);
+                return;
+            }
+
+            var app = RectEllipseAppearance.Parse(shape);
+            var fillHx = app.FillHex ?? shape.Color;
+            SyncPaletteGridRingHighlights(fillHx, shape.Color);
+        }
+
+        private void SyncFillToolbarSwatchesFromShape(BoardShape? shape)
+        {
+            if (SelectionToolbarFillSwatch == null || SelectionToolbarStrokeSwatch == null)
+            {
+                return;
+            }
+
+            var bc = new BrushConverter();
+            if (shape == null)
+            {
+                return;
+            }
+
+            if (shape.Type is "rectangle" or "ellipse")
+            {
+                var app = RectEllipseAppearance.Parse(shape);
+                var fillKey = string.IsNullOrWhiteSpace(app.FillHex) ? shape.Color : app.FillHex;
+                var strokeKey = shape.Color ?? "#111111";
+                if (string.IsNullOrWhiteSpace(fillKey))
+                {
+                    fillKey = "#111111";
+                }
+
+                if (bc.ConvertFromString(fillKey) is Brush fb)
+                {
+                    SelectionToolbarFillSwatch.Fill = fb;
+                }
+
+                if (bc.ConvertFromString(string.IsNullOrWhiteSpace(strokeKey) ? "#111111" : strokeKey) is Brush sb)
+                {
+                    SelectionToolbarStrokeSwatch.Fill = sb;
+                }
+            }
+            else
+            {
+                var c = shape.Color ?? "#111111";
+                if (bc.ConvertFromString(c) is Brush b)
+                {
+                    SelectionToolbarFillSwatch.Fill = b;
+                    SelectionToolbarStrokeSwatch.Fill = b;
+                }
+            }
+        }
+
+        private void FillModeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button b || b.Tag is not string mode)
+            {
+                return;
+            }
+
+            _ = ApplyFillModeToSelectionAsync(mode);
+        }
+
+        private async Task ApplyCustomColorFromDialogAsync(bool isStrokeContour)
+        {
+            var input = AppDialogService.ShowTextInput(
+                "Свой цвет",
+                "Введите цвет в формате #RRGGBB (например #8B5CF6):",
+                "OK",
+                "Отмена",
+                "#8B5CF6");
+
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                return;
+            }
+
+            var t = input.Trim();
+            if (!t.StartsWith("#", StringComparison.Ordinal))
+            {
+                t = "#" + t;
+            }
+
+            try
+            {
+                if (new BrushConverter().ConvertFromString(t) is not SolidColorBrush)
+                {
+                    AppDialogService.ShowWarning("Некорректный цвет.", "Свой цвет");
+                    return;
+                }
+            }
+            catch
+            {
+                AppDialogService.ShowWarning("Некорректный цвет.", "Свой цвет");
+                return;
+            }
+
+            await ApplyToolbarPaletteHexAsync(t, isStrokeContour);
+        }
+
+        private async Task ApplyFillModeToSelectionAsync(string mode)
+        {
+            if (_resizeTarget == null)
+            {
+                _nextRectFillMode = mode;
+                UpdateFillModeButtonStyles(mode);
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape == null || (shape.Type != "rectangle" && shape.Type != "ellipse"))
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var app = RectEllipseAppearance.Parse(shape);
+            if (string.Equals(app.Mode, mode, StringComparison.Ordinal))
+            {
+                UpdateFillModeButtonStyles(mode);
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+            app.Mode = mode;
+            app.SaveTo(shape);
+
+            if (_resizeTarget is Shape sh)
+            {
+                ApplyRectEllipseVisual(sh, shape);
+            }
+
+            UpdateFillModeButtonStyles(mode);
+            _nextRectFillMode = mode;
+
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+        }
+
+        /// <param name="isStrokeContour">true — цвет контура (поле Color), false — цвет заливки (FillHex в JSON).</param>
+        private async Task ApplyToolbarPaletteHexAsync(string hex, bool isStrokeContour)
+        {
+            try
+            {
+                if (new BrushConverter().ConvertFromString(hex) is not Brush brush)
+                {
+                    return;
+                }
+
+                if (_resizeTarget == null)
+                {
+                    _currentBrush = brush;
+                    _currentColorString = hex;
+                    ApplyPreviewFillBrush();
+                    SyncPaletteGridRingHighlights(hex, hex);
+                    if (SelectionToolbarFillPopup != null)
+                    {
+                        SelectionToolbarFillPopup.IsOpen = false;
+                    }
+
+                    return;
+                }
+
+                var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+                if (shape == null)
+                {
+                    return;
+                }
+
+                var isRe = shape.Type is "rectangle" or "ellipse";
+
+                if (!isRe || isStrokeContour)
+                {
+                    await ApplyColorToElement(_resizeTarget, brush, hex);
+                }
+                else
+                {
+                    if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+
+                    var app = RectEllipseAppearance.Parse(shape);
+                    if (string.Equals(NormalizeColorKey(app.FillHex), NormalizeColorKey(hex), StringComparison.OrdinalIgnoreCase))
+                    {
+                        SyncFillToolbarSwatchesFromShape(shape);
+                        RefreshFillPopupRingHighlight();
+                        if (SelectionToolbarFillPopup != null)
+                        {
+                            SelectionToolbarFillPopup.IsOpen = false;
+                        }
+
+                        return;
+                    }
+
+                    CaptureBoardStateForUndo();
+                    app.FillHex = hex;
+                    app.SaveTo(shape);
+
+                    if (_resizeTarget is Shape shp)
+                    {
+                        ApplyRectEllipseVisual(shp, shape);
+                    }
+
+                    await _supabaseService.SaveShapeAsync(shape);
+                    MarkSaved();
+                    PushShapeToFirebase(shape);
+                }
+
+                SyncFillToolbarSwatchesFromShape(shape);
+                RefreshFillPopupRingHighlight();
+                if (SelectionToolbarFillPopup != null)
+                {
+                    SelectionToolbarFillPopup.IsOpen = false;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private void UpdateFillModeButtonStyles(string mode)
+        {
+            void StyleBtn(Button? btn, bool on)
+            {
+                if (btn == null)
+                {
+                    return;
+                }
+
+                btn.Background = on
+                    ? new SolidColorBrush(Color.FromRgb(0x8B, 0x5C, 0xF6))
+                    : new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+                btn.Foreground = Brushes.White;
+                btn.BorderThickness = new Thickness(0);
+            }
+
+            StyleBtn(FillModeSolidBtn, mode == "solid");
+            StyleBtn(FillModeTintBtn, mode == "tint");
+            StyleBtn(FillModeStrokeBtn, mode == "stroke");
+        }
+
+        private Shape CreateRectEllipseVisual(BoardShape shape, bool rectangle)
+        {
+            Shape s = rectangle
+                ? new Rectangle { Width = shape.Width, Height = shape.Height, Uid = shape.Id.ToString() }
+                : new Ellipse { Width = shape.Width, Height = shape.Height, Uid = shape.Id.ToString() };
+            ApplyRectEllipseVisual(s, shape);
+            return s;
+        }
+
+        private static Brush BrushWithFractionAlpha(Brush brush, double fraction)
+        {
+            if (brush is SolidColorBrush sc)
+            {
+                var c = sc.Color;
+                var a = (byte)Math.Clamp((int)(255 * fraction), 1, 255);
+                var nb = new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B));
+                nb.Freeze();
+                return nb;
+            }
+
+            return brush;
+        }
+
+        /// <summary>Применяет сохранённый режим заливки к прямоугольнику/эллипсу (заливка и контур раздельно).</summary>
+        private void ApplyRectEllipseVisual(Shape shapeElement, BoardShape shape)
+        {
+            var app = RectEllipseAppearance.Parse(shape);
+            var strokeBrush = GetBrushFromColor(shape.Color ?? "#111111");
+            var fillKey = string.IsNullOrWhiteSpace(app.FillHex) ? shape.Color : app.FillHex;
+            var fillBrush = GetBrushFromColor(string.IsNullOrWhiteSpace(fillKey) ? "#111111" : fillKey);
+
+            switch (app.Mode)
+            {
+                case "solid":
+                    shapeElement.Fill = fillBrush;
+                    shapeElement.Stroke = strokeBrush;
+                    shapeElement.StrokeThickness = 2;
+                    break;
+                case "tint":
+                    shapeElement.Fill = BrushWithFractionAlpha(fillBrush, 0.38);
+                    shapeElement.Stroke = strokeBrush;
+                    shapeElement.StrokeThickness = 2;
+                    break;
+                default:
+                    shapeElement.Fill = Brushes.Transparent;
+                    shapeElement.Stroke = strokeBrush;
+                    shapeElement.StrokeThickness = 2;
+                    break;
+            }
+
+            ApplyStrokeDashStyle(shapeElement, app.StrokeDash);
+        }
+
+        private static void ApplyStrokeDashStyle(Shape shapeElement, string? dash)
+        {
+            shapeElement.StrokeDashArray = null;
+            shapeElement.StrokeDashCap = PenLineCap.Flat;
+            switch (dash?.ToLowerInvariant())
+            {
+                case "dash":
+                    shapeElement.StrokeDashArray = new DoubleCollection(new double[] { 6, 4 });
+                    break;
+                case "dot":
+                    shapeElement.StrokeDashArray = new DoubleCollection(new double[] { 1, 4 });
+                    shapeElement.StrokeDashCap = PenLineCap.Round;
+                    break;
+                case "dashdot":
+                    shapeElement.StrokeDashArray = new DoubleCollection(new double[] { 8, 4, 2, 4 });
+                    break;
+            }
+        }
+
+        private void StrokeStyleButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button b || b.Tag is not string tag)
+            {
+                return;
+            }
+
+            _ = ApplyStrokeStyleToSelectionAsync(tag);
+        }
+
+        private void UpdateStrokeStyleButtonStyles(string? dashTag)
+        {
+            var d = string.IsNullOrWhiteSpace(dashTag) ? "solid" : dashTag.ToLowerInvariant();
+
+            void StyleBtn(Button? btn, bool on)
+            {
+                if (btn == null)
+                {
+                    return;
+                }
+
+                btn.Background = on
+                    ? new SolidColorBrush(Color.FromRgb(0x8B, 0x5C, 0xF6))
+                    : new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+                btn.Foreground = Brushes.White;
+                btn.BorderThickness = new Thickness(0);
+            }
+
+            StyleBtn(StrokeStyleSolidBtn, d == "solid");
+            StyleBtn(StrokeStyleDashBtn, d == "dash");
+            StyleBtn(StrokeStyleDotBtn, d == "dot");
+            StyleBtn(StrokeStyleDashDotBtn, d == "dashdot");
+        }
+
+        private async Task ApplyStrokeStyleToSelectionAsync(string dashTag)
+        {
+            if (_resizeTarget == null)
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape == null || shape.Type is not ("rectangle" or "ellipse"))
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var normalized = dashTag.ToLowerInvariant();
+            var app = RectEllipseAppearance.Parse(shape);
+            var effective = normalized == "solid" ? null : normalized;
+            if (string.Equals(app.StrokeDash ?? "", effective ?? "", StringComparison.Ordinal))
+            {
+                UpdateStrokeStyleButtonStyles(effective ?? "solid");
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+            app.StrokeDash = effective;
+            app.SaveTo(shape);
+
+            if (_resizeTarget is Shape sh)
+            {
+                ApplyRectEllipseVisual(sh, shape);
+            }
+
+            UpdateStrokeStyleButtonStyles(effective ?? "solid");
+
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+        }
+
+        private static string NormalizeColorKey(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                if (new BrushConverter().ConvertFromString(value.Trim()) is SolidColorBrush sb)
+                {
+                    var c = sb.Color;
+                    return $"#{c.R:X2}{c.G:X2}{c.B:X2}".ToUpperInvariant();
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            var s = value.Trim();
+            if (s.StartsWith("#", StringComparison.Ordinal) && s.Length >= 7)
+            {
+                return s[..7].ToUpperInvariant();
+            }
+
+            return s.ToUpperInvariant();
+        }
+
+        private void SyncSelectionToolbar(UIElement element)
+        {
+            if (SelectionToolbarPanel == null || SelectionToolbarDeleteButton == null ||
+                SelectionToolbarShapeCombo == null || SelectionToolbarFillButton == null)
+            {
+                return;
+            }
+
+            EnsureFillPaletteBuilt();
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
+
+            var readOnly = string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase);
+            SelectionToolbarDeleteButton.IsEnabled = !readOnly;
+
+            var canEditGeometry = shape != null && (shape.Type == "rectangle" || shape.Type == "ellipse");
+            SelectionToolbarShapeCombo.IsEnabled = !readOnly && canEditGeometry;
+            SelectionToolbarFillButton.IsEnabled = !readOnly && shape != null;
+
+            if (FillModeButtonRow != null)
+            {
+                FillModeButtonRow.Visibility = canEditGeometry ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            if (StrokeStyleRow != null)
+            {
+                StrokeStyleRow.Visibility = canEditGeometry ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            _suppressSelectionToolbarSync = true;
+            try
+            {
+                if (canEditGeometry)
+                {
+                    SelectionToolbarShapeCombo.Visibility = Visibility.Visible;
+                    foreach (ComboBoxItem ci in SelectionToolbarShapeCombo.Items)
+                    {
+                        if (ci.Tag is string t && string.Equals(t, shape!.Type, StringComparison.OrdinalIgnoreCase))
+                        {
+                            SelectionToolbarShapeCombo.SelectedItem = ci;
+                            break;
+                        }
+                    }
+
+                    var app = RectEllipseAppearance.Parse(shape!);
+                    _nextRectFillMode = app.Mode;
+                    UpdateFillModeButtonStyles(app.Mode);
+                    UpdateStrokeStyleButtonStyles(string.IsNullOrWhiteSpace(app.StrokeDash) ? "solid" : app.StrokeDash);
+                }
+                else
+                {
+                    SelectionToolbarShapeCombo.Visibility = Visibility.Collapsed;
+                }
+
+                SyncFillToolbarSwatchesFromShape(shape);
+
+                string? fillRing = shape?.Color ?? _currentColorString;
+                string? strokeRing = shape?.Color ?? _currentColorString;
+                if (shape != null && shape.Type is "rectangle" or "ellipse")
+                {
+                    var ap = RectEllipseAppearance.Parse(shape);
+                    fillRing = ap.FillHex ?? shape.Color;
+                    strokeRing = shape.Color;
+                }
+
+                SyncPaletteGridRingHighlights(fillRing, strokeRing);
+            }
+            finally
+            {
+                _suppressSelectionToolbarSync = false;
+            }
+
+            SelectionToolbarPanel.Visibility = Visibility.Visible;
+            Dispatcher.BeginInvoke(new Action(UpdateSelectionToolbarPosition), DispatcherPriority.Loaded);
+        }
+
+        private async void SelectionToolbarShape_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressSelectionToolbarSync || SelectionToolbarShapeCombo?.SelectedItem is not ComboBoxItem item ||
+                item.Tag is not string tag)
+            {
+                return;
+            }
+
+            await TryChangeSelectedShapeKindAsync(tag);
+        }
+
+        private async Task TryChangeSelectedShapeKindAsync(string newType)
+        {
+            if (_resizeTarget == null)
+            {
+                return;
+            }
+
+            if (newType != "rectangle" && newType != "ellipse")
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape == null || (shape.Type != "rectangle" && shape.Type != "ellipse"))
+            {
+                return;
+            }
+
+            if (string.Equals(shape.Type, newType, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+
+            double left = Canvas.GetLeft(_resizeTarget);
+            double top = Canvas.GetTop(_resizeTarget);
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            double w = Math.Max(((FrameworkElement)_resizeTarget).ActualWidth, 1);
+            double h = Math.Max(((FrameworkElement)_resizeTarget).ActualHeight, 1);
+
+            BoardCanvas.Children.Remove(_resizeTarget);
+
+            shape.Type = newType;
+            shape.Width = w;
+            shape.Height = h;
+            shape.X = left + w / 2;
+            shape.Y = top + h / 2;
+
+            UIElement visual = newType == "rectangle"
+                ? CreateRectEllipseVisual(shape, true)
+                : CreateRectEllipseVisual(shape, false);
+
+            Canvas.SetLeft(visual, left);
+            Canvas.SetTop(visual, top);
+            BoardCanvas.Children.Add(visual);
+
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+
+            ShowResizeFrame(visual);
+        }
+
+        private async Task DeleteSelectedShapeAsync()
+        {
+            if (_resizeTarget == null)
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape == null)
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+
+            if (!await _supabaseService.DeleteShapeAsync(shape.Id))
+            {
+                return;
+            }
+
+            await _firebaseService.DeleteShapeAsync(_boardId.ToString(), shape.Id.ToString());
+
+            BoardCanvas.Children.Remove(_resizeTarget);
+            _shapesOnBoard.Remove(shape);
+            RemoveResizeFrame();
+            MarkSaved();
+        }
+
+        private async void SelectionToolbarDelete_Click(object sender, RoutedEventArgs e)
+        {
+            await DeleteSelectedShapeAsync();
+        }
+
+        private async void BoardPage_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Delete)
+            {
+                return;
+            }
+
+            if (Keyboard.FocusedElement is TextBox)
+            {
+                return;
+            }
+
+            if (_resizeTarget == null)
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            await DeleteSelectedShapeAsync();
+            e.Handled = true;
         }
 
         private async void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
@@ -2268,7 +3184,11 @@ namespace WhiteSpace.Pages
 
             if ((_tool == ToolMode.Rect || _tool == ToolMode.Ellipse) && e.LeftButton == MouseButtonState.Pressed)
             {
-                PlaceShapeAt(world);
+                _isPlacingRectEllipse = true;
+                _rectPlacementStartWorld = world;
+                EnsurePreviewShape();
+                Viewport.CaptureMouse();
+                e.Handled = true;
                 return;
             }
 
@@ -2375,10 +3295,30 @@ namespace WhiteSpace.Pages
                 BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
                 BoardTranslate.Y = _panStartY + (screen.Y - _panStartScreen.Y);
             }
+
+            if (SelectionToolbarPanel?.Visibility == Visibility.Visible && _resizeBorder != null)
+            {
+                UpdateSelectionToolbarPosition();
+            }
         }
 
         private async void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
+            if (_isPlacingRectEllipse && (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse))
+            {
+                _isPlacingRectEllipse = false;
+                Viewport.ReleaseMouseCapture();
+                var endWorld = ScreenToWorld(e.GetPosition(Viewport));
+                await FinalizeRectEllipseFromDragAsync(endWorld);
+                RemovePreviewShape();
+                if (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse)
+                {
+                    EnsurePreviewShape();
+                }
+
+                return;
+            }
+
             if (_isResizing)
             {
                 await SaveResizedShapeAsync(); // Изменено на асинхронный метод
@@ -2496,6 +3436,7 @@ namespace WhiteSpace.Pages
                 }
 
                 UpdateResizeHandles(offsetX, offsetY, width, height);
+                UpdateSelectionToolbarPosition();
             }
         }
 
@@ -2596,6 +3537,7 @@ namespace WhiteSpace.Pages
 
             BoardTranslate.X += (after.X - before.X) * scale;
             BoardTranslate.Y += (after.Y - before.Y) * scale;
+            UpdateSelectionToolbarPosition();
         }
 
         private void StartPan(Point screen)
@@ -2656,14 +3598,35 @@ namespace WhiteSpace.Pages
 
             if (_previewShape == null) return;
 
-            _previewShape.Stroke = Brushes.Black;
-            _previewShape.StrokeThickness = 2;
-            _previewShape.Opacity = 0.35;
-            _previewShape.StrokeDashArray = new DoubleCollection { 4, 3 };
-            _previewShape.Fill = Brushes.Transparent;
+            // При создании перетаскиванием — только заливка без контура (как в Figma)
+            _previewShape.Stroke = Brushes.Transparent;
+            _previewShape.StrokeThickness = 0;
+            _previewShape.StrokeDashArray = null;
+            _previewShape.Opacity = 1;
+            ApplyPreviewFillBrush();
+
             _previewShape.IsHitTestVisible = false;
 
             BoardCanvas.Children.Add(_previewShape);
+        }
+
+        private void ApplyPreviewFillBrush()
+        {
+            if (_previewShape == null)
+            {
+                return;
+            }
+
+            const byte alpha = 120;
+            if (_currentBrush is SolidColorBrush scb)
+            {
+                var c = scb.Color;
+                _previewShape.Fill = new SolidColorBrush(Color.FromArgb(alpha, c.R, c.G, c.B));
+            }
+            else
+            {
+                _previewShape.Fill = new SolidColorBrush(Color.FromArgb(alpha, 0, 122, 255));
+            }
         }
 
         private void RemovePreviewShape()
@@ -2676,6 +3639,19 @@ namespace WhiteSpace.Pages
         private void UpdatePreview(Point world)
         {
             if (_previewShape == null) return;
+
+            if (_isPlacingRectEllipse && (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse))
+            {
+                var x = Math.Min(_rectPlacementStartWorld.X, world.X);
+                var y = Math.Min(_rectPlacementStartWorld.Y, world.Y);
+                var w = Math.Max(Math.Abs(world.X - _rectPlacementStartWorld.X), 1);
+                var h = Math.Max(Math.Abs(world.Y - _rectPlacementStartWorld.Y), 1);
+                _previewShape.Width = w;
+                _previewShape.Height = h;
+                Canvas.SetLeft(_previewShape, x);
+                Canvas.SetTop(_previewShape, y);
+                return;
+            }
 
             if (_tool == ToolMode.Rect)
             {
@@ -2693,9 +3669,47 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void PlaceShapeAt(Point world)
+        /// <summary>Завершение создания прямоугольника/эллипса перетаскиванием (габарит по двум углам).</summary>
+        private async Task FinalizeRectEllipseFromDragAsync(Point endWorld)
         {
-            if (_isCreatingShape) return;
+            if (_isCreatingShape)
+            {
+                return;
+            }
+
+            if (_tool != ToolMode.Rect && _tool != ToolMode.Ellipse)
+            {
+                return;
+            }
+
+            double x0 = _rectPlacementStartWorld.X;
+            double y0 = _rectPlacementStartWorld.Y;
+            double x1 = endWorld.X;
+            double y1 = endWorld.Y;
+            double minX = Math.Min(x0, x1);
+            double minY = Math.Min(y0, y1);
+            double w = Math.Max(Math.Abs(x1 - x0), 1);
+            double h = Math.Max(Math.Abs(y1 - y0), 1);
+
+            if (w < 8 && h < 8)
+            {
+                if (_tool == ToolMode.Rect)
+                {
+                    w = DefaultRectW;
+                    h = DefaultRectH;
+                }
+                else
+                {
+                    w = DefaultEllipse;
+                    h = DefaultEllipse;
+                }
+
+                minX = x0 - w / 2;
+                minY = y0 - h / 2;
+            }
+
+            double cx = minX + w / 2;
+            double cy = minY + h / 2;
 
             _isCreatingShape = true;
             try
@@ -2709,10 +3723,10 @@ namespace WhiteSpace.Pages
                     {
                         BoardId = _boardId,
                         Type = "rectangle",
-                        X = world.X,
-                        Y = world.Y,
-                        Width = DefaultRectW,
-                        Height = DefaultRectH,
+                        X = cx,
+                        Y = cy,
+                        Width = w,
+                        Height = h,
                         Color = _currentColorString,
                         Text = "",
                         Id = uniqueId
@@ -2721,10 +3735,10 @@ namespace WhiteSpace.Pages
                     {
                         BoardId = _boardId,
                         Type = "ellipse",
-                        X = world.X,
-                        Y = world.Y,
-                        Width = DefaultEllipse,
-                        Height = DefaultEllipse,
+                        X = cx,
+                        Y = cy,
+                        Width = w,
+                        Height = h,
                         Color = _currentColorString,
                         Text = "",
                         Id = uniqueId
@@ -2732,48 +3746,33 @@ namespace WhiteSpace.Pages
                     _ => null
                 };
 
-                if (shape != null)
+                if (shape == null)
                 {
-                    _shapesOnBoard.Add(shape);
+                    return;
+                }
 
-                    UIElement element = shape.Type switch
-                    {
-                        "rectangle" => new Rectangle
-                        {
-                            Width = shape.Width,
-                            Height = shape.Height,
-                            Stroke = _currentBrush,
-                            StrokeThickness = 2,
-                            Fill = Brushes.Transparent,
-                            Uid = shape.Id.ToString()
-                        },
-                        "ellipse" => new Ellipse
-                        {
-                            Width = shape.Width,
-                            Height = shape.Height,
-                            Stroke = _currentBrush,
-                            StrokeThickness = 2,
-                            Fill = Brushes.Transparent,
-                            Uid = shape.Id.ToString()
-                        },
-                        _ => null
-                    };
+                new RectEllipseAppearance { Mode = _nextRectFillMode }.SaveTo(shape);
 
-                    if (element != null)
-                    {
-                        Canvas.SetLeft(element, shape.X - shape.Width / 2);
-                        Canvas.SetTop(element, shape.Y - shape.Height / 2);
+                _shapesOnBoard.Add(shape);
 
-                        BoardCanvas.Children.Add(element);
+                UIElement element = shape.Type switch
+                {
+                    "rectangle" => CreateRectEllipseVisual(shape, true),
+                    "ellipse" => CreateRectEllipseVisual(shape, false),
+                    _ => null
+                };
 
-                        // Сохраняем в Supabase
-                        await _supabaseService.SaveShapeAsync(shape);
-                        MarkSaved();
+                if (element != null)
+                {
+                    Canvas.SetLeft(element, cx - w / 2);
+                    Canvas.SetTop(element, cy - h / 2);
 
-                        // Отправляем в Firebase для реалтайм обновлений
-                        PushShapeToFirebase(shape);
+                    BoardCanvas.Children.Add(element);
 
-        }
+                    await _supabaseService.SaveShapeAsync(shape);
+                    MarkSaved();
+
+                    PushShapeToFirebase(shape);
                 }
             }
             finally
@@ -2903,6 +3902,7 @@ namespace WhiteSpace.Pages
             BoardCanvas.Children.Add(_resizeBorder);
 
             CreateResizeHandles(left, top, width, height);
+            SyncSelectionToolbar(element);
         }
 
         private void RemoveResizeFrame()
@@ -2916,6 +3916,7 @@ namespace WhiteSpace.Pages
             RemoveAllHandles();
             _resizeTarget = null;
             ColorPanel.Visibility = Visibility.Visible;
+            HideSelectionToolbar();
         }
 
         private void RemoveAllHandles()
@@ -2965,6 +3966,7 @@ namespace WhiteSpace.Pages
             Canvas.SetTop(_resizeBorder, y);
 
             UpdateResizeHandles(x, y, w, h);
+            UpdateSelectionToolbarPosition();
         }
 
         private void UpdateResizeHandles(double x, double y, double w, double h)
@@ -3280,6 +4282,7 @@ namespace WhiteSpace.Pages
                 {
                     _currentBrush = selectedBrush;
                     _currentColorString = selectedColorString;
+                    ApplyPreviewFillBrush();
                 }
             }
         }
@@ -3299,14 +4302,28 @@ namespace WhiteSpace.Pages
 
             CaptureBoardStateForUndo();
 
-            if (element is Shape shapeElement)
-                shapeElement.Stroke = brush;
-            else if (element is Polyline polyline)
-                polyline.Stroke = brush;
-            else if (element is TextBox tb)
-                tb.Foreground = brush;
-
             shape.Color = colorString;
+
+            if (element is Shape sh)
+            {
+                if (shape.Type is "rectangle" or "ellipse")
+                {
+                    ApplyRectEllipseVisual(sh, shape);
+                }
+                else
+                {
+                    sh.Stroke = brush;
+                }
+            }
+            else if (element is Polyline polyline)
+            {
+                polyline.Stroke = brush;
+            }
+            else if (element is TextBox tb)
+            {
+                tb.Foreground = brush;
+            }
+
 
             // Сохраняем в Supabase
             await _supabaseService.SaveShapeAsync(shape);

@@ -101,10 +101,15 @@
                            Foreground="{DynamicResource WsTextSecondaryBrush}"/>
             </StackPanel>
 
-            <Button Grid.Column="2"
-                    Style="{StaticResource PrimaryButtonStyle}"
-                    Content="Обновить"
-                    Click="Refresh_Click"/>
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <Button Style="{StaticResource HelpRoundButtonStyle}"
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        Click="Help_Click"/>
+                <Button Style="{StaticResource PrimaryButtonStyle}"
+                        Content="Обновить"
+                        Click="Refresh_Click"/>
+            </StackPanel>
         </Grid>
 
         <UniformGrid Grid.Row="1"

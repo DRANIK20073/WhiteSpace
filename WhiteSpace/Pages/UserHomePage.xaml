@@ -596,6 +596,9 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource HelpRoundButtonStyle}"
+                                Margin="0,0,10,0"
+                                Click="Help_Click"/>
                         <Button Style="{StaticResource PrimaryTopButtonStyle}"
                                 Click="CreateBoard_Click">
                             <StackPanel Orientation="Horizontal">
@@ -605,15 +608,25 @@
                         </Button>
 
                         <Button Style="{StaticResource TopButtonStyle}"
+                                Margin="8,0,0,0"
                                 Click="JoinByCode_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="⟷" FontSize="16" Margin="0,0,8,0"/>
-                                <TextBlock Text="Подключиться по коду"/>
+                                <TextBlock Text="По коду"/>
                             </StackPanel>
                         </Button>
 
                         <Button Style="{StaticResource TopButtonStyle}"
-                                Margin="0"
+                                Margin="8,0,0,0"
+                                Click="JoinByLink_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🔗" FontSize="14" Margin="0,0,8,0"/>
+                                <TextBlock Text="По ссылке"/>
+                            </StackPanel>
+                        </Button>
+
+                        <Button Style="{StaticResource TopButtonStyle}"
+                                Margin="8,0,0,0"
                                 Click="Logout_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="⇥" FontSize="16" Margin="0,0,8,0"/>

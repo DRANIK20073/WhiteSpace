@@ -1,0 +1,98 @@
+<Window x:Class="WhiteSpace.BoardShareWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Поделиться доской"
+        Width="520"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False">
+
+    <Border Margin="18"
+            Background="{DynamicResource WsSurfaceBrush}"
+            CornerRadius="18"
+            BorderBrush="{DynamicResource WsBorderBrush}"
+            BorderThickness="1.5"
+            Padding="28,24">
+
+        <StackPanel>
+            <TextBlock FontSize="22"
+                       FontWeight="Bold"
+                       Foreground="{DynamicResource WsTextPrimaryBrush}"
+                       Text="Поделиться доской"
+                       Margin="0,0,0,8"/>
+
+            <TextBlock FontSize="14"
+                       Foreground="{DynamicResource WsTextSecondaryBrush}"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,16"
+                       Text="Отправьте код или ссылку участнику. Один раз выполните регистрацию протокола (скрипт register-protocol.ps1 рядом с exe), чтобы ссылка открывала приложение."/>
+
+            <TextBlock FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource WsTextPrimaryBrush}"
+                       Text="Код доступа"
+                       Margin="0,0,0,6"/>
+
+            <Grid Margin="0,0,0,14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0"
+                        Background="{DynamicResource WsSurfaceMutedBrush}"
+                        CornerRadius="10"
+                        Padding="14,10"
+                        Margin="0,0,10,0">
+                    <TextBlock x:Name="CodeDisplayText"
+                               FontSize="20"
+                               FontWeight="SemiBold"
+                               FontFamily="Consolas"
+                               Foreground="{DynamicResource WsTextPrimaryBrush}"
+                               VerticalAlignment="Center"/>
+                </Border>
+                <Button Grid.Column="1"
+                        Content="Копировать"
+                        MinWidth="110"
+                        Height="42"
+                        Padding="16,0"
+                        Cursor="Hand"
+                        Click="CopyCode_Click"/>
+            </Grid>
+
+            <TextBlock FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource WsTextPrimaryBrush}"
+                       Text="Ссылка-приглашение"
+                       Margin="0,0,0,6"/>
+
+            <TextBlock FontSize="12"
+                       Foreground="{DynamicResource WsTextSecondaryBrush}"
+                       Text="Нажмите на поле ниже, чтобы скопировать ссылку."
+                       Margin="0,0,0,8"/>
+
+            <Border Background="{DynamicResource WsSurfaceMutedBrush}"
+                    CornerRadius="10"
+                    Padding="12,10"
+                    Cursor="Hand"
+                    MouseLeftButtonUp="InviteLinkArea_Click">
+                <TextBlock x:Name="LinkDisplayText"
+                           FontSize="14"
+                           FontFamily="Consolas"
+                           Foreground="{DynamicResource WsPurpleBrush}"
+                           TextWrapping="Wrap"/>
+            </Border>
+
+            <Button Content="Закрыть"
+                    HorizontalAlignment="Right"
+                    Margin="0,22,0,0"
+                    MinWidth="120"
+                    Height="42"
+                    IsDefault="True"
+                    Click="Close_Click"/>
+        </StackPanel>
+    </Border>
+</Window>

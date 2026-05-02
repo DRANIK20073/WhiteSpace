@@ -240,6 +240,12 @@
     <!-- Адаптивный контейнер -->
     <Viewbox Stretch="Uniform" MaxWidth="800" MaxHeight="700">
         <Grid x:Name="AuthRootGrid" Width="700" Height="600">
+            <Button HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="0,4,4,0"
+                    Style="{StaticResource HelpRoundButtonStyle}"
+                    Click="Help_Click"/>
+
             <!-- Карточка с тенью -->
             <Border Background="{DynamicResource WsSurfaceBrush}"
                     BorderBrush="{DynamicResource WsBorderBrush}"

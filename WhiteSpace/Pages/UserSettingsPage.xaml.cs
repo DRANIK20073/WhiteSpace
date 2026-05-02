@@ -16,11 +16,13 @@ public partial class UserSettingsPage : Page
     public UserSettingsPage()
     {
         InitializeComponent();
+        Unloaded += (_, _) => _isThemeInitializing = true;
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
         _preferences = AppPreferences.Load();
+        WhiteSpaceThemeManager.Apply(_preferences);
         _isThemeInitializing = true;
         CompactViewCheckBox.IsChecked = _preferences.UseCompactView;
         ConfirmLogoutCheckBox.IsChecked = _preferences.ConfirmBeforeLogout;
@@ -41,7 +43,10 @@ public partial class UserSettingsPage : Page
         EmailBox.IsReadOnly = true;
         EmailBox.Focusable = false;
 
+        // Без блокировки второй синхронизации ComboBox снова вызовет SelectionChanged и может записать в файл светлую тему.
+        _isThemeInitializing = true;
         SyncThemeComboFromPreferences();
+        _isThemeInitializing = false;
 
         if (fadeIn)
         {
@@ -55,8 +60,13 @@ public partial class UserSettingsPage : Page
 
     private void Back_Click(object sender, RoutedEventArgs e)
     {
+        // Иначе при размонтировании страницы ComboBox может вызвать SelectionChanged и записать в файл светлую тему.
+        _isThemeInitializing = true;
         NavigationService?.Navigate(new UserHomePage());
     }
+
+    private void Help_Click(object sender, RoutedEventArgs e) =>
+        HelpService.Show(Window.GetWindow(this), "profile");
 
     private async void SaveUsername_Click(object sender, RoutedEventArgs e)
     {
@@ -92,10 +102,8 @@ public partial class UserSettingsPage : Page
 
     private void SyncThemeComboFromPreferences()
     {
-        var isDark = WhiteSpaceThemeManager.HasAppliedTheme
-            ? WhiteSpaceThemeManager.IsDarkApplied
-            : string.Equals(_preferences.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
-
+        // Всегда опираемся на сохранённый файл, а не на IsDarkApplied — иначе после навигации возможна рассинхронизация и перезапись темы на Light.
+        var isDark = string.Equals(_preferences.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
         ThemeComboBox.SelectedIndex = isDark ? 1 : 0;
     }
 
@@ -106,27 +114,41 @@ public partial class UserSettingsPage : Page
             return;
         }
 
-        var selectedTheme = ThemeComboBox.SelectedIndex == 1 ? "Dark" : "Light";
-        if (string.Equals(_preferences.Theme, selectedTheme, StringComparison.OrdinalIgnoreCase))
+        if (e.AddedItems.Count == 0 || ThemeComboBox.SelectedIndex < 0)
         {
             return;
         }
 
-        _preferences.Theme = selectedTheme;
-        if (_preferences.TrySave(out _))
+        var selectedTheme = ThemeComboBox.SelectedIndex == 1 ? "Dark" : "Light";
+        if (!AppPreferences.MutateAndSave(p =>
+            {
+                p.Theme = selectedTheme;
+                p.UseCompactView = CompactViewCheckBox.IsChecked == true;
+                p.ConfirmBeforeLogout = ConfirmLogoutCheckBox.IsChecked == true;
+                p.EnableAnimations = AnimationsCheckBox.IsChecked == true;
+            }, out var saveErr))
         {
-            WhiteSpaceThemeManager.Apply(_preferences);
+            AppDialogService.ShowError(
+                string.IsNullOrWhiteSpace(saveErr)
+                    ? "Не удалось сохранить файл настроек (тема)."
+                    : $"Не удалось сохранить тему: {saveErr}",
+                "Настройки");
+            return;
         }
+
+        _preferences = AppPreferences.Load();
+        WhiteSpaceThemeManager.Apply(_preferences);
     }
 
     private void SavePreferences_Click(object sender, RoutedEventArgs e)
     {
-        _preferences.UseCompactView = CompactViewCheckBox.IsChecked == true;
-        _preferences.ConfirmBeforeLogout = ConfirmLogoutCheckBox.IsChecked == true;
-        _preferences.EnableAnimations = AnimationsCheckBox.IsChecked == true;
-        _preferences.Theme = ThemeComboBox.SelectedIndex == 1 ? "Dark" : "Light";
-
-        if (!_preferences.TrySave(out var err))
+        if (!AppPreferences.MutateAndSave(p =>
+            {
+                p.UseCompactView = CompactViewCheckBox.IsChecked == true;
+                p.ConfirmBeforeLogout = ConfirmLogoutCheckBox.IsChecked == true;
+                p.EnableAnimations = AnimationsCheckBox.IsChecked == true;
+                p.Theme = ThemeComboBox.SelectedIndex == 1 ? "Dark" : "Light";
+            }, out var err))
         {
             AppDialogService.ShowError(
                 string.IsNullOrWhiteSpace(err)
@@ -136,6 +158,8 @@ public partial class UserSettingsPage : Page
             return;
         }
 
+        _preferences = AppPreferences.Load();
+        SyncThemeComboFromPreferences();
         WhiteSpaceThemeManager.Apply(_preferences);
 
         AppDialogService.ShowSuccess("Настройки интерфейса сохранены.", "Настройки");
