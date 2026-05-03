@@ -13,6 +13,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Windows;
@@ -32,6 +33,15 @@ namespace WhiteSpace.Pages
 {
     public partial class BoardPage : Page
     {
+        private static readonly HttpClient BoardImageHttpClient = CreateBoardImageHttpClient();
+
+        private static HttpClient CreateBoardImageHttpClient()
+        {
+            var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("WhiteSpace/1.0 (WPF)");
+            return client;
+        }
+
         private List<BoardShape> _shapesOnBoard = new List<BoardShape>();
         private readonly Guid _boardId;
         private Board? _boardInfo;
@@ -144,6 +154,9 @@ namespace WhiteSpace.Pages
         private bool _isAdminSession;
         private string _cursorDisplayName = "Участник";
         private readonly ObservableCollection<ChatMessageViewModel> _chatMessages = new();
+        private double _textResizeStartFontSize = 16;
+        private bool _chatUnreadSeeded;
+        private DateTime _chatReadWatermarkUtc = DateTime.MinValue;
 
         public BoardPage(Guid boardId, bool returnToAdminPage = false)
         {
@@ -228,6 +241,9 @@ namespace WhiteSpace.Pages
             _accessMonitorTimer.Start();
             _presenceHeartbeatTimer.Start();
             _presenceUiRefreshTimer.Start();
+
+            BoardChatNotificationHub.ActiveBoardId = _boardId;
+            _ = BoardChatNotificationHub.SyncSubscriptionsAsync(_supabaseService);
         }
 
         private async Task LoadBoardMetadataAsync()
@@ -344,6 +360,11 @@ namespace WhiteSpace.Pages
         private async void Page_Unloaded(object sender, RoutedEventArgs e)
         {
             _isPageUnloading = true;
+
+            if (BoardChatNotificationHub.ActiveBoardId == _boardId)
+            {
+                BoardChatNotificationHub.ActiveBoardId = null;
+            }
 
             // Отписываемся от событий при выходе
             _shapesSubscription?.Dispose();
@@ -496,11 +517,11 @@ namespace WhiteSpace.Pages
                     if (shape.Type == "line" && !string.IsNullOrEmpty(shape.Points))
                     {
                         existingShape.Points = shape.Points;
-                    existingShape.DeserializedPoints = string.IsNullOrEmpty(shape.Points)
-                        ? new List<Point>()
-                        : JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
+                        existingShape.DeserializedPoints = string.IsNullOrEmpty(shape.Points)
+                            ? new List<Point>()
+                            : JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
 
-                    if (uiElement is Polyline targetPolyline)
+                        if (uiElement is Polyline targetPolyline)
                         {
                             targetPolyline.Points.Clear();
                             foreach (var point in existingShape.DeserializedPoints)
@@ -508,6 +529,10 @@ namespace WhiteSpace.Pages
                                 targetPolyline.Points.Add(point);
                             }
                         }
+                    }
+                    else if (shape.Type == "text")
+                    {
+                        existingShape.Points = shape.Points;
                     }
                 }
             }
@@ -543,11 +568,16 @@ namespace WhiteSpace.Pages
             else if (element is TextBox textBox)
             {
                 textBox.Foreground = brush;
-                textBox.Text = shape.Text;
+                textBox.Text = shape.Text ?? string.Empty;
+                textBox.FontSize = ParseTextShapeFontSize(shape.Points, shape.Height, 16);
+                ApplyTextBoxChrome(textBox, brush);
             }
             else if (element is Image image)
             {
-                image.Source = CreateImageSource(shape.Text);
+                image.Stretch = Stretch.Uniform;
+                RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+                image.Source = null;
+                ScheduleBoardImageLoad(image, shape.Text, null);
             }
 
             // Обновляем позицию и размеры
@@ -1744,6 +1774,10 @@ namespace WhiteSpace.Pages
             var prefs = AppPreferences.Load();
             var show = ChatWidget.Visibility != Visibility.Visible;
             UiAnimationHelper.ApplyFadeVisibilityToggle(ChatWidget, show, prefs.EnableAnimations);
+            if (show)
+            {
+                MarkChatPanelAsRead();
+            }
         }
 
         private void CloseChat_Click(object sender, RoutedEventArgs e)
@@ -1758,6 +1792,7 @@ namespace WhiteSpace.Pages
             if (ChatWidget.Visibility != Visibility.Visible)
             {
                 UiAnimationHelper.ApplyFadeVisibilityToggle(ChatWidget, true, prefs.EnableAnimations);
+                MarkChatPanelAsRead();
             }
 
             _ = SendChatMessageAsync();
@@ -1879,6 +1914,89 @@ namespace WhiteSpace.Pages
                     sv.ScrollToVerticalOffset(sv.ExtentHeight);
                 }
             }, DispatcherPriority.Background);
+
+            UpdateChatUnreadBadgeAfterMessages(messages);
+        }
+
+        private static DateTime ChatSentAtUtc(FirebaseChatMessage m) =>
+            m.SentAtUtc.Kind == DateTimeKind.Utc
+                ? m.SentAtUtc
+                : m.SentAtUtc.ToUniversalTime();
+
+        private static DateTime ChatSentAtUtc(ChatMessageViewModel vm) =>
+            vm.SentAtUtc.Kind == DateTimeKind.Utc
+                ? vm.SentAtUtc
+                : vm.SentAtUtc.ToUniversalTime();
+
+        private void UpdateChatFabBadge(int count)
+        {
+            if (ChatUnreadBadge == null || ChatUnreadBadgeText == null)
+            {
+                return;
+            }
+
+            if (count <= 0)
+            {
+                ChatUnreadBadge.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            ChatUnreadBadge.Visibility = Visibility.Visible;
+            ChatUnreadBadgeText.Text = count > 99 ? "99+" : count.ToString();
+        }
+
+        private void MarkChatPanelAsRead()
+        {
+            if (_chatMessages.Count == 0)
+            {
+                _chatReadWatermarkUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                _chatReadWatermarkUtc = _chatMessages.Max(ChatSentAtUtc);
+            }
+
+            _chatUnreadSeeded = true;
+            UpdateChatFabBadge(0);
+        }
+
+        private void UpdateChatUnreadBadgeAfterMessages(List<FirebaseChatMessage> messages)
+        {
+            var myUserIdString = _myUserId?.ToString();
+
+            if (!_chatUnreadSeeded && messages.Count > 0)
+            {
+                _chatUnreadSeeded = true;
+                _chatReadWatermarkUtc = messages.Max(ChatSentAtUtc);
+                UpdateChatFabBadge(0);
+                return;
+            }
+
+            if (ChatWidget.Visibility == Visibility.Visible)
+            {
+                if (messages.Count > 0)
+                {
+                    _chatReadWatermarkUtc = messages.Max(ChatSentAtUtc);
+                }
+
+                UpdateChatFabBadge(0);
+                return;
+            }
+
+            if (!_chatUnreadSeeded)
+            {
+                UpdateChatFabBadge(0);
+                return;
+            }
+
+            var unread = messages.Count(m =>
+                !string.IsNullOrWhiteSpace(m.Text) &&
+                !string.IsNullOrWhiteSpace(m.UserId) &&
+                !string.IsNullOrWhiteSpace(myUserIdString) &&
+                !string.Equals(m.UserId, myUserIdString, StringComparison.OrdinalIgnoreCase) &&
+                ChatSentAtUtc(m) > _chatReadWatermarkUtc);
+
+            UpdateChatFabBadge(unread);
         }
 
         private void ChatBubble_ContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -1966,7 +2084,7 @@ namespace WhiteSpace.Pages
             return target?.DataContext as ChatMessageViewModel;
         }
 
-        private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true)
+        private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true, ImageSource? prefetchedBoardImage = null, string? boardImageLocalFallbackPath = null)
         {
             Brush brush = GetBrushFromColor(shape.Color);
 
@@ -2015,19 +2133,35 @@ namespace WhiteSpace.Pages
             }
             else if (shape.Type == "text")
             {
+                var fontSize = ParseTextShapeFontSize(shape.Points, shape.Height, 16);
                 var textBox = new TextBox
                 {
-                    Text = shape.Text,
-                    MinWidth = 120,
-                    FontSize = 16,
-                    Background = Brushes.Transparent,
-                    BorderBrush = Brushes.Black,
-                    BorderThickness = new Thickness(1),
+                    Text = shape.Text ?? string.Empty,
+                    MinWidth = 48,
+                    MinHeight = 28,
+                    FontSize = fontSize,
                     Foreground = brush,
                     Uid = shape.Id.ToString(),
                     IsReadOnly = false,
-                    Focusable = true
+                    Focusable = true,
+                    AcceptsReturn = true,
+                    TextWrapping = TextWrapping.Wrap,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalContentAlignment = VerticalAlignment.Top,
+                    Padding = new Thickness(1, 2, 1, 2)
                 };
+
+                ApplyTextBoxChrome(textBox, brush);
+
+                if (shape.Width > 0)
+                {
+                    textBox.Width = shape.Width;
+                }
+
+                if (shape.Height > 0)
+                {
+                    textBox.Height = shape.Height;
+                }
 
                 textBox.PreviewMouseDown += TextBox_PreviewMouseDown;
                 textBox.PreviewMouseUp += TextBox_PreviewMouseUp;
@@ -2049,10 +2183,12 @@ namespace WhiteSpace.Pages
                 {
                     Width = shape.Width > 0 ? shape.Width : DefaultImageW,
                     Height = shape.Height > 0 ? shape.Height : DefaultImageH,
-                    Stretch = Stretch.UniformToFill,
+                    Stretch = Stretch.Uniform,
                     Uid = shape.Id.ToString(),
-                    Source = CreateImageSource(shape.Text)
+                    Source = prefetchedBoardImage
                 };
+
+                RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
 
                 Canvas.SetLeft(image, shape.X - image.Width / 2);
                 Canvas.SetTop(image, shape.Y - image.Height / 2);
@@ -2061,6 +2197,11 @@ namespace WhiteSpace.Pages
                 if (addToBoardState)
                 {
                     _shapesOnBoard.Add(shape);
+                }
+
+                if (prefetchedBoardImage == null)
+                {
+                    ScheduleBoardImageLoad(image, shape.Text, boardImageLocalFallbackPath);
                 }
             }
             else
@@ -2086,27 +2227,101 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private ImageSource? CreateImageSource(string? imagePath)
+        private void ScheduleBoardImageLoad(Image imageControl, string? imageRef, string? localFallbackPath)
         {
-            if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+            if (imageControl == null)
+            {
+                return;
+            }
+
+            _ = ApplyBoardImageFromRefAsync(imageControl, imageRef, localFallbackPath);
+        }
+
+        private async Task ApplyBoardImageFromRefAsync(Image imageControl, string? imageRef, string? localFallbackPath)
+        {
+            byte[]? bytes = null;
+            try
+            {
+                bytes = await ResolveBoardImageBytesAsync(imageRef, localFallbackPath).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Board image download: {ex.Message}");
+            }
+
+            if (bytes == null || bytes.Length < 8)
+            {
+                return;
+            }
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (!BoardCanvas.Children.Contains(imageControl))
+                {
+                    return;
+                }
+
+                try
+                {
+                    imageControl.Source = CreateImageSourceFromBytes(bytes);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Board image decode: {ex.Message}");
+                }
+            });
+        }
+
+        private static async Task<byte[]?> ResolveBoardImageBytesAsync(string? imageRef, string? localFallbackPath)
+        {
+            if (!string.IsNullOrWhiteSpace(localFallbackPath) && File.Exists(localFallbackPath))
+            {
+                return await File.ReadAllBytesAsync(localFallbackPath).ConfigureAwait(false);
+            }
+
+            if (string.IsNullOrWhiteSpace(imageRef))
             {
                 return null;
             }
 
-            try
+            var urlString = imageRef.Trim();
+            if (!Uri.TryCreate(urlString, UriKind.Absolute, out var uri) &&
+                urlString.StartsWith("/", StringComparison.Ordinal) &&
+                !string.IsNullOrEmpty(SupabaseService.SupabaseUrl))
             {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
-                bitmap.EndInit();
-                bitmap.Freeze();
-                return bitmap;
+                urlString = SupabaseService.SupabaseUrl.TrimEnd('/') + urlString;
+                Uri.TryCreate(urlString, UriKind.Absolute, out uri);
             }
-            catch
+
+            if (uri != null && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
             {
-                return null;
+                using var response = await BoardImageHttpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return null;
+                }
+
+                return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             }
+
+            if (File.Exists(imageRef))
+            {
+                return await File.ReadAllBytesAsync(imageRef).ConfigureAwait(false);
+            }
+
+            return null;
+        }
+
+        private static ImageSource? CreateImageSourceFromBytes(byte[] data)
+        {
+            using var ms = new MemoryStream(data, writable: false);
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.StreamSource = ms;
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.EndInit();
+            bitmap.Freeze();
+            return bitmap;
         }
 
         // Обработчики событий для TextBox
@@ -3201,7 +3416,6 @@ namespace WhiteSpace.Pages
                     if (textBox != null)
                     {
                         textBox.Focus();
-                        textBox.SelectAll();
                     }
                 }
                 else
@@ -3510,6 +3724,9 @@ namespace WhiteSpace.Pages
                 }
 
                 shape.Text = textBox.Text;
+                shape.Width = textBox.ActualWidth > 0 ? textBox.ActualWidth : textBox.Width;
+                shape.Height = textBox.ActualHeight > 0 ? textBox.ActualHeight : textBox.Height;
+                shape.Points = SerializeTextShapeStyle(textBox.FontSize);
                 await _supabaseService.SaveShapeAsync(shape);
                 MarkSaved();
 
@@ -3788,19 +4005,27 @@ namespace WhiteSpace.Pages
             _isCreatingShape = true;
             CaptureBoardStateForUndo();
 
+            const double initialFs = 16;
             var tb = new TextBox
             {
                 Text = "Текст",
-                MinWidth = 120,
-                FontSize = 16,
-                Background = Brushes.White,
-                BorderBrush = Brushes.Black,
-                BorderThickness = new Thickness(1),
+                MinWidth = 48,
+                MinHeight = 28,
+                Width = 220,
+                Height = 88,
+                FontSize = initialFs,
                 Foreground = _currentBrush,
                 IsReadOnly = false,
                 Focusable = true,
-                Cursor = Cursors.IBeam
+                Cursor = Cursors.IBeam,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalContentAlignment = VerticalAlignment.Top,
+                Padding = new Thickness(1, 2, 1, 2)
             };
+
+            ApplyTextBoxChrome(tb, _currentBrush);
 
             tb.PreviewMouseDown += TextBox_PreviewMouseDown;
             tb.PreviewMouseUp += TextBox_PreviewMouseUp;
@@ -3820,10 +4045,11 @@ namespace WhiteSpace.Pages
                 Type = "text",
                 X = world.X,
                 Y = world.Y,
-                Width = 120,
-                Height = 30,
+                Width = tb.Width,
+                Height = tb.Height,
                 Text = tb.Text,
                 Color = _currentColorString,
+                Points = SerializeTextShapeStyle(initialFs),
                 Id = uniqueId
             };
 
@@ -4075,6 +4301,11 @@ namespace WhiteSpace.Pages
 
                 if (double.IsNaN(_startX)) _startX = 0;
                 if (double.IsNaN(_startY)) _startY = 0;
+
+                if (_resizeTarget is TextBox tbStart)
+                {
+                    _textResizeStartFontSize = tbStart.FontSize > 0 ? tbStart.FontSize : 16;
+                }
             }
 
             Viewport.CaptureMouse();
@@ -4125,6 +4356,13 @@ namespace WhiteSpace.Pages
                 fe.Height = newH;
                 Canvas.SetLeft(fe, newX);
                 Canvas.SetTop(fe, newY);
+
+                if (fe is TextBox tbResize && _startW > 0.01 && _startH > 0.01)
+                {
+                    var scale = Math.Min(newW / _startW, newH / _startH);
+                    tbResize.FontSize = Math.Max(8, Math.Min(240, _textResizeStartFontSize * scale));
+                    tbResize.CaretBrush = tbResize.Foreground;
+                }
             }
 
             UpdateResizeFrame(newX, newY, newW, newH);
@@ -4167,6 +4405,14 @@ namespace WhiteSpace.Pages
                     shape.Width = maxX - minX;
                     shape.Height = maxY - minY;
                 }
+            }
+            else if (target is TextBox tbRt)
+            {
+                shape.Width = tbRt.Width > 0 ? tbRt.Width : tbRt.ActualWidth;
+                shape.Height = tbRt.Height > 0 ? tbRt.Height : tbRt.ActualHeight;
+                shape.X = Canvas.GetLeft(target);
+                shape.Y = Canvas.GetTop(target);
+                shape.Points = SerializeTextShapeStyle(tbRt.FontSize);
             }
             else if (target is FrameworkElement fe)
             {
@@ -4250,9 +4496,16 @@ namespace WhiteSpace.Pages
                     shape.Height = maxY - minY;
                 }
             }
+            else if (_resizeTarget is TextBox tbSave)
+            {
+                shape.Width = tbSave.Width > 0 ? tbSave.Width : tbSave.ActualWidth;
+                shape.Height = tbSave.Height > 0 ? tbSave.Height : tbSave.ActualHeight;
+                shape.X = Canvas.GetLeft(_resizeTarget);
+                shape.Y = Canvas.GetTop(_resizeTarget);
+                shape.Points = SerializeTextShapeStyle(tbSave.FontSize);
+            }
             else
             {
-                // Для других фигур
                 shape.Width = ((FrameworkElement)_resizeTarget).ActualWidth;
                 shape.Height = ((FrameworkElement)_resizeTarget).ActualHeight;
                 shape.X = Canvas.GetLeft(_resizeTarget) + shape.Width / 2;
@@ -4322,6 +4575,7 @@ namespace WhiteSpace.Pages
             else if (element is TextBox tb)
             {
                 tb.Foreground = brush;
+                tb.CaretBrush = brush;
             }
 
 
@@ -4346,6 +4600,13 @@ namespace WhiteSpace.Pages
                 CaptureBoardStateForUndo();
 
                 int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+
+                var publicUrl = await _supabaseService.UploadBoardImageAsync(_boardId, uniqueId, imagePath);
+                if (string.IsNullOrWhiteSpace(publicUrl))
+                {
+                    return;
+                }
+
                 var viewportCenter = new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2);
                 var world = ScreenToWorld(viewportCenter);
 
@@ -4358,11 +4619,22 @@ namespace WhiteSpace.Pages
                     Width = DefaultImageW,
                     Height = DefaultImageH,
                     Color = null,
-                    Text = imagePath,
+                    Text = publicUrl,
                     Id = uniqueId
                 };
 
-                AddShapeToCanvas(shape);
+                ImageSource? prefetch = null;
+                try
+                {
+                    var bytes = await File.ReadAllBytesAsync(imagePath);
+                    prefetch = CreateImageSourceFromBytes(bytes);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Локальный превью кадр: {ex.Message}");
+                }
+
+                AddShapeToCanvas(shape, true, prefetch, prefetch == null ? imagePath : null);
                 await _supabaseService.SaveShapeAsync(shape);
                 MarkSaved();
                 PushShapeToFirebase(shape);
@@ -4445,6 +4717,49 @@ namespace WhiteSpace.Pages
             {
                 return false;
             }
+        }
+
+        private sealed class TextShapeStyleJson
+        {
+            [JsonProperty("fs")]
+            public double FontSize { get; set; }
+        }
+
+        private static string SerializeTextShapeStyle(double fontSize) =>
+            JsonConvert.SerializeObject(new TextShapeStyleJson { FontSize = fontSize });
+
+        private static double ParseTextShapeFontSize(string? points, double boxHeight, double fallback)
+        {
+            if (!string.IsNullOrWhiteSpace(points) && points.TrimStart().StartsWith('{'))
+            {
+                try
+                {
+                    var dto = JsonConvert.DeserializeObject<TextShapeStyleJson>(points);
+                    if (dto != null && dto.FontSize > 0)
+                    {
+                        return Math.Clamp(dto.FontSize, 6, 320);
+                    }
+                }
+                catch
+                {
+                    // не JSON стиля текста
+                }
+            }
+
+            if (boxHeight > 1)
+            {
+                return Math.Clamp(boxHeight * 0.62, 10, 200);
+            }
+
+            return fallback;
+        }
+
+        private static void ApplyTextBoxChrome(TextBox tb, Brush foreground)
+        {
+            tb.Background = Brushes.Transparent;
+            tb.BorderThickness = new Thickness(0);
+            tb.BorderBrush = Brushes.Transparent;
+            tb.CaretBrush = foreground;
         }
 
         private static class PresentationNative

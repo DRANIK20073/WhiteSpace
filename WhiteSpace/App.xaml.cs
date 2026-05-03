@@ -12,29 +12,44 @@ namespace WhiteSpace
 
         protected override async void OnStartup(StartupEventArgs e)
         {
-            bool owned;
+            var allowMultiInstance = InviteLaunchArgs.AllowsMultipleInstancesForCurrentProcess(e.Args);
+
+            Mutex? mutex = null;
+            var createdNew = false;
             try
             {
-                _singleInstanceMutex = new Mutex(true, @"Local\WhiteSpace_SingleInstance", out owned);
+                mutex = new Mutex(true, @"Local\WhiteSpace_SingleInstance", out createdNew);
             }
             catch
             {
-                owned = false;
+                createdNew = false;
             }
 
-            if (!owned)
+            if (!createdNew)
             {
                 var relayCode = InviteLaunchArgs.TryParseInviteCode(e.Args);
                 if (!string.IsNullOrEmpty(relayCode))
                 {
                     InviteRelay.WritePendingInvite(relayCode);
+                    Environment.Exit(0);
+                    return;
                 }
 
-                Environment.Exit(0);
-                return;
-            }
+                if (!allowMultiInstance)
+                {
+                    mutex?.Dispose();
+                    Environment.Exit(0);
+                    return;
+                }
 
-            GC.KeepAlive(_singleInstanceMutex);
+                mutex?.Dispose();
+                mutex = null;
+            }
+            else
+            {
+                _singleInstanceMutex = mutex;
+                GC.KeepAlive(_singleInstanceMutex);
+            }
 
             var inviteFromArgs = InviteLaunchArgs.TryParseInviteCode(e.Args);
             if (!string.IsNullOrEmpty(inviteFromArgs))
@@ -74,6 +89,7 @@ namespace WhiteSpace
                 catch (Supabase.Gotrue.Exceptions.GotrueException)
                 {
                     // ⬇️ refresh token мёртв — это нормально
+                    BoardChatNotificationHub.Stop();
                     SessionStorage.ClearSession();
                     await SupabaseService.Client.Auth.SignOut();
                 }

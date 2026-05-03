@@ -54,6 +54,7 @@ public partial class AdminPage : Page
 
     private void Back_Click(object sender, RoutedEventArgs e)
     {
+        BoardChatNotificationHub.Stop();
         SessionStorage.ClearSession();
         SupabaseService.ClearLocalAdminSession();
         SupabaseService.Client.Auth.SignOut();

@@ -17,6 +17,10 @@
     <SolidColorBrush x:Key="WsTextMutedBrush" Color="{StaticResource WsTextMutedColor}"/>
     <SolidColorBrush x:Key="WsBorderBrush" Color="{StaticResource WsBorderColor}"/>
 
+    <SolidColorBrush x:Key="WsParticipantSidebarEdgeBrush" Color="{StaticResource WsBorderColor}"/>
+    <SolidColorBrush x:Key="WsChatPanelBorderBrush" Color="{StaticResource WsBorderColor}"/>
+    <SolidColorBrush x:Key="WsPresenceDotRingBrush" Color="#FFFFFFFF"/>
+
     <!-- Боковая панель главной (контраст к светлому контенту) -->
     <SolidColorBrush x:Key="WsSidebarBgBrush" Color="#FF1E293B"/>
     <SolidColorBrush x:Key="WsSidebarBorderBrush" Color="#FF334155"/>

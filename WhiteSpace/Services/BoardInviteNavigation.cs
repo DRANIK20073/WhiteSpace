@@ -23,6 +23,8 @@ public static class BoardInviteNavigation
         var board = await svc.JoinBoardAsync(code);
         if (board == null)
         {
+            HomeToastService.Show(
+                "Не удалось подключиться к доске по приглашению. Проверьте код или права доступа.");
             return;
         }
 

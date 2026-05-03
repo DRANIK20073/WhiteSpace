@@ -17,6 +17,12 @@
     <SolidColorBrush x:Key="WsTextMutedBrush" Color="{StaticResource WsTextMutedColor}"/>
     <SolidColorBrush x:Key="WsBorderBrush" Color="{StaticResource WsBorderColor}"/>
 
+    <!-- Разделитель доска | участники без светлой полосы; обводка только у окна чата -->
+    <SolidColorBrush x:Key="WsParticipantSidebarEdgeBrush" Color="#00000000"/>
+    <SolidColorBrush x:Key="WsChatPanelBorderBrush" Color="#4DFFFFFF"/>
+    <!-- Точка «онлайн» на аватаре: кольцо не белое -->
+    <SolidColorBrush x:Key="WsPresenceDotRingBrush" Color="{StaticResource WsSurfaceColor}"/>
+
     <SolidColorBrush x:Key="WsSidebarBgBrush" Color="#FF0F172A"/>
     <SolidColorBrush x:Key="WsSidebarBorderBrush" Color="#FF334155"/>
 

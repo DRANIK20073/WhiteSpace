@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
@@ -40,6 +41,7 @@ namespace WhiteSpace.Pages
         private string _userName = "Пользователь";
         private string _userEmail = "email@example.com";
         private readonly DispatcherTimer _searchDebounceTimer;
+        private readonly DispatcherTimer _toastAutoHideTimer;
         private AppPreferences _preferences = new();
         private bool _suppressPreferenceEvents;
 
@@ -73,10 +75,28 @@ namespace WhiteSpace.Pages
                 Interval = TimeSpan.FromMilliseconds(250)
             };
             _searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
+
+            _toastAutoHideTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(5)
+            };
+            _toastAutoHideTimer.Tick += ToastAutoHideTimer_Tick;
+
+            HomeToastService.ToastRequested += OnHomeToastRequested;
+            BoardChatNotificationHub.UnreadCountChanged += OnNotificationUnreadCountChanged;
         }
 
         private void UserHomePage_Unloaded(object sender, RoutedEventArgs e)
         {
+            HomeToastService.ToastRequested -= OnHomeToastRequested;
+            BoardChatNotificationHub.UnreadCountChanged -= OnNotificationUnreadCountChanged;
+            if (BoardChatNotificationHub.Items is INotifyCollectionChanged notify)
+            {
+                notify.CollectionChanged -= NotificationItems_CollectionChanged;
+            }
+
+            _toastAutoHideTimer.Stop();
+
             if (NavigationService != null && _homeNavHooked)
             {
                 NavigationService.LoadCompleted -= HomeNavigation_LoadCompleted;
@@ -93,6 +113,20 @@ namespace WhiteSpace.Pages
             ApplyViewModeSelection();
             await LoadDashboardAsync();
             _boardsLoadedOnce = true;
+
+            if (BoardChatNotificationHub.Items is INotifyCollectionChanged notify)
+            {
+                notify.CollectionChanged -= NotificationItems_CollectionChanged;
+                notify.CollectionChanged += NotificationItems_CollectionChanged;
+            }
+
+            if (NotificationListBox != null)
+            {
+                NotificationListBox.ItemsSource = BoardChatNotificationHub.Items;
+            }
+
+            UpdateNotificationBadge();
+            UpdateNotificationEmptyHint();
 
             await BoardInviteNavigation.TryNavigateFromPendingAsync(NavigationService);
 
@@ -205,7 +239,8 @@ namespace WhiteSpace.Pages
 
                 _allBoards = cards;
                 RefreshVisibleBoards();
-            ApplyAnimationPreference();
+                ApplyAnimationPreference();
+                await BoardChatNotificationHub.SyncSubscriptionsAsync(_service);
             }
             catch (Exception ex)
             {
@@ -594,47 +629,6 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void JoinByLink_Click(object sender, RoutedEventArgs e)
-        {
-            var pasted = AppDialogService.ShowTextInput(
-                "Приглашение по ссылке",
-                "Вставьте ссылку на доску или 6-значный код доступа:",
-                "Подключиться",
-                "Отмена",
-                "");
-
-            if (pasted == null)
-            {
-                return;
-            }
-
-            var code = BoardInviteLinkParser.TryGetAccessCode(pasted);
-            if (string.IsNullOrEmpty(code))
-            {
-                AppDialogService.ShowWarning(
-                    "Не удалось распознать код в ссылке. Укажите полную ссылку или только код из 6 символов.",
-                    "Подключение к доске");
-                return;
-            }
-
-            var board = await _service.JoinBoardAsync(code);
-            if (board == null)
-            {
-                AppDialogService.ShowError(
-                    "Не удалось присоединиться к доске. Проверьте ссылку или код доступа.",
-                    "Подключение к доске");
-                return;
-            }
-
-            await LoadBoardsAsync();
-            RememberBoard(board.Id);
-
-            if (AppDialogService.ShowConfirmation($"Вы подключились к доске \"{board.Title}\". Открыть её сейчас?", "Подключение к доске"))
-            {
-                NavigationService?.Navigate(new BoardPage(board.Id));
-            }
-        }
-
         private void OpenBoard_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not Button button || button.CommandParameter is not Guid boardId)
@@ -690,6 +684,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
+            BoardChatNotificationHub.Stop();
             SessionStorage.ClearSession();
             SupabaseService.ClearLocalAdminSession();
             SupabaseService.Client.Auth.SignOut();
@@ -802,6 +797,148 @@ namespace WhiteSpace.Pages
         private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        private void OnHomeToastRequested(string message)
+        {
+            _ = Dispatcher.BeginInvoke(new Action(() => ShowHomeToast(message)));
+        }
+
+        private void ShowHomeToast(string message)
+        {
+            if (HomeToastBorder == null || HomeToastMessageText == null)
+            {
+                return;
+            }
+
+            HomeToastMessageText.Text = message;
+            HomeToastBorder.Visibility = Visibility.Visible;
+            HomeToastBorder.Opacity = 1;
+            HomeToastBorder.BeginAnimation(UIElement.OpacityProperty, null);
+
+            _toastAutoHideTimer.Stop();
+            _toastAutoHideTimer.Start();
+
+            if (_preferences.EnableAnimations)
+            {
+                var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(220))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                };
+                HomeToastBorder.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            }
+        }
+
+        private void DismissHomeToast()
+        {
+            _toastAutoHideTimer.Stop();
+
+            if (HomeToastBorder == null)
+            {
+                return;
+            }
+
+            if (_preferences.EnableAnimations)
+            {
+                var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(180))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+                };
+                fade.Completed += (_, _) =>
+                {
+                    HomeToastBorder.Visibility = Visibility.Collapsed;
+                    HomeToastBorder.Opacity = 1;
+                };
+                HomeToastBorder.BeginAnimation(UIElement.OpacityProperty, fade);
+            }
+            else
+            {
+                HomeToastBorder.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void HomeToastDismiss_Click(object sender, RoutedEventArgs e) => DismissHomeToast();
+
+        private void ToastAutoHideTimer_Tick(object? sender, EventArgs e)
+        {
+            _toastAutoHideTimer.Stop();
+            DismissHomeToast();
+        }
+
+        private void OnNotificationUnreadCountChanged() =>
+            Dispatcher.BeginInvoke(new Action(UpdateNotificationBadge));
+
+        private void NotificationItems_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+            Dispatcher.BeginInvoke(new Action(UpdateNotificationEmptyHint));
+
+        private void UpdateNotificationBadge()
+        {
+            if (NotificationUnreadBadge == null || NotificationUnreadBadgeText == null)
+            {
+                return;
+            }
+
+            var n = BoardChatNotificationHub.UnreadCount;
+            if (n <= 0)
+            {
+                NotificationUnreadBadge.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            NotificationUnreadBadge.Visibility = Visibility.Visible;
+            NotificationUnreadBadgeText.Text = n > 99 ? "99+" : n.ToString();
+        }
+
+        private void UpdateNotificationEmptyHint()
+        {
+            if (NotificationEmptyHint == null || NotificationListBox == null)
+            {
+                return;
+            }
+
+            var empty = BoardChatNotificationHub.Items.Count == 0;
+            NotificationEmptyHint.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+            NotificationListBox.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void NotificationCenter_Click(object sender, RoutedEventArgs e)
+        {
+            if (NotificationCenterPopup == null)
+            {
+                return;
+            }
+
+            var open = !NotificationCenterPopup.IsOpen;
+            NotificationCenterPopup.IsOpen = open;
+            if (open)
+            {
+                BoardChatNotificationHub.MarkAllRead();
+                UpdateNotificationBadge();
+                UpdateNotificationEmptyHint();
+            }
+        }
+
+        private void NotificationListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (NotificationListBox?.SelectedItem is not BoardChatNotificationItem item)
+            {
+                return;
+            }
+
+            item.IsRead = true;
+            BoardChatNotificationHub.RecountUnread();
+            UpdateNotificationBadge();
+            NotificationCenterPopup.IsOpen = false;
+            var boardId = item.BoardId;
+            NotificationListBox.SelectedItem = null;
+            NavigationService?.Navigate(new BoardPage(boardId));
+        }
+
+        private void NotificationClearAll_Click(object sender, RoutedEventArgs e)
+        {
+            BoardChatNotificationHub.ClearAll();
+            UpdateNotificationBadge();
+            UpdateNotificationEmptyHint();
         }
     }
 

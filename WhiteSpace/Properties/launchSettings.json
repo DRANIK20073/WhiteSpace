@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "WhiteSpace": {
+      "commandName": "Project"
+    },
+    "WhiteSpace (несколько экземпляров)": {
+      "commandName": "Project",
+      "commandLineArgs": "--multi-instance"
+    }
+  }
+}

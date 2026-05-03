@@ -614,9 +614,9 @@
 
             <Border Grid.Column="1"
                     Background="{DynamicResource WsSurfaceBrush}"
-                    BorderBrush="{DynamicResource WsBorderBrush}"
+                    BorderBrush="{DynamicResource WsParticipantSidebarEdgeBrush}"
                     BorderThickness="1,0,0,0">
-                <Grid>
+                <Grid Background="{DynamicResource WsSurfaceBrush}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
@@ -657,8 +657,14 @@
                               Grid.Row="1"
                               Margin="10,0,10,12"
                               BorderThickness="0"
-                              Background="Transparent"
+                              Background="{DynamicResource WsSurfaceBrush}"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.Resources>
+                            <!-- Шаблон ListView по умолчанию красит область прокрутки в белый — в тёмой теме оставался «просвет». -->
+                            <Style TargetType="ScrollViewer">
+                                <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+                            </Style>
+                        </ListView.Resources>
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem">
                                 <Setter Property="Padding" Value="0"/>
@@ -671,6 +677,7 @@
                                         <ControlTemplate TargetType="ListViewItem">
                                             <Border x:Name="ItemBd"
                                                     Background="Transparent"
+                                                    CornerRadius="16"
                                                     Padding="{TemplateBinding Padding}">
                                                 <ContentPresenter/>
                                             </Border>
@@ -715,7 +722,7 @@
                                             <Ellipse Width="10"
                                                      Height="10"
                                                      Fill="{Binding PresenceDotFill}"
-                                                     Stroke="#FFFFFF"
+                                                     Stroke="{DynamicResource WsPresenceDotRingBrush}"
                                                      StrokeThickness="2"
                                                      HorizontalAlignment="Right"
                                                      VerticalAlignment="Bottom"/>
@@ -791,16 +798,19 @@
                     <Border x:Name="ChatWidget"
                             Grid.Row="0"
                             Width="360"
+                            MinHeight="320"
+                            MaxHeight="520"
                             Background="{DynamicResource WsChatPanelBgBrush}"
-                            BorderBrush="{DynamicResource WsBorderBrush}"
+                            BorderBrush="{DynamicResource WsChatPanelBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="18"
+                            ClipToBounds="True"
                             Visibility="Collapsed"
                             Margin="0,0,0,12">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="*" MinHeight="180"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
@@ -827,46 +837,51 @@
                             <ScrollViewer Grid.Row="1"
                                           x:Name="ChatMessagesScrollViewer"
                                           Margin="16,0,16,12"
-                                          VerticalScrollBarVisibility="Auto">
-                                <ItemsControl x:Name="ChatMessagesItemsControl">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <StackPanel Margin="0,0,0,10">
-                                                <TextBlock Text="{Binding HeaderText}"
-                                                           FontSize="12"
-                                                           Foreground="{DynamicResource WsTextSecondaryBrush}"
-                                                           HorizontalAlignment="{Binding HeaderAlignment}"/>
-                                                <Border HorizontalAlignment="{Binding BubbleAlignment}"
-                                                        MaxWidth="280"
-                                                        Margin="0,4,0,0"
-                                                        CornerRadius="14"
-                                                        Padding="12,8"
-                                                        Background="{Binding BubbleBackground}"
-                                                        ContextMenuOpening="ChatBubble_ContextMenuOpening">
-                                                    <Border.ContextMenu>
-                                                        <ContextMenu>
-                                                            <MenuItem Header="Редактировать"
-                                                                      Click="ChatMessageEdit_Click"/>
-                                                            <MenuItem Header="Удалить"
-                                                                      Foreground="#DC2626"
-                                                                      Click="ChatMessageDelete_Click"/>
-                                                        </ContextMenu>
-                                                    </Border.ContextMenu>
-                                                    <TextBlock Text="{Binding Text}"
-                                                               TextWrapping="Wrap"
-                                                               Foreground="{Binding TextForeground}"/>
-                                                </Border>
-                                                <TextBlock Text="изменено"
-                                                           FontSize="11"
-                                                           FontStyle="Italic"
-                                                           Foreground="{DynamicResource WsTextMutedBrush}"
-                                                           Margin="0,3,0,0"
-                                                           HorizontalAlignment="{Binding BubbleAlignment}"
-                                                           Visibility="{Binding EditedBadgeVisibility}"/>
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          CanContentScroll="False">
+                                <!-- Запас справа под вертикальный скроллбар, чтобы не наезжал на пузыри -->
+                                <Border Padding="0,0,18,0">
+                                    <ItemsControl x:Name="ChatMessagesItemsControl">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="0,0,0,10">
+                                                    <TextBlock Text="{Binding HeaderText}"
+                                                               FontSize="12"
+                                                               Foreground="{DynamicResource WsTextSecondaryBrush}"
+                                                               HorizontalAlignment="{Binding HeaderAlignment}"/>
+                                                    <Border HorizontalAlignment="{Binding BubbleAlignment}"
+                                                            MaxWidth="280"
+                                                            Margin="0,4,0,0"
+                                                            CornerRadius="14"
+                                                            Padding="12,8"
+                                                            Background="{Binding BubbleBackground}"
+                                                            ContextMenuOpening="ChatBubble_ContextMenuOpening">
+                                                        <Border.ContextMenu>
+                                                            <ContextMenu>
+                                                                <MenuItem Header="Редактировать"
+                                                                          Click="ChatMessageEdit_Click"/>
+                                                                <MenuItem Header="Удалить"
+                                                                          Foreground="#DC2626"
+                                                                          Click="ChatMessageDelete_Click"/>
+                                                            </ContextMenu>
+                                                        </Border.ContextMenu>
+                                                        <TextBlock Text="{Binding Text}"
+                                                                   TextWrapping="Wrap"
+                                                                   Foreground="{Binding TextForeground}"/>
+                                                    </Border>
+                                                    <TextBlock Text="изменено"
+                                                               FontSize="11"
+                                                               FontStyle="Italic"
+                                                               Foreground="{DynamicResource WsTextMutedBrush}"
+                                                               Margin="0,3,0,0"
+                                                               HorizontalAlignment="{Binding BubbleAlignment}"
+                                                               Visibility="{Binding EditedBadgeVisibility}"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Border>
                             </ScrollViewer>
 
                             <Grid Grid.Row="2" Margin="16,0,16,16">
@@ -898,11 +913,35 @@
                         </Grid>
                     </Border>
 
-                    <Button Grid.Row="1"
-                            Style="{StaticResource ChatFabButtonStyle}"
-                            Click="ToggleChat_Click">
-                        <TextBlock Text="💬" FontSize="18"/>
-                    </Button>
+                    <Grid Grid.Row="1"
+                          HorizontalAlignment="Right"
+                          VerticalAlignment="Bottom">
+                        <Button x:Name="ChatFabButton"
+                                Style="{StaticResource ChatFabButtonStyle}"
+                                Click="ToggleChat_Click">
+                            <TextBlock Text="💬" FontSize="18"/>
+                        </Button>
+                        <Border x:Name="ChatUnreadBadge"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Top"
+                                Margin="0,-2,-2,0"
+                                MinWidth="20"
+                                Height="20"
+                                CornerRadius="10"
+                                Padding="5,0"
+                                Background="{DynamicResource WsPurpleBrush}"
+                                BorderBrush="{DynamicResource WsSurfaceBrush}"
+                                BorderThickness="2"
+                                Visibility="Collapsed">
+                            <TextBlock x:Name="ChatUnreadBadgeText"
+                                       Text="0"
+                                       Foreground="White"
+                                       FontSize="11"
+                                       FontWeight="Bold"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
                 </Grid>
             </Grid>
         </Grid>

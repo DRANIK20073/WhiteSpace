@@ -2,6 +2,7 @@
 using Newtonsoft.Json;
 using Supabase;
 using Supabase.Gotrue;
+using Supabase.Storage;
 using Supabase.Gotrue.Exceptions;
 using Supabase.Interfaces;
 using Supabase.Postgrest.Attributes;
@@ -25,6 +26,9 @@ using static Supabase.Realtime.PostgresChanges.PostgresChangesOptions;
 
 public class SupabaseService
 {
+    /// <summary>Имя bucket в Supabase Storage для картинок досок. Создайте bucket в Dashboard и включите публичный доступ на чтение.</summary>
+    public const string BoardImagesBucket = "board-images";
+
     private static Supabase.Client _client; // для работы с основной клиентской логикой
     private static Supabase.Gotrue.Client _authClient; // для работы с аутентификацией
     private static readonly object _localServerLock = new();
@@ -786,6 +790,7 @@ public class SupabaseService
 
             Application.Current.Dispatcher.Invoke(() =>
             {
+                BoardChatNotificationHub.Stop();
                 if (Application.Current.MainWindow is WhiteSpace.MainWindow window)
                 {
                     window.MainFrame.Navigate(new LoginPage());
@@ -1022,6 +1027,86 @@ public class SupabaseService
         }
         return result;
     }
+
+    /// <summary>Загружает локальный файл изображения в Storage и возвращает публичный URL для сохранения в BoardShape.Text.</summary>
+    public async Task<string?> UploadBoardImageAsync(Guid boardId, int shapeId, string localFilePath)
+    {
+        if (_client == null)
+        {
+            AppDialogService.ShowError("Клиент Supabase не инициализирован.", "Изображение");
+            return null;
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(localFilePath) || !File.Exists(localFilePath))
+            {
+                AppDialogService.ShowWarning("Файл изображения не найден.", "Изображение");
+                return null;
+            }
+
+            if (_client.Auth.CurrentUser == null)
+            {
+                AppDialogService.ShowWarning("Войдите в аккаунт, чтобы добавлять изображения на доску.", "Изображение");
+                return null;
+            }
+
+            var ext = System.IO.Path.GetExtension(localFilePath);
+            if (string.IsNullOrEmpty(ext)) ext = ".png";
+            ext = ext.ToLowerInvariant();
+            if (ext.Length > 8) ext = ".png";
+
+            var remotePath = $"{boardId:D}/{shapeId}{ext}";
+
+            var options = new global::Supabase.Storage.FileOptions
+            {
+                Upsert = true,
+                ContentType = GetImageMimeType(ext),
+                CacheControl = "3600"
+            };
+
+            await _client.Storage
+                .From(BoardImagesBucket)
+                .Upload(localFilePath, remotePath, options);
+
+            var publicUrl = _client.Storage
+                .From(BoardImagesBucket)
+                .GetPublicUrl(remotePath);
+
+            if (string.IsNullOrWhiteSpace(publicUrl))
+            {
+                return null;
+            }
+
+            publicUrl = publicUrl.Trim();
+            if (!Uri.TryCreate(publicUrl, UriKind.Absolute, out _))
+            {
+                var baseUrl = SupabaseUrl?.TrimEnd('/') ?? "";
+                var path = remotePath.Replace('\\', '/').TrimStart('/');
+                publicUrl = $"{baseUrl}/storage/v1/object/public/{BoardImagesBucket}/{path}";
+            }
+
+            return publicUrl;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError(
+                $"Не удалось загрузить изображение. Проверьте в Supabase: bucket «{BoardImagesBucket}», политики Storage (insert для авторизованных, public read). Подробности: {ex.Message}",
+                "Хранилище");
+            Debug.WriteLine(ex);
+            return null;
+        }
+    }
+
+    private static string GetImageMimeType(string ext) => ext switch
+    {
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".gif" => "image/gif",
+        ".webp" => "image/webp",
+        ".bmp" => "image/bmp",
+        _ => "application/octet-stream"
+    };
 
     //Сохранить изменения на доске
     public async Task<bool> SaveShapeAsync(BoardShape shape)
