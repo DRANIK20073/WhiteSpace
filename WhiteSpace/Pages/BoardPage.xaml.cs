@@ -50,10 +50,10 @@ namespace WhiteSpace.Pages
         private bool _isLoadingShapes = false; // Флаг для предотвращения двойной загрузки
         private bool _isRestoringHistory;
 
-        private IDisposable _shapesSubscription;
-        private IDisposable _membersSubscription;
-        private IDisposable _cursorsSubscription;
-        private IDisposable _chatSubscription;
+        private IDisposable? _shapesSubscription;
+        private IDisposable? _membersSubscription;
+        private IDisposable? _cursorsSubscription;
+        private IDisposable? _chatSubscription;
         private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
         private ToolMode _tool = ToolMode.Hand;
 
@@ -368,9 +368,13 @@ namespace WhiteSpace.Pages
 
             // Отписываемся от событий при выходе
             _shapesSubscription?.Dispose();
+            _shapesSubscription = null;
             _membersSubscription?.Dispose();
+            _membersSubscription = null;
             _cursorsSubscription?.Dispose();
+            _cursorsSubscription = null;
             _chatSubscription?.Dispose();
+            _chatSubscription = null;
             _accessMonitorTimer.Stop();
             _presenceHeartbeatTimer.Stop();
             _presenceUiRefreshTimer.Stop();
@@ -441,6 +445,11 @@ namespace WhiteSpace.Pages
             try
             {
                 _isLoadingShapes = true;
+                RemoveResizeFrame();
+                RemovePreviewShape();
+                _shapesOnBoard.Clear();
+                BoardCanvas.Children.Clear();
+
                 var shapes = await _supabaseService.LoadBoardShapesAsync(_boardId);
 
                 foreach (var shape in shapes)
@@ -464,6 +473,7 @@ namespace WhiteSpace.Pages
         {
             try
             {
+                _shapesSubscription?.Dispose();
                 _shapesSubscription = _firebaseService
                     .GetShapesObservable(_boardId.ToString())
                     .Where(shape => shape != null)
@@ -478,9 +488,6 @@ namespace WhiteSpace.Pages
                             UpdateOrAddShapeFromFirebase(shape);
                         });
                     });
-
-                // Подписываемся на изменения участников
-                SubscribeToBoardMembers();
             }
             catch (Exception ex)
             {
@@ -491,54 +498,49 @@ namespace WhiteSpace.Pages
         // Обновление или добавление фигуры из Firebase (от других пользователей)
         private void UpdateOrAddShapeFromFirebase(BoardShape shape)
         {
+            if (shape == null || shape.Id <= 0)
+            {
+                return;
+            }
+
             var existingShapeIndex = _shapesOnBoard.FindIndex(s => s.Id == shape.Id);
 
             if (existingShapeIndex >= 0)
             {
-                // Если фигура уже существует, обновляем её
                 var existingShape = _shapesOnBoard[existingShapeIndex];
                 var uiElement = FindUIElementByUid(shape.Id.ToString());
+
+                existingShape.Color = shape.Color;
+                existingShape.X = shape.X;
+                existingShape.Y = shape.Y;
+                existingShape.Width = shape.Width;
+                existingShape.Height = shape.Height;
+                existingShape.Text = shape.Text;
+                existingShape.Points = shape.Points;
+
+                if (shape.Type == "line" && !string.IsNullOrEmpty(shape.Points))
+                {
+                    existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
+                }
 
                 if (uiElement != null)
                 {
                     Console.WriteLine($"Получено обновление для фигуры {shape.Id}: цвет {shape.Color}");
 
-                    // Сначала обновляем данные фигуры
-                    existingShape.Color = shape.Color;
-                    existingShape.X = shape.X;
-                    existingShape.Y = shape.Y;
-                    existingShape.Width = shape.Width;
-                    existingShape.Height = shape.Height;
-                    existingShape.Text = shape.Text;
+                    UpdateUIElementFromShape(uiElement, existingShape);
 
-                    // Обновляем UI элемент (включая цвет)
-                    UpdateUIElementFromShape(uiElement, shape);
-
-                    if (shape.Type == "line" && !string.IsNullOrEmpty(shape.Points))
+                    if (shape.Type == "line" && uiElement is Polyline targetPolyline)
                     {
-                        existingShape.Points = shape.Points;
-                        existingShape.DeserializedPoints = string.IsNullOrEmpty(shape.Points)
-                            ? new List<Point>()
-                            : JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
-
-                        if (uiElement is Polyline targetPolyline)
+                        targetPolyline.Points.Clear();
+                        foreach (var point in existingShape.DeserializedPoints)
                         {
-                            targetPolyline.Points.Clear();
-                            foreach (var point in existingShape.DeserializedPoints)
-                            {
-                                targetPolyline.Points.Add(point);
-                            }
+                            targetPolyline.Points.Add(point);
                         }
-                    }
-                    else if (shape.Type == "text")
-                    {
-                        existingShape.Points = shape.Points;
                     }
                 }
             }
             else
             {
-                // Добавляем новую фигуру (созданную другим пользователем)
                 Console.WriteLine($"Получена новая фигура из Firebase: {shape.Id}, цвет {shape.Color}");
                 _shapesOnBoard.Add(shape);
                 AddShapeToCanvas(shape);
@@ -651,6 +653,7 @@ namespace WhiteSpace.Pages
         {
             try
             {
+                _membersSubscription?.Dispose();
                 _membersSubscription = _firebaseService
                     .GetBoardMembersObservable(_boardId.ToString())
                     .Where(members => members != null)
@@ -736,6 +739,7 @@ namespace WhiteSpace.Pages
         {
             try
             {
+                _cursorsSubscription?.Dispose();
                 _cursorsSubscription = _firebaseService
                     .GetBoardCursorsObservable(_boardId.ToString())
                     .Where(states => states != null)
@@ -1846,6 +1850,7 @@ namespace WhiteSpace.Pages
         {
             try
             {
+                _chatSubscription?.Dispose();
                 _chatSubscription = _firebaseService
                     .GetBoardChatMessagesObservable(_boardId.ToString())
                     .Where(messages => messages != null)
@@ -3990,6 +3995,9 @@ namespace WhiteSpace.Pages
                     MarkSaved();
 
                     PushShapeToFirebase(shape);
+
+                    BoardCanvas.UpdateLayout();
+                    ShowResizeFrame(element);
                 }
             }
             finally
@@ -4102,8 +4110,26 @@ namespace WhiteSpace.Pages
             {
                 left = Canvas.GetLeft(element);
                 top = Canvas.GetTop(element);
-                width = ((FrameworkElement)element).ActualWidth;
-                height = ((FrameworkElement)element).ActualHeight;
+                var fe = (FrameworkElement)element;
+                width = fe.ActualWidth;
+                height = fe.ActualHeight;
+                if (width < 1 || double.IsNaN(width))
+                {
+                    var dw = fe.Width;
+                    if (!double.IsNaN(dw) && dw > 0)
+                    {
+                        width = dw;
+                    }
+                }
+
+                if (height < 1 || double.IsNaN(height))
+                {
+                    var dh = fe.Height;
+                    if (!double.IsNaN(dh) && dh > 0)
+                    {
+                        height = dh;
+                    }
+                }
 
                 if (width < 1) width = 1;
                 if (height < 1) height = 1;
