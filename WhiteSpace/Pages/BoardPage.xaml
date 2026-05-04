@@ -361,9 +361,62 @@
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
                     <Button x:Name="HandButton" Style="{StaticResource ToolbarButtonStyle}" Content="Рука" Click="Hand_Click"/>
                     <Button x:Name="PenButton" Style="{StaticResource ToolbarButtonStyle}" Content="Перо" Click="Pen_Click"/>
-                    <Button x:Name="RectButton" Style="{StaticResource ToolbarButtonStyle}" Content="Квадрат" Click="Rect_Click"/>
-                    <Button x:Name="EllipseButton" Style="{StaticResource ToolbarButtonStyle}" Content="Круг" Click="Ellipse_Click"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="ShapesToolButton" Style="{StaticResource ToolbarButtonStyle}" Click="ShapesToolButton_Click"
+                                ToolTip="Фигуры">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="26" Height="22" VerticalAlignment="Center">
+                                    <Canvas Width="32" Height="28">
+                                        <Rectangle Canvas.Left="2" Canvas.Top="6" Width="16" Height="16"
+                                                   RadiusX="2" RadiusY="2"
+                                                   Stroke="{DynamicResource WsTextPrimaryBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                                        <Ellipse Canvas.Left="14" Canvas.Top="4" Width="16" Height="16"
+                                                 Stroke="{DynamicResource WsTextPrimaryBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                                    </Canvas>
+                                </Viewbox>
+                                <TextBlock Text="▾" Margin="4,0,0,0" VerticalAlignment="Center" FontSize="11"/>
+                            </StackPanel>
+                        </Button>
+                        <Popup x:Name="ShapesPalettePopup"
+                               StaysOpen="False"
+                               Placement="Bottom"
+                               AllowsTransparency="True"
+                               PopupAnimation="Fade">
+                            <Border Background="{DynamicResource WsSurfaceBrush}"
+                                    BorderBrush="{DynamicResource WsBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="12"
+                                    Padding="10,8"
+                                    MaxWidth="300">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.35" Color="#000000"/>
+                                </Border.Effect>
+                                <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <Expander Header="Базовые"
+                                                  IsExpanded="True"
+                                                  Background="Transparent"
+                                                  BorderThickness="0">
+                                            <UniformGrid x:Name="ShapesPaletteBasicGrid"
+                                                         Columns="4"
+                                                         Margin="0,4,0,6"/>
+                                        </Expander>
+                                        <Expander Header="Блок-схема"
+                                                  IsExpanded="True"
+                                                  Background="Transparent"
+                                                  BorderThickness="0">
+                                            <UniformGrid x:Name="ShapesPaletteFlowGrid"
+                                                         Columns="4"
+                                                         Margin="0,4,0,0"/>
+                                        </Expander>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </StackPanel>
                     <Button x:Name="TextButton" Style="{StaticResource ToolbarButtonStyle}" Content="Текст" Click="Text_Click"/>
+                    <Button x:Name="StickyNoteButton" Style="{StaticResource ToolbarButtonStyle}" Content="Стикер" Click="StickyNote_Click"
+                            ToolTip="Стикер"/>
 
                     <Border Width="1" Height="32" Background="{DynamicResource WsBorderBrush}" Margin="8,0,12,0"/>
 
@@ -381,6 +434,18 @@
                         <Button Background="#FF9500" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
                         <Button Background="#AF52DE" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
                         <Button Background="#30B0C7" Style="{StaticResource ColorButtonStyle}" Click="Color_Click"/>
+                        <Button x:Name="MainToolbarColorPickerButton"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTip="Палитра"
+                                Click="MainToolbarColorPicker_Click"
+                                Padding="10,8"
+                                Margin="4,0,0,0">
+                            <TextBlock FontFamily="Segoe MDL2 Assets"
+                                       Text="&#xE790;"
+                                       FontSize="16"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Center"/>
+                        </Button>
                         <Border Width="1" Height="32" Background="{DynamicResource WsBorderBrush}" Margin="8,0,12,0"/>
                         <Button x:Name="UndoButton" Style="{StaticResource ToolbarButtonStyle}" Content="↶" Click="Undo_Click"/>
                         <Button x:Name="RedoButton" Style="{StaticResource ToolbarButtonStyle}" Content="↷" Click="Redo_Click"/>
@@ -408,9 +473,9 @@
                           MouseMove="Viewport_MouseMove"
                           MouseUp="Viewport_MouseUp"
                           MouseWheel="Viewport_MouseWheel"
-                          Background="{DynamicResource WsViewportGradientBrush}">
+                          Background="Transparent">
 
-                        <Canvas x:Name="BoardCanvas" Width="50000" Height="50000">
+                        <Canvas x:Name="BoardCanvas" Width="50000" Height="50000" Background="Transparent">
                             <Canvas.RenderTransform>
                                 <TransformGroup>
                                     <ScaleTransform x:Name="BoardScale" ScaleX="1" ScaleY="1"/>
@@ -449,57 +514,114 @@
                             <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.35" Color="#000000"/>
                         </Border.Effect>
                         <StackPanel Orientation="Horizontal">
-                            <ComboBox x:Name="SelectionToolbarShapeCombo"
-                                      Width="138"
-                                      Height="28"
-                                      Margin="0,0,10,0"
-                                      Padding="8,2"
-                                      VerticalAlignment="Center"
-                                      Visibility="Collapsed"
-                                      SelectionChanged="SelectionToolbarShape_SelectionChanged">
-                                <ComboBoxItem Content="Прямоугольник" Tag="rectangle"/>
-                                <ComboBoxItem Content="Эллипс" Tag="ellipse"/>
-                            </ComboBox>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center">
-                                <Button x:Name="SelectionToolbarFillButton"
-                                        Width="56"
+                            <StackPanel Orientation="Horizontal" Margin="0,0,10,0">
+                                <Button x:Name="SelectionToolbarShapeButton"
                                         Height="30"
-                                        Padding="4,2"
+                                        Padding="6,2"
+                                        Margin="0,0,0,0"
                                         Cursor="Hand"
-                                        Background="#FFFFFF"
+                                        Background="#3A3A3C"
                                         BorderBrush="#555555"
                                         BorderThickness="1"
                                         VerticalAlignment="Center"
-                                        Click="SelectionToolbarFillButton_Click"
-                                        ToolTip="Заливка и контур (палитра)">
-                                    <Grid Width="48" Height="22">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="4"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Ellipse x:Name="SelectionToolbarFillSwatch"
-                                                 Grid.Column="0"
-                                                 Width="16"
-                                                 Height="16"
-                                                 VerticalAlignment="Center"
-                                                 Fill="#111111"
-                                                 ToolTip="Заливка"/>
-                                        <Ellipse x:Name="SelectionToolbarStrokeSwatch"
-                                                 Grid.Column="2"
-                                                 Width="16"
-                                                 Height="16"
-                                                 VerticalAlignment="Center"
-                                                 Fill="#111111"
-                                                 ToolTip="Контур"/>
-                                        <TextBlock Grid.ColumnSpan="3"
-                                                   Text="▼"
-                                                   FontSize="8"
-                                                   Foreground="#444444"
-                                                   HorizontalAlignment="Right"
-                                                   VerticalAlignment="Bottom"/>
-                                    </Grid>
+                                        Visibility="Collapsed"
+                                        ToolTip="Вид фигуры"
+                                        Click="SelectionToolbarShapeButton_Click">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Viewbox Width="28" Height="18" VerticalAlignment="Center">
+                                            <Canvas Width="36" Height="26">
+                                                <Rectangle Canvas.Left="2" Canvas.Top="7" Width="16" Height="16"
+                                                           RadiusX="2" RadiusY="2"
+                                                           Stroke="#CCCCCC" StrokeThickness="1.6" Fill="Transparent"/>
+                                                <Ellipse Canvas.Left="16" Canvas.Top="5" Width="16" Height="16"
+                                                         Stroke="#CCCCCC" StrokeThickness="1.6" Fill="Transparent"/>
+                                            </Canvas>
+                                        </Viewbox>
+                                        <TextBlock Text="▾" Margin="4,0,0,0" FontSize="10" Foreground="#CCCCCC"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </Button>
+                                <Popup x:Name="SelectionToolbarShapePopup"
+                                       StaysOpen="False"
+                                       Placement="Bottom"
+                                       AllowsTransparency="True"
+                                       PopupAnimation="Fade">
+                                    <Border Background="#1E1E20"
+                                            BorderBrush="#555555"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="8">
+                                        <ScrollViewer MaxHeight="380" Width="252">
+                                            <StackPanel>
+                                                <Expander Header="Базовые" IsExpanded="True" Foreground="#CCCCCC"
+                                                          Background="Transparent" BorderThickness="0">
+                                                    <UniformGrid x:Name="SelectionToolbarShapeBasicGrid"
+                                                                 Columns="4" Margin="0,4,0,6"/>
+                                                </Expander>
+                                                <Expander Header="Блок-схема" IsExpanded="True" Foreground="#CCCCCC"
+                                                          Background="Transparent" BorderThickness="0">
+                                                    <UniformGrid x:Name="SelectionToolbarShapeFlowGrid"
+                                                                 Columns="4" Margin="0,4,0,0"/>
+                                                </Expander>
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,10,0" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="SelectionToolbarFillButton"
+                                            Width="36"
+                                            Height="30"
+                                            Padding="4,2"
+                                            Cursor="Hand"
+                                            Background="#FFFFFF"
+                                            BorderBrush="#555555"
+                                            BorderThickness="1"
+                                            VerticalAlignment="Center"
+                                            Click="SelectionToolbarFillButton_Click"
+                                            ToolTip="Заливка">
+                                        <Grid Width="22" Height="22">
+                                            <Ellipse x:Name="SelectionToolbarFillSwatch"
+                                                     Width="18"
+                                                     Height="18"
+                                                     VerticalAlignment="Center"
+                                                     HorizontalAlignment="Center"
+                                                     Fill="#111111"/>
+                                            <TextBlock Text="▼"
+                                                       FontSize="7"
+                                                       Foreground="#666666"
+                                                       HorizontalAlignment="Right"
+                                                       VerticalAlignment="Bottom"/>
+                                        </Grid>
+                                    </Button>
+                                    <Button x:Name="SelectionToolbarStrokeButton"
+                                            Width="36"
+                                            Height="30"
+                                            Margin="4,0,0,0"
+                                            Padding="4,2"
+                                            Cursor="Hand"
+                                            Background="#FFFFFF"
+                                            BorderBrush="#555555"
+                                            BorderThickness="1"
+                                            VerticalAlignment="Center"
+                                            Click="SelectionToolbarStrokeButton_Click"
+                                            ToolTip="Цвет обводки">
+                                        <Grid Width="22" Height="22">
+                                            <Ellipse x:Name="SelectionToolbarStrokeSwatch"
+                                                     Width="18"
+                                                     Height="18"
+                                                     VerticalAlignment="Center"
+                                                     HorizontalAlignment="Center"
+                                                     Fill="#111111"/>
+                                            <TextBlock Text="▼"
+                                                       FontSize="7"
+                                                       Foreground="#666666"
+                                                       HorizontalAlignment="Right"
+                                                       VerticalAlignment="Bottom"/>
+                                        </Grid>
+                                    </Button>
+                                </StackPanel>
                                 <Popup x:Name="SelectionToolbarFillPopup"
                                        StaysOpen="False"
                                        Placement="Bottom"
@@ -545,9 +667,33 @@
                                                        Margin="0,0,0,6"
                                                        FontSize="12"/>
                                             <UniformGrid x:Name="FillPaletteGridFill" Rows="2" Columns="11"/>
+                                            <Button x:Name="FillPaletteCustomColorBtn"
+                                                    Margin="0,12,0,0"
+                                                    Padding="10,8"
+                                                    HorizontalAlignment="Stretch"
+                                                    Cursor="Hand"
+                                                    Click="FillPaletteCustomColorBtn_Click"
+                                                    Content="Палитра…"/>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
+                                <Popup x:Name="SelectionToolbarStrokePopup"
+                                       StaysOpen="False"
+                                       Placement="Bottom"
+                                       AllowsTransparency="True"
+                                       PopupAnimation="Fade">
+                                    <Border Background="#000000"
+                                            CornerRadius="12"
+                                            Padding="12,10"
+                                            BorderBrush="#404040"
+                                            BorderThickness="1">
+                                        <Border.Effect>
+                                            <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.5" Color="#000000"/>
+                                        </Border.Effect>
+                                        <StackPanel MinWidth="300">
                                             <TextBlock Text="Цвет контура"
                                                        Foreground="#CCCCCC"
-                                                       Margin="0,12,0,6"
+                                                       Margin="0,0,0,6"
                                                        FontSize="12"/>
                                             <UniformGrid x:Name="FillPaletteGridStroke" Rows="2" Columns="11"/>
                                             <TextBlock Text="Стиль контура"
@@ -587,6 +733,13 @@
                                                         Click="StrokeStyleButton_Click"
                                                         Content="Штрих-пунктир"/>
                                             </StackPanel>
+                                            <Button x:Name="StrokePaletteCustomColorBtn"
+                                                    Margin="0,12,0,0"
+                                                    Padding="10,8"
+                                                    HorizontalAlignment="Stretch"
+                                                    Cursor="Hand"
+                                                    Click="StrokePaletteCustomColorBtn_Click"
+                                                    Content="Палитра…"/>
                                         </StackPanel>
                                     </Border>
                                 </Popup>
@@ -633,15 +786,20 @@
                                        FontSize="18"
                                        FontWeight="SemiBold"
                                        Foreground="{DynamicResource WsTextPrimaryBrush}"/>
-                            <Border Background="{DynamicResource WsSurfaceMutedBrush}"
-                                    CornerRadius="9"
-                                    Margin="8,1,0,0"
-                                    Padding="8,2">
+                            <Border Width="32"
+                                    Height="32"
+                                    Background="{DynamicResource WsSurfaceMutedBrush}"
+                                    CornerRadius="4"
+                                    Margin="8,0,0,0"
+                                    VerticalAlignment="Center"
+                                    HorizontalAlignment="Left">
                                 <TextBlock x:Name="MembersCountText"
                                            Text="0"
                                            FontSize="12"
                                            FontWeight="SemiBold"
-                                           Foreground="{DynamicResource WsTextSecondaryBrush}"/>
+                                           Foreground="{DynamicResource WsTextSecondaryBrush}"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
                             </Border>
                         </StackPanel>
 

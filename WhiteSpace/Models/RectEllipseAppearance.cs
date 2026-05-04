@@ -17,6 +17,14 @@ public sealed class RectEllipseAppearance
     [JsonProperty("dash")]
     public string? StrokeDash { get; set; }
 
+    /// <summary>Вариант контура для type=rectangle (ромб, стрелка и т.д.). Для ellipse не используется.</summary>
+    [JsonProperty("sk")]
+    public string? ShapeKind { get; set; }
+
+    /// <summary>Текст внутри фигуры (подпись).</summary>
+    [JsonProperty("lbl")]
+    public string? Label { get; set; }
+
     public static RectEllipseAppearance StrokeOnly() => new() { Mode = "stroke" };
 
     public static RectEllipseAppearance Parse(BoardShape shape)

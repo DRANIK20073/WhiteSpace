@@ -27,6 +27,8 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using WhiteSpace;
 using WhiteSpace.Models;
+using WhiteSpace.Dialogs;
+using WhiteSpace.Rendering;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -54,8 +56,21 @@ namespace WhiteSpace.Pages
         private IDisposable? _membersSubscription;
         private IDisposable? _cursorsSubscription;
         private IDisposable? _chatSubscription;
-        private enum ToolMode { Hand, Pen, Rect, Ellipse, Text }
+        private enum ToolMode { Hand, Pen, Shape, Text, StickyNote, Arrow }
         private ToolMode _tool = ToolMode.Hand;
+
+        private bool _isPlacingSticky;
+        private Point _stickyPlacementStartWorld;
+        private Rectangle? _previewStickyShape;
+        private TextBox? _focusedBoardTextEdit;
+        private const double DefaultStickyW = 240;
+        private const double DefaultStickyH = 220;
+
+        /// <summary>Выбранный вариант фигуры из палитры (см. <see cref="ShapePalette"/>).</summary>
+        private string _shapeKind = "rect";
+
+        private bool _shapesPaletteBuilt;
+        private bool _selectionShapeComboBuilt;
 
         private bool _isCreatingShape = false;
         private Dictionary<string, Point> _originalCorners;
@@ -69,15 +84,28 @@ namespace WhiteSpace.Pages
         private bool _isDrawing;
         private Polyline _currentStroke;
 
-        //Выбор цвета
+        // Выбор цвета: заливка и контур независимы (пресеты и «без выделения»).
         private Brush _currentBrush = Brushes.Black;
-        private string _currentColorString = "black";
+        private string _currentStrokeHex = "#111111";
+        private string _currentFillHex = "#FFFFFF";
 
         // Призрак фигуры
         private Shape _previewShape;
         private const double DefaultRectW = 140;
         private const double DefaultRectH = 90;
         private const double DefaultEllipse = 100;
+
+        /// <summary>Минимальные габариты при ресайзе и размещении (прямоугольник, эллипс, блок-схема).</summary>
+        private const double MinRectEllipseWidth = 48;
+        private const double MinRectEllipseHeight = 40;
+
+        /// <summary>Минимальные размеры стикера.</summary>
+        private const double MinStickyWidth = 120;
+        private const double MinStickyHeight = 80;
+
+        private const string ShapeLabelPresenterTag = "shapeLabelPresenter";
+        private const string StickyAuthorTag = "stickyAuthor";
+        private const double ConnectorStrokeThickness = 3.5;
 
         /// <summary>21 цвет + кнопка «свой» на каждую палитру (заливка и контур).</summary>
         private static readonly string[] FillPaletteHexes =
@@ -113,6 +141,12 @@ namespace WhiteSpace.Pages
 
         // Словарь для хранения ручек изменения размера
         private Dictionary<string, Rectangle> _resizeHandles = new Dictionary<string, Rectangle>();
+
+        private readonly List<FrameworkElement> _anchorPortElements = new();
+
+        private bool _isDrawingConnector;
+        private Point _connectorAnchorWorld;
+        private Polyline? _connectorPreviewLine;
         private readonly Stack<List<BoardShape>> _undoHistory = new Stack<List<BoardShape>>();
         private readonly Stack<List<BoardShape>> _redoHistory = new Stack<List<BoardShape>>();
         private const double DefaultImageW = 280;
@@ -131,6 +165,7 @@ namespace WhiteSpace.Pages
         private readonly DispatcherTimer _accessMonitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private bool _isAccessCheckRunning;
         private readonly Dictionary<Guid, FirebaseBoardMember> _presenceByUserId = new();
+        private Window? _hostWindow;
         private readonly Dictionary<Guid, FirebaseCursorState> _cursorByUserId = new();
         private readonly Dictionary<Guid, FrameworkElement> _cursorVisuals = new();
         private readonly Dictionary<Guid, Brush> _cursorAccentByUserId = new();
@@ -193,7 +228,19 @@ namespace WhiteSpace.Pages
                 SelectionToolbarFillPopup.PlacementTarget = SelectionToolbarFillButton;
             }
 
+            if (SelectionToolbarStrokePopup != null && SelectionToolbarStrokeButton != null)
+            {
+                SelectionToolbarStrokePopup.PlacementTarget = SelectionToolbarStrokeButton;
+            }
+
+            if (SelectionToolbarShapePopup != null && SelectionToolbarShapeButton != null)
+            {
+                SelectionToolbarShapePopup.PlacementTarget = SelectionToolbarShapeButton;
+            }
+
             EnsureFillPaletteBuilt();
+            EnsureShapesPaletteBuilt();
+            UpdateShapesToolLabel();
 
             await LoadBoardMetadataAsync();
             _isAdminSession = await _supabaseService.IsCurrentUserAdminAsync();
@@ -244,6 +291,12 @@ namespace WhiteSpace.Pages
 
             BoardChatNotificationHub.ActiveBoardId = _boardId;
             _ = BoardChatNotificationHub.SyncSubscriptionsAsync(_supabaseService);
+
+            _hostWindow = Window.GetWindow(this);
+            if (_hostWindow != null)
+            {
+                _hostWindow.PreviewMouseLeftButtonUp += HostWindow_PreviewMouseLeftButtonUp;
+            }
         }
 
         private async Task LoadBoardMetadataAsync()
@@ -308,21 +361,28 @@ namespace WhiteSpace.Pages
             RemovePreviewShape();
 
             _isPlacingRectEllipse = false;
+            _isPlacingSticky = false;
             _currentStroke = null;
             _isDrawing = false;
             _isDraggingElement = false;
             _dragElement = null;
 
             BoardCanvas.Children.Clear();
+            RemovePreviewSticky();
 
             foreach (var shape in _shapesOnBoard)
             {
                 AddShapeToCanvas(CloneShape(shape), false);
             }
 
-            if (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse)
+            if (_tool == ToolMode.Shape)
             {
                 EnsurePreviewShape();
+            }
+
+            if (_tool == ToolMode.StickyNote)
+            {
+                EnsurePreviewSticky();
             }
         }
 
@@ -360,6 +420,12 @@ namespace WhiteSpace.Pages
         private async void Page_Unloaded(object sender, RoutedEventArgs e)
         {
             _isPageUnloading = true;
+
+            if (_hostWindow != null)
+            {
+                _hostWindow.PreviewMouseLeftButtonUp -= HostWindow_PreviewMouseLeftButtonUp;
+                _hostWindow = null;
+            }
 
             if (BoardChatNotificationHub.ActiveBoardId == _boardId)
             {
@@ -468,7 +534,6 @@ namespace WhiteSpace.Pages
         }
 
         // Подписка на изменения из Firebase (только для получения обновлений от других пользователей)
-        // Подписка на изменения из Firebase (только для получения обновлений от других пользователей)
         private void SubscribeToShapes()
         {
             try
@@ -518,7 +583,7 @@ namespace WhiteSpace.Pages
                 existingShape.Text = shape.Text;
                 existingShape.Points = shape.Points;
 
-                if (shape.Type == "line" && !string.IsNullOrEmpty(shape.Points))
+                if (shape.Type is "line" or "connector" && !string.IsNullOrEmpty(shape.Points))
                 {
                     existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
                 }
@@ -552,7 +617,24 @@ namespace WhiteSpace.Pages
         {
             var brush = GetBrushFromColor(shape.Color);
 
-            if (element is Shape sh)
+            if (element is Grid grid)
+            {
+                if (shape.Type == "stickyNote")
+                {
+                    ApplyStickyNoteVisual(grid, shape);
+                    SyncStickyNoteAuthorAndText(grid, shape);
+                }
+                else if (grid.Tag is Shape inner)
+                {
+                    if (shape.Type is "rectangle" or "ellipse")
+                    {
+                        ApplyRectEllipseVisual(inner, shape);
+                    }
+
+                    SyncShapeLabelPresenter(grid, shape);
+                }
+            }
+            else if (element is Shape sh)
             {
                 if (shape.Type is "rectangle" or "ellipse")
                 {
@@ -594,7 +676,7 @@ namespace WhiteSpace.Pages
                     tb.Height = shape.Height;
                 }
             }
-            else if (shape.Type == "line")
+            else if (shape.Type == "line" || shape.Type == "connector")
             {
                 if (element is Polyline targetPolyline && !string.IsNullOrEmpty(shape.Points))
                 {
@@ -1367,8 +1449,7 @@ namespace WhiteSpace.Pages
         private void DisableEditingTools()
         {
             PenButton.IsEnabled = false;
-            RectButton.IsEnabled = false;
-            EllipseButton.IsEnabled = false;
+            ShapesToolButton.IsEnabled = false;
             TextButton.IsEnabled = false;
             UndoButton.IsEnabled = false;
             RedoButton.IsEnabled = false;
@@ -1380,8 +1461,7 @@ namespace WhiteSpace.Pages
         private void EnableEditingTools()
         {
             PenButton.IsEnabled = true;
-            RectButton.IsEnabled = true;
-            EllipseButton.IsEnabled = true;
+            ShapesToolButton.IsEnabled = true;
             TextButton.IsEnabled = true;
             UndoButton.IsEnabled = true;
             RedoButton.IsEnabled = true;
@@ -2209,14 +2289,68 @@ namespace WhiteSpace.Pages
                     ScheduleBoardImageLoad(image, shape.Text, boardImageLocalFallbackPath);
                 }
             }
+            else if (shape.Type == "connector")
+            {
+                if (string.IsNullOrWhiteSpace(shape.Points))
+                {
+                    return;
+                }
+
+                List<Point>? cpoints;
+                try
+                {
+                    cpoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                }
+                catch
+                {
+                    return;
+                }
+
+                if (cpoints == null || cpoints.Count < 2)
+                {
+                    return;
+                }
+
+                var conn = new Polyline
+                {
+                    Stroke = brush,
+                    StrokeThickness = ConnectorStrokeThickness,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Triangle,
+                    StrokeMiterLimit = 1,
+                    Fill = Brushes.Transparent,
+                    SnapsToDevicePixels = true,
+                    Uid = shape.Id.ToString()
+                };
+
+                foreach (var point in cpoints)
+                {
+                    conn.Points.Add(point);
+                }
+
+                BoardCanvas.Children.Add(conn);
+                if (addToBoardState)
+                {
+                    _shapesOnBoard.Add(shape);
+                }
+            }
+            else if (shape.Type == "stickyNote")
+            {
+                var sticky = CreateStickyNoteBoardContainer(shape);
+                Canvas.SetLeft(sticky, shape.X - shape.Width / 2);
+                Canvas.SetTop(sticky, shape.Y - shape.Height / 2);
+                BoardCanvas.Children.Add(sticky);
+                if (addToBoardState)
+                {
+                    _shapesOnBoard.Add(shape);
+                }
+            }
             else
             {
-                UIElement element = shape.Type switch
-                {
-                    "rectangle" => CreateRectEllipseVisual(shape, true),
-                    "ellipse" => CreateRectEllipseVisual(shape, false),
-                    _ => null
-                };
+                UIElement? element = shape.Type is "rectangle" or "ellipse"
+                    ? CreateShapeBoardContainer(shape)
+                    : null;
 
                 if (element != null)
                 {
@@ -2398,9 +2532,36 @@ namespace WhiteSpace.Pages
         // Инструменты
         private void Hand_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Hand);
         private void Pen_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Pen);
-        private void Rect_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Rect);
-        private void Ellipse_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Ellipse);
         private void Text_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Text);
+
+        private void StickyNote_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.StickyNote);
+
+        private void ShapesToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            EnsureShapesPaletteBuilt();
+            if (ShapesPalettePopup != null && ShapesToolButton != null)
+            {
+                ShapesPalettePopup.PlacementTarget = ShapesToolButton;
+                ShapesPalettePopup.IsOpen = true;
+            }
+        }
+
+        private void ShapePaletteChip_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button b || b.Tag is not string id)
+            {
+                return;
+            }
+
+            _shapeKind = id;
+            UpdateShapesToolLabel();
+            if (ShapesPalettePopup != null)
+            {
+                ShapesPalettePopup.IsOpen = false;
+            }
+
+            SetTool(ToolMode.Shape);
+        }
 
         private void SetTool(ToolMode tool)
         {
@@ -2413,13 +2574,24 @@ namespace WhiteSpace.Pages
             _isDraggingElement = false;
             _dragElement = null;
             _isPlacingRectEllipse = false;
+            _isPlacingSticky = false;
 
-            RemoveResizeFrame();
+            if (tool != ToolMode.Hand && tool != ToolMode.Arrow)
+            {
+                RemoveResizeFrame();
+            }
+
             RemovePreviewShape();
+            RemovePreviewSticky();
 
-            if (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse)
+            if (_tool == ToolMode.Shape)
             {
                 EnsurePreviewShape();
+            }
+
+            if (_tool == ToolMode.StickyNote)
+            {
+                EnsurePreviewSticky();
             }
 
             Viewport.Cursor = _tool switch
@@ -2427,6 +2599,7 @@ namespace WhiteSpace.Pages
                 ToolMode.Hand => Cursors.Hand,
                 ToolMode.Pen => Cursors.Pen,
                 ToolMode.Text => Cursors.IBeam,
+                ToolMode.Arrow => Cursors.Cross,
                 _ => Cursors.Cross
             };
 
@@ -2454,6 +2627,83 @@ namespace WhiteSpace.Pages
                     }
                 }
             }
+
+            if (_tool == ToolMode.Hand)
+            {
+                LockStickyNoteEditorsForHandTool();
+            }
+        }
+
+        /// <summary>Сбрасывает режим правки текста у стикеров при выборе «Руки» (вложенный TextBox не обходится циклом по Children).</summary>
+        private void LockStickyNoteEditorsForHandTool()
+        {
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            foreach (var s in _shapesOnBoard)
+            {
+                if (s.Type != "stickyNote")
+                {
+                    continue;
+                }
+
+                if (FindUIElementByUid(s.Id.ToString()) is not Grid stickyGrid)
+                {
+                    continue;
+                }
+
+                if (TryGetStickyNoteBodyTextBox(stickyGrid) is not TextBox noteTb)
+                {
+                    continue;
+                }
+
+                noteTb.Focusable = false;
+                noteTb.IsHitTestVisible = false;
+                noteTb.IsReadOnly = true;
+
+                if (ReferenceEquals(Keyboard.FocusedElement, noteTb))
+                {
+                    Keyboard.ClearFocus();
+                }
+
+                if (ReferenceEquals(_focusedBoardTextEdit, noteTb))
+                {
+                    _focusedBoardTextEdit = null;
+                }
+            }
+        }
+
+        private static TextBox? TryGetStickyNoteBodyTextBox(Grid stickyGrid)
+        {
+            if (stickyGrid.Children.Count < 2 || stickyGrid.Children[1] is not Grid inner)
+            {
+                return null;
+            }
+
+            foreach (var c in inner.Children)
+            {
+                if (c is TextBox tb)
+                {
+                    return tb;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsDescendantOf(DependencyObject? node, DependencyObject? ancestor)
+        {
+            for (var d = node; d != null; d = VisualTreeHelper.GetParent(d))
+            {
+                if (ReferenceEquals(d, ancestor))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private Point ScreenToWorld(Point screenPoint)
@@ -2528,6 +2778,297 @@ namespace WhiteSpace.Pages
 
             FillPaletteGridFill.Children.Add(CreatePaletteCustomButton(true));
             FillPaletteGridStroke.Children.Add(CreatePaletteCustomButton(false));
+        }
+
+        private void EnsureShapesPaletteBuilt()
+        {
+            if (_shapesPaletteBuilt || ShapesPaletteBasicGrid == null || ShapesPaletteFlowGrid == null)
+            {
+                return;
+            }
+
+            _shapesPaletteBuilt = true;
+            foreach (var e in ShapePalette.Basic)
+            {
+                ShapesPaletteBasicGrid.Children.Add(CreateShapePaletteButton(e));
+            }
+
+            foreach (var e in ShapePalette.Flowchart)
+            {
+                ShapesPaletteFlowGrid.Children.Add(CreateShapePaletteButton(e));
+            }
+        }
+
+        private void EnsureSelectionToolbarShapePaletteBuilt()
+        {
+            if (_selectionShapeComboBuilt || SelectionToolbarShapeBasicGrid == null ||
+                SelectionToolbarShapeFlowGrid == null)
+            {
+                return;
+            }
+
+            _selectionShapeComboBuilt = true;
+            foreach (var e in ShapePalette.Basic)
+            {
+                SelectionToolbarShapeBasicGrid.Children.Add(CreateSelectionToolbarShapePaletteButton(e));
+            }
+
+            foreach (var e in ShapePalette.Flowchart)
+            {
+                SelectionToolbarShapeFlowGrid.Children.Add(CreateSelectionToolbarShapePaletteButton(e));
+            }
+        }
+
+        private System.Windows.Controls.Button CreateSelectionToolbarShapePaletteButton(ShapePalette.Entry e)
+        {
+            var strokeBrush = new SolidColorBrush(Color.FromRgb(0xCC, 0xCC, 0xCC));
+            var icon = CreatePaletteIcon(e.Id, strokeBrush);
+            var btn = new System.Windows.Controls.Button
+            {
+                Tag = e.Id,
+                ToolTip = e.Title,
+                Margin = new Thickness(2),
+                Padding = new Thickness(3),
+                Cursor = Cursors.Hand,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
+                Content = icon
+            };
+            btn.Click += SelectionToolbarShapePaletteChip_Click;
+            return btn;
+        }
+
+        private async void SelectionToolbarShapePaletteChip_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not System.Windows.Controls.Button b || b.Tag is not string id)
+            {
+                return;
+            }
+
+            if (SelectionToolbarShapePopup != null)
+            {
+                SelectionToolbarShapePopup.IsOpen = false;
+            }
+
+            await TryChangeSelectedShapeKindAsync(id);
+        }
+
+        private void SelectionToolbarShapeButton_Click(object sender, RoutedEventArgs e)
+        {
+            EnsureSelectionToolbarShapePaletteBuilt();
+            if (SelectionToolbarShapePopup != null && SelectionToolbarShapeButton != null)
+            {
+                SelectionToolbarShapePopup.PlacementTarget = SelectionToolbarShapeButton;
+                SelectionToolbarShapePopup.IsOpen = true;
+            }
+        }
+
+        private void SelectionToolbarStrokeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (SelectionToolbarStrokePopup != null && SelectionToolbarStrokeButton != null)
+            {
+                SelectionToolbarStrokePopup.PlacementTarget = SelectionToolbarStrokeButton;
+                SelectionToolbarStrokePopup.IsOpen = true;
+            }
+        }
+
+        private async void FillPaletteCustomColorBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (!TryPromptColorPicker(isStrokeContour: false, out var hex))
+            {
+                return;
+            }
+
+            await ApplyToolbarPaletteHexAsync(hex, false);
+            if (SelectionToolbarFillPopup != null)
+            {
+                SelectionToolbarFillPopup.IsOpen = false;
+            }
+        }
+
+        private async void StrokePaletteCustomColorBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (!TryPromptColorPicker(isStrokeContour: true, out var hex))
+            {
+                return;
+            }
+
+            await ApplyToolbarPaletteHexAsync(hex, true);
+            if (SelectionToolbarStrokePopup != null)
+            {
+                SelectionToolbarStrokePopup.IsOpen = false;
+            }
+        }
+
+        private bool TryPromptColorPicker(bool isStrokeContour, out string hex)
+        {
+            hex = "#111111";
+            var initialHex = hex;
+
+            if (_resizeTarget != null)
+            {
+                var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+                if (shape != null && shape.Type is "rectangle" or "ellipse")
+                {
+                    var app = RectEllipseAppearance.Parse(shape);
+                    initialHex = isStrokeContour
+                        ? (shape.Color ?? "#111111")
+                        : (app.FillHex ?? shape.Color ?? "#111111");
+                }
+                else if (shape != null)
+                {
+                    initialHex = shape.Color ?? "#111111";
+                }
+            }
+            else
+            {
+                initialHex = isStrokeContour ? (_currentStrokeHex ?? "#111111") : (_currentFillHex ?? "#FFFFFF");
+            }
+
+            if (!TryParseWpfColor(initialHex, out var initialColor))
+            {
+                initialColor = Color.FromRgb(0x11, 0x11, 0x11);
+            }
+
+            var dlg = new HsvColorPickerWindow(initialColor, isStrokeContour ? "Цвет контура" : "Цвет заливки")
+            {
+                Owner = Window.GetWindow(this)
+            };
+
+            if (dlg.ShowDialog() != true || string.IsNullOrWhiteSpace(dlg.SelectedHex))
+            {
+                return false;
+            }
+
+            var raw = dlg.SelectedHex.Trim();
+            if (!raw.StartsWith("#", StringComparison.Ordinal))
+            {
+                raw = "#" + raw;
+            }
+
+            hex = NormalizeColorKey(raw);
+            return hex.Length >= 4;
+        }
+
+        private static bool TryParseWpfColor(string? key, out Color c)
+        {
+            c = Colors.Black;
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return false;
+            }
+
+            try
+            {
+                var o = ColorConverter.ConvertFromString(key.Trim());
+                if (o is Color cc)
+                {
+                    c = cc;
+                    return true;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+
+            return false;
+        }
+
+        private static string ResolvePaletteTitle(string id)
+        {
+            foreach (var e in ShapePalette.Basic.Concat(ShapePalette.Flowchart))
+            {
+                if (e.Id == id)
+                {
+                    return e.Title;
+                }
+            }
+
+            return "Фигуры";
+        }
+
+        private void UpdateShapesToolLabel()
+        {
+            // Подпись к инструменту «Фигуры» убрана в пользу иконки; выбранный вид задаётся палитрой.
+        }
+
+        private Button CreateShapePaletteButton(ShapePalette.Entry e)
+        {
+            var borderBrush = (Brush)(TryFindResource("WsBorderBrush") ?? new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)));
+            var strokeBrush = (Brush)(TryFindResource("WsTextPrimaryBrush") ?? Brushes.Black);
+
+            var icon = CreatePaletteIcon(e.Id, strokeBrush);
+            var btn = new Button
+            {
+                Tag = e.Id,
+                ToolTip = e.Title,
+                Margin = new Thickness(3),
+                Padding = new Thickness(4),
+                Cursor = Cursors.Hand,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(1),
+                BorderBrush = borderBrush,
+                Content = icon
+            };
+            btn.Click += ShapePaletteChip_Click;
+            return btn;
+        }
+
+        private static FrameworkElement CreatePaletteIcon(string id, Brush strokeBrush)
+        {
+            if (id == "circle")
+            {
+                return new System.Windows.Shapes.Path
+                {
+                    Width = 32,
+                    Height = 32,
+                    Stretch = Stretch.Uniform,
+                    Data = new EllipseGeometry(new Point(16, 16), 12, 12),
+                    Stroke = strokeBrush,
+                    StrokeThickness = 2,
+                    Fill = Brushes.Transparent
+                };
+            }
+
+            return new System.Windows.Shapes.Path
+            {
+                Width = 32,
+                Height = 32,
+                Stretch = Stretch.Uniform,
+                Data = BoardShapeOutlineGeometry.Get(id),
+                Stroke = strokeBrush,
+                StrokeThickness = 1.6,
+                Fill = Brushes.Transparent
+            };
+        }
+
+        private BoardShape BuildTransientPreviewShape()
+        {
+            var circleLike = _shapeKind == "circle";
+            var w = circleLike ? DefaultEllipse : DefaultRectW;
+            var h = circleLike ? DefaultEllipse : DefaultRectH;
+            var (dbType, kindForJson) = ShapePalette.ResolveStorage(_shapeKind);
+            var bs = new BoardShape
+            {
+                BoardId = _boardId,
+                Type = dbType,
+                Width = w,
+                Height = h,
+                Color = _currentStrokeHex,
+                Id = 0,
+                X = 0,
+                Y = 0
+            };
+            var app = new RectEllipseAppearance { Mode = "stroke" };
+            if (kindForJson != null)
+            {
+                app.ShapeKind = kindForJson;
+            }
+
+            app.SaveTo(bs);
+            return bs;
         }
 
         private Button CreatePaletteSwatchButton(string hex, bool isFillColumn)
@@ -2678,13 +3219,21 @@ namespace WhiteSpace.Pages
         {
             if (_resizeTarget == null)
             {
-                SyncPaletteGridRingHighlights(_currentColorString, _currentColorString);
+                SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
                 return;
             }
 
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
             if (shape == null)
             {
+                return;
+            }
+
+            if (shape.Type == "stickyNote")
+            {
+                var sn = StickyNoteAppearance.Parse(shape);
+                var paper = sn.EffectivePaperHex();
+                SyncPaletteGridRingHighlights(paper, paper);
                 return;
             }
 
@@ -2733,6 +3282,21 @@ namespace WhiteSpace.Pages
                     SelectionToolbarStrokeSwatch.Fill = sb;
                 }
             }
+            else if (shape.Type == "stickyNote")
+            {
+                var sn = StickyNoteAppearance.Parse(shape);
+                var fillKey = sn.EffectivePaperHex();
+                var strokeKey = shape.Color ?? "#9AACBC";
+                if (bc.ConvertFromString(fillKey) is Brush fb)
+                {
+                    SelectionToolbarFillSwatch.Fill = fb;
+                }
+
+                if (bc.ConvertFromString(strokeKey) is Brush sb)
+                {
+                    SelectionToolbarStrokeSwatch.Fill = sb;
+                }
+            }
             else
             {
                 var c = shape.Color ?? "#111111";
@@ -2756,39 +3320,12 @@ namespace WhiteSpace.Pages
 
         private async Task ApplyCustomColorFromDialogAsync(bool isStrokeContour)
         {
-            var input = AppDialogService.ShowTextInput(
-                "Свой цвет",
-                "Введите цвет в формате #RRGGBB (например #8B5CF6):",
-                "OK",
-                "Отмена",
-                "#8B5CF6");
-
-            if (string.IsNullOrWhiteSpace(input))
+            if (!TryPromptColorPicker(isStrokeContour, out var hex))
             {
                 return;
             }
 
-            var t = input.Trim();
-            if (!t.StartsWith("#", StringComparison.Ordinal))
-            {
-                t = "#" + t;
-            }
-
-            try
-            {
-                if (new BrushConverter().ConvertFromString(t) is not SolidColorBrush)
-                {
-                    AppDialogService.ShowWarning("Некорректный цвет.", "Свой цвет");
-                    return;
-                }
-            }
-            catch
-            {
-                AppDialogService.ShowWarning("Некорректный цвет.", "Свой цвет");
-                return;
-            }
-
-            await ApplyToolbarPaletteHexAsync(t, isStrokeContour);
+            await ApplyToolbarPaletteHexAsync(hex, isStrokeContour);
         }
 
         private async Task ApplyFillModeToSelectionAsync(string mode)
@@ -2822,9 +3359,10 @@ namespace WhiteSpace.Pages
             app.Mode = mode;
             app.SaveTo(shape);
 
-            if (_resizeTarget is Shape sh)
+            var innerFill = TryGetInnerShape(_resizeTarget);
+            if (innerFill != null)
             {
-                ApplyRectEllipseVisual(sh, shape);
+                ApplyRectEllipseVisual(innerFill, shape);
             }
 
             UpdateFillModeButtonStyles(mode);
@@ -2847,13 +3385,31 @@ namespace WhiteSpace.Pages
 
                 if (_resizeTarget == null)
                 {
-                    _currentBrush = brush;
-                    _currentColorString = hex;
-                    ApplyPreviewFillBrush();
-                    SyncPaletteGridRingHighlights(hex, hex);
+                    var norm = NormalizeColorKey(hex);
+                    if (isStrokeContour)
+                    {
+                        _currentStrokeHex = string.IsNullOrEmpty(norm) ? hex : norm;
+                        _currentBrush = brush;
+                    }
+                    else
+                    {
+                        _currentFillHex = string.IsNullOrEmpty(norm) ? hex : norm;
+                    }
+
+                    if (!isStrokeContour)
+                    {
+                        ApplyPreviewFillBrush();
+                    }
+
+                    SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
                     if (SelectionToolbarFillPopup != null)
                     {
                         SelectionToolbarFillPopup.IsOpen = false;
+                    }
+
+                    if (SelectionToolbarStrokePopup != null)
+                    {
+                        SelectionToolbarStrokePopup.IsOpen = false;
                     }
 
                     return;
@@ -2866,12 +3422,42 @@ namespace WhiteSpace.Pages
                 }
 
                 var isRe = shape.Type is "rectangle" or "ellipse";
+                var isSticky = shape.Type == "stickyNote";
 
-                if (!isRe || isStrokeContour)
+                if (isSticky && !isStrokeContour)
                 {
-                    await ApplyColorToElement(_resizeTarget, brush, hex);
+                    if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return;
+                    }
+
+                    var sn = StickyNoteAppearance.Parse(shape);
+                    if (string.Equals(NormalizeColorKey(sn.EffectivePaperHex()), NormalizeColorKey(hex), StringComparison.OrdinalIgnoreCase))
+                    {
+                        SyncFillToolbarSwatchesFromShape(shape);
+                        RefreshFillPopupRingHighlight();
+                        if (SelectionToolbarFillPopup != null)
+                        {
+                            SelectionToolbarFillPopup.IsOpen = false;
+                        }
+
+                        return;
+                    }
+
+                    CaptureBoardStateForUndo();
+                    sn.PaperHex = hex;
+                    sn.SaveTo(shape);
+
+                    if (TryGetInnerShape(_resizeTarget) is Rectangle rSticky)
+                    {
+                        rSticky.Fill = brush;
+                    }
+
+                    await _supabaseService.SaveShapeAsync(shape);
+                    MarkSaved();
+                    PushShapeToFirebase(shape);
                 }
-                else
+                else if (isRe && !isStrokeContour)
                 {
                     if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
                     {
@@ -2895,14 +3481,19 @@ namespace WhiteSpace.Pages
                     app.FillHex = hex;
                     app.SaveTo(shape);
 
-                    if (_resizeTarget is Shape shp)
+                    var innerFillHex = TryGetInnerShape(_resizeTarget);
+                    if (innerFillHex != null)
                     {
-                        ApplyRectEllipseVisual(shp, shape);
+                        ApplyRectEllipseVisual(innerFillHex, shape);
                     }
 
                     await _supabaseService.SaveShapeAsync(shape);
                     MarkSaved();
                     PushShapeToFirebase(shape);
+                }
+                else
+                {
+                    await ApplyColorToElement(_resizeTarget, brush, hex);
                 }
 
                 SyncFillToolbarSwatchesFromShape(shape);
@@ -2939,13 +3530,442 @@ namespace WhiteSpace.Pages
             StyleBtn(FillModeStrokeBtn, mode == "stroke");
         }
 
-        private Shape CreateRectEllipseVisual(BoardShape shape, bool rectangle)
+        private static Shape? TryGetInnerShape(UIElement? target)
         {
-            Shape s = rectangle
-                ? new Rectangle { Width = shape.Width, Height = shape.Height, Uid = shape.Id.ToString() }
-                : new Ellipse { Width = shape.Width, Height = shape.Height, Uid = shape.Id.ToString() };
-            ApplyRectEllipseVisual(s, shape);
-            return s;
+            if (target is Shape sh)
+            {
+                return sh;
+            }
+
+            if (target is Grid g && g.Tag is Shape inner)
+            {
+                return inner;
+            }
+
+            return null;
+        }
+
+        private bool IsBoardDraggableElement(UIElement? u)
+        {
+            if (u is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid) || u == _previewShape)
+            {
+                return false;
+            }
+
+            if (!_shapesOnBoard.Any(s => s.Id.ToString() == fe.Uid))
+            {
+                return false;
+            }
+
+            return u is Grid or Shape or Image or Polyline;
+        }
+
+        /// <summary>Поднимается от визуала попадания до контейнера доски с Uid (клик по заливке/контуру фигуры).</summary>
+        private UIElement? ResolveBoardElementFromHit(DependencyObject? leaf)
+        {
+            for (var cur = leaf; cur != null; cur = VisualTreeHelper.GetParent(cur))
+            {
+                if (cur is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid))
+                {
+                    continue;
+                }
+
+                if (!_shapesOnBoard.Any(s => s.Id.ToString() == fe.Uid))
+                {
+                    continue;
+                }
+
+                if (cur is Grid or Image or Polyline or TextBox)
+                {
+                    return fe;
+                }
+            }
+
+            return null;
+        }
+
+        private Shape BuildInnerShapeVisual(BoardShape shape)
+        {
+            var inner = BoardShapeVisualFactory.Create(shape);
+            ApplyRectEllipseVisual(inner, shape);
+            inner.HorizontalAlignment = HorizontalAlignment.Stretch;
+            inner.VerticalAlignment = VerticalAlignment.Stretch;
+            inner.Margin = new Thickness(0);
+            inner.IsHitTestVisible = false;
+            return inner;
+        }
+
+        private Grid CreateShapeBoardContainer(BoardShape shape, bool forPreview = false)
+        {
+            var inner = BuildInnerShapeVisual(shape);
+            var grid = new Grid
+            {
+                Width = shape.Width,
+                Height = shape.Height,
+                Uid = shape.Id.ToString(),
+                Tag = inner,
+                Background = Brushes.Transparent,
+                ClipToBounds = false
+            };
+            grid.Children.Add(inner);
+
+            if (!forPreview)
+            {
+                SyncShapeLabelPresenter(grid, shape);
+                grid.PreviewMouseLeftButtonDown += ShapeBoardContainer_PreviewMouseLeftButtonDown;
+            }
+
+            return grid;
+        }
+
+        private Grid CreateStickyNoteBoardContainer(BoardShape shape, bool forPreview = false)
+        {
+            var meta = StickyNoteAppearance.Parse(shape);
+            var paper = GetBrushFromColor(meta.EffectivePaperHex());
+
+            var bg = new Rectangle
+            {
+                RadiusX = 14,
+                RadiusY = 14,
+                Fill = paper,
+                Stroke = Brushes.Transparent,
+                StrokeThickness = 0,
+                IsHitTestVisible = false
+            };
+
+            var grid = new Grid
+            {
+                Width = shape.Width,
+                Height = shape.Height,
+                Uid = shape.Id.ToString(),
+                Tag = bg,
+                Background = Brushes.Transparent
+            };
+            grid.Children.Add(bg);
+
+            var inner = new Grid { IsHitTestVisible = false };
+            inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            inner.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var readOnlyUser = string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase);
+            var noteTb = new TextBox
+            {
+                Text = shape.Text ?? "",
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                Padding = new Thickness(12, 12, 12, 8),
+                FontSize = 13,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0x55, 0x66)),
+                CaretBrush = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)),
+                SelectionBrush = new SolidColorBrush(Color.FromArgb(90, 0x2E, 0x90, 0xFF)),
+                IsReadOnly = true,
+                Focusable = false,
+                IsHitTestVisible = false
+            };
+            Grid.SetRow(noteTb, 0);
+
+            var authorBlk = new TextBlock
+            {
+                Text = meta.DisplayAuthor(),
+                Margin = new Thickness(12, 0, 12, 10),
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x72, 0x80)),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                IsHitTestVisible = false,
+                Tag = StickyAuthorTag
+            };
+            Grid.SetRow(authorBlk, 1);
+
+            inner.Children.Add(noteTb);
+            inner.Children.Add(authorBlk);
+            grid.Children.Add(inner);
+            Panel.SetZIndex(inner, 1);
+
+            if (!forPreview && !readOnlyUser)
+            {
+                grid.PreviewMouseLeftButtonDown += (_, ev) =>
+                {
+                    if (ev.ClickCount != 2)
+                    {
+                        return;
+                    }
+
+                    ev.Handled = true;
+                    noteTb.Focusable = true;
+                    noteTb.IsHitTestVisible = true;
+                    noteTb.IsReadOnly = false;
+                    noteTb.Focus();
+                    if (string.IsNullOrWhiteSpace(noteTb.Text))
+                    {
+                        noteTb.SelectAll();
+                    }
+                    else
+                    {
+                        noteTb.CaretIndex = noteTb.Text.Length;
+                    }
+
+                    _focusedBoardTextEdit = noteTb;
+                };
+            }
+
+            if (!forPreview)
+            {
+                var sid = shape.Id;
+                noteTb.LostFocus += async (_, _) =>
+                {
+                    if (readOnlyUser)
+                    {
+                        return;
+                    }
+
+                    if (ReferenceEquals(_focusedBoardTextEdit, noteTb))
+                    {
+                        _focusedBoardTextEdit = null;
+                    }
+
+                    noteTb.Focusable = false;
+                    noteTb.IsHitTestVisible = false;
+                    noteTb.IsReadOnly = true;
+
+                    await SaveStickyNoteBodyAsync(sid, noteTb.Text);
+                };
+            }
+
+            return grid;
+        }
+
+        private async Task SaveStickyNoteBodyAsync(int shapeId, string? text)
+        {
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == shapeId);
+            if (shape == null || shape.Type != "stickyNote")
+            {
+                return;
+            }
+
+            var t = text ?? "";
+            if (shape.Text == t)
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+            shape.Text = t;
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+        }
+
+        private void ApplyStickyNoteVisual(Grid grid, BoardShape shape)
+        {
+            if (grid.Tag is not Rectangle bg)
+            {
+                return;
+            }
+
+            var meta = StickyNoteAppearance.Parse(shape);
+            bg.Fill = GetBrushFromColor(meta.EffectivePaperHex());
+            bg.Stroke = Brushes.Transparent;
+            bg.StrokeThickness = 0;
+        }
+
+        private void SyncStickyNoteAuthorAndText(Grid grid, BoardShape shape)
+        {
+            if (grid.Children.Count < 2 || grid.Children[1] is not Grid inner)
+            {
+                return;
+            }
+
+            TextBox? noteTb = null;
+            TextBlock? authorBlk = null;
+            foreach (var ch in inner.Children)
+            {
+                if (ch is TextBox tx)
+                {
+                    noteTb = tx;
+                }
+                else if (ch is TextBlock tb && StickyAuthorTag.Equals(tb.Tag as string))
+                {
+                    authorBlk = tb;
+                }
+            }
+
+            var meta = StickyNoteAppearance.Parse(shape);
+            if (authorBlk != null)
+            {
+                authorBlk.Text = meta.DisplayAuthor();
+            }
+
+            if (noteTb != null && !noteTb.IsKeyboardFocused)
+            {
+                noteTb.Text = shape.Text ?? "";
+            }
+        }
+
+        private async void ShapeBoardContainer_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount != 2 || sender is not Grid grid ||
+                string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == grid.Uid);
+            if (shape == null || shape.Type is not ("rectangle" or "ellipse"))
+            {
+                return;
+            }
+
+            e.Handled = true;
+            var stored = RectEllipseAppearance.Parse(shape).Label?.Trim();
+            var tb = new TextBox
+            {
+                Text = stored ?? "",
+                AcceptsReturn = false,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                MaxWidth = Math.Min(Math.Max(grid.Width - 20, 96), 176),
+                MaxHeight = Math.Min(Math.Max(grid.Height - 20, 28), 72),
+                MinWidth = 72,
+                MinHeight = 24,
+                Padding = new Thickness(6, 4, 6, 4),
+                FontSize = 12,
+                Background = new SolidColorBrush(Color.FromArgb(235, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                BorderBrush = Brushes.DodgerBlue,
+                TextAlignment = TextAlignment.Center
+            };
+
+            grid.Children.Add(tb);
+            tb.GotFocus += (_, _) => _focusedBoardTextEdit = tb;
+            tb.Focus();
+            tb.SelectAll();
+
+            void Cleanup(bool save)
+            {
+                tb.LostFocus -= OnLost;
+                if (ReferenceEquals(_focusedBoardTextEdit, tb))
+                {
+                    _focusedBoardTextEdit = null;
+                }
+
+                var text = tb.Text?.Trim() ?? "";
+                grid.Children.Remove(tb);
+                if (!save)
+                {
+                    return;
+                }
+
+                CaptureBoardStateForUndo();
+                var app = RectEllipseAppearance.Parse(shape);
+                app.Label = string.IsNullOrEmpty(text) ? null : text;
+                app.SaveTo(shape);
+                SyncShapeLabelPresenter(grid, shape);
+                _ = _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
+                PushShapeToFirebase(shape);
+            }
+
+            void OnLost(object? _, RoutedEventArgs __)
+            {
+                Cleanup(true);
+            }
+
+            tb.LostFocus += OnLost;
+            tb.KeyDown += (_, ke) =>
+            {
+                if (ke.Key == Key.Enter)
+                {
+                    Cleanup(true);
+                    ke.Handled = true;
+                }
+                else if (ke.Key == Key.Escape)
+                {
+                    Cleanup(false);
+                    ke.Handled = true;
+                }
+            };
+
+            await Dispatcher.Yield(DispatcherPriority.Background);
+        }
+
+        private void SyncShapeLabelPresenter(Grid grid, BoardShape shape)
+        {
+            var label = RectEllipseAppearance.Parse(shape).Label?.Trim();
+
+            TextBlock? existing = null;
+            foreach (var c in grid.Children)
+            {
+                if (c is TextBlock tb && ShapeLabelPresenterTag.Equals(tb.Tag as string))
+                {
+                    existing = tb;
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(label))
+            {
+                if (existing != null)
+                {
+                    grid.Children.Remove(existing);
+                }
+
+                return;
+            }
+
+            if (existing == null)
+            {
+                existing = new TextBlock
+                {
+                    Tag = ShapeLabelPresenterTag,
+                    TextWrapping = TextWrapping.NoWrap,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    TextAlignment = TextAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(10, 6, 10, 6),
+                    MaxWidth = 176,
+                    FontSize = 12,
+                    IsHitTestVisible = false
+                };
+                grid.Children.Add(existing);
+            }
+
+            existing.Text = label;
+            existing.Foreground = ShapeCaptionForegroundBrush(shape);
+            existing.Opacity = 1.0;
+            existing.MaxWidth = Math.Min(176, Math.Max(grid.Width * 0.88, 72));
+        }
+
+        private static Brush ShapeCaptionForegroundBrush(BoardShape shape)
+        {
+            var app = RectEllipseAppearance.Parse(shape);
+            var fillKey = string.IsNullOrWhiteSpace(app.FillHex) ? shape.Color : app.FillHex;
+            if (string.IsNullOrWhiteSpace(fillKey))
+            {
+                return new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+            }
+
+            try
+            {
+                var c = (Color)ColorConverter.ConvertFromString(fillKey);
+                // Заметный, но не чёрный текст поверх заливки (как в FigJam — темнее оттенка фона)
+                var dark = Color.FromRgb(
+                    (byte)Math.Clamp(c.R * 0.35, 0, 255),
+                    (byte)Math.Clamp(c.G * 0.35, 0, 255),
+                    (byte)Math.Clamp(c.B * 0.35, 0, 255));
+                return new SolidColorBrush(dark);
+            }
+            catch
+            {
+                return new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+            }
         }
 
         private static Brush BrushWithFractionAlpha(Brush brush, double fraction)
@@ -2990,6 +4010,22 @@ namespace WhiteSpace.Pages
             }
 
             ApplyStrokeDashStyle(shapeElement, app.StrokeDash);
+
+            if (shapeElement is Rectangle rr)
+            {
+                var sk = app.ShapeKind;
+                if (sk == "roundRect")
+                {
+                    var rad = Math.Min(shape.Width, shape.Height) * 0.15;
+                    rr.RadiusX = rad;
+                    rr.RadiusY = rad;
+                }
+                else
+                {
+                    rr.RadiusX = 0;
+                    rr.RadiusY = 0;
+                }
+            }
         }
 
         private static void ApplyStrokeDashStyle(Shape shapeElement, string? dash)
@@ -3076,9 +4112,10 @@ namespace WhiteSpace.Pages
             app.StrokeDash = effective;
             app.SaveTo(shape);
 
-            if (_resizeTarget is Shape sh)
+            var innerDash = TryGetInnerShape(_resizeTarget);
+            if (innerDash != null)
             {
-                ApplyRectEllipseVisual(sh, shape);
+                ApplyRectEllipseVisual(innerDash, shape);
             }
 
             UpdateStrokeStyleButtonStyles(effective ?? "solid");
@@ -3120,12 +4157,13 @@ namespace WhiteSpace.Pages
         private void SyncSelectionToolbar(UIElement element)
         {
             if (SelectionToolbarPanel == null || SelectionToolbarDeleteButton == null ||
-                SelectionToolbarShapeCombo == null || SelectionToolbarFillButton == null)
+                SelectionToolbarShapeButton == null || SelectionToolbarFillButton == null)
             {
                 return;
             }
 
             EnsureFillPaletteBuilt();
+            EnsureSelectionToolbarShapePaletteBuilt();
 
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
 
@@ -3133,8 +4171,22 @@ namespace WhiteSpace.Pages
             SelectionToolbarDeleteButton.IsEnabled = !readOnly;
 
             var canEditGeometry = shape != null && (shape.Type == "rectangle" || shape.Type == "ellipse");
-            SelectionToolbarShapeCombo.IsEnabled = !readOnly && canEditGeometry;
-            SelectionToolbarFillButton.IsEnabled = !readOnly && shape != null;
+            var strokeOnly = shape?.Type is "line" or "connector";
+            SelectionToolbarShapeButton.IsEnabled = !readOnly && canEditGeometry;
+            if (SelectionToolbarStrokeButton != null)
+            {
+                SelectionToolbarStrokeButton.IsEnabled = !readOnly && shape != null;
+                SelectionToolbarStrokeButton.Visibility = shape?.Type == "stickyNote"
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+            }
+
+            if (SelectionToolbarFillButton != null)
+            {
+                SelectionToolbarFillButton.Visibility = strokeOnly ? Visibility.Collapsed : Visibility.Visible;
+            }
+
+            SelectionToolbarFillButton.IsEnabled = !readOnly && shape != null && !strokeOnly;
 
             if (FillModeButtonRow != null)
             {
@@ -3151,16 +4203,7 @@ namespace WhiteSpace.Pages
             {
                 if (canEditGeometry)
                 {
-                    SelectionToolbarShapeCombo.Visibility = Visibility.Visible;
-                    foreach (ComboBoxItem ci in SelectionToolbarShapeCombo.Items)
-                    {
-                        if (ci.Tag is string t && string.Equals(t, shape!.Type, StringComparison.OrdinalIgnoreCase))
-                        {
-                            SelectionToolbarShapeCombo.SelectedItem = ci;
-                            break;
-                        }
-                    }
-
+                    SelectionToolbarShapeButton.Visibility = Visibility.Visible;
                     var app = RectEllipseAppearance.Parse(shape!);
                     _nextRectFillMode = app.Mode;
                     UpdateFillModeButtonStyles(app.Mode);
@@ -3168,17 +4211,28 @@ namespace WhiteSpace.Pages
                 }
                 else
                 {
-                    SelectionToolbarShapeCombo.Visibility = Visibility.Collapsed;
+                    SelectionToolbarShapeButton.Visibility = Visibility.Collapsed;
                 }
 
                 SyncFillToolbarSwatchesFromShape(shape);
 
-                string? fillRing = shape?.Color ?? _currentColorString;
-                string? strokeRing = shape?.Color ?? _currentColorString;
+                string? fillRing = _currentFillHex;
+                string? strokeRing = _currentStrokeHex;
                 if (shape != null && shape.Type is "rectangle" or "ellipse")
                 {
                     var ap = RectEllipseAppearance.Parse(shape);
                     fillRing = ap.FillHex ?? shape.Color;
+                    strokeRing = shape.Color;
+                }
+                else if (shape != null && shape.Type == "stickyNote")
+                {
+                    var sn = StickyNoteAppearance.Parse(shape);
+                    fillRing = sn.EffectivePaperHex();
+                    strokeRing = shape.Color;
+                }
+                else if (strokeOnly && shape != null)
+                {
+                    fillRing = shape.Color;
                     strokeRing = shape.Color;
                 }
 
@@ -3193,36 +4247,20 @@ namespace WhiteSpace.Pages
             Dispatcher.BeginInvoke(new Action(UpdateSelectionToolbarPosition), DispatcherPriority.Loaded);
         }
 
-        private async void SelectionToolbarShape_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suppressSelectionToolbarSync || SelectionToolbarShapeCombo?.SelectedItem is not ComboBoxItem item ||
-                item.Tag is not string tag)
-            {
-                return;
-            }
-
-            await TryChangeSelectedShapeKindAsync(tag);
-        }
-
-        private async Task TryChangeSelectedShapeKindAsync(string newType)
+        private async Task TryChangeSelectedShapeKindAsync(string paletteId)
         {
             if (_resizeTarget == null)
             {
                 return;
             }
 
-            if (newType != "rectangle" && newType != "ellipse")
-            {
-                return;
-            }
-
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
-            if (shape == null || (shape.Type != "rectangle" && shape.Type != "ellipse"))
+            if (shape == null || shape.Type is not ("rectangle" or "ellipse"))
             {
                 return;
             }
 
-            if (string.Equals(shape.Type, newType, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(ShapePalette.GetPaletteId(shape), paletteId, StringComparison.Ordinal))
             {
                 return;
             }
@@ -3238,15 +4276,23 @@ namespace WhiteSpace.Pages
 
             BoardCanvas.Children.Remove(_resizeTarget);
 
-            shape.Type = newType;
-            shape.Width = w;
-            shape.Height = h;
-            shape.X = left + w / 2;
-            shape.Y = top + h / 2;
+            var (dbType, kindForJson) = ShapePalette.ResolveStorage(paletteId);
+            var app = RectEllipseAppearance.Parse(shape);
+            app.ShapeKind = dbType == "ellipse" ? null : kindForJson;
+            shape.Type = dbType;
 
-            UIElement visual = newType == "rectangle"
-                ? CreateRectEllipseVisual(shape, true)
-                : CreateRectEllipseVisual(shape, false);
+            var (nw, nh) = ShapeLayoutHelper.NormalizeOnKindChange(paletteId, w, h);
+            var cx = left + w / 2;
+            var cy = top + h / 2;
+            left = cx - nw / 2;
+            top = cy - nh / 2;
+            shape.Width = nw;
+            shape.Height = nh;
+            shape.X = cx;
+            shape.Y = cy;
+            app.SaveTo(shape);
+
+            var visual = (UIElement)CreateShapeBoardContainer(shape);
 
             Canvas.SetLeft(visual, left);
             Canvas.SetTop(visual, top);
@@ -3304,9 +4350,29 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (Keyboard.FocusedElement is TextBox)
+            if (Keyboard.FocusedElement is TextBox focusedTb)
             {
-                return;
+                // Отдельная текстовая фигура (весь элемент — TextBox): Delete удаляет символы.
+                if (_resizeTarget is TextBox rt && ReferenceEquals(rt, focusedTb))
+                {
+                    return;
+                }
+
+                // Вложенный редактор (стикер, подпись фигуры): не удаляем объект целиком.
+                if (_resizeTarget is FrameworkElement host
+                    && IsDescendantOf(focusedTb, host)
+                    && !ReferenceEquals(focusedTb, host))
+                {
+                    if (_resizeTarget is Grid stickyGrid
+                        && TryGetStickyNoteBodyTextBox(stickyGrid) is { } snTb
+                        && ReferenceEquals(snTb, focusedTb)
+                        && !snTb.IsReadOnly)
+                    {
+                        return;
+                    }
+
+                    return;
+                }
             }
 
             if (_resizeTarget == null)
@@ -3323,8 +4389,39 @@ namespace WhiteSpace.Pages
             e.Handled = true;
         }
 
+        private void TryCommitBoardTextFocus(MouseButtonEventArgs e)
+        {
+            if (_focusedBoardTextEdit == null)
+            {
+                return;
+            }
+
+            var pos = e.GetPosition(Viewport);
+            var hit = VisualTreeHelper.HitTest(Viewport, pos)?.VisualHit as DependencyObject;
+            for (var d = hit; d != null; d = VisualTreeHelper.GetParent(d))
+            {
+                if (ReferenceEquals(d, _focusedBoardTextEdit))
+                {
+                    return;
+                }
+            }
+
+            var edit = _focusedBoardTextEdit;
+            var scope = FocusManager.GetFocusScope(edit);
+            if (scope != null)
+            {
+                FocusManager.SetFocusedElement(scope, null);
+            }
+
+            Keyboard.ClearFocus();
+            _focusedBoardTextEdit = null;
+        }
+
         private async void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            TryCommitBoardTextFocus(e);
+            Viewport.Focus();
+
             var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
             if (userRole == "viewer")
             {
@@ -3348,7 +4445,6 @@ namespace WhiteSpace.Pages
                 }
             }
 
-            Viewport.Focus();
             var screen = e.GetPosition(Viewport);
             var world = ScreenToWorld(screen);
 
@@ -3357,22 +4453,20 @@ namespace WhiteSpace.Pages
 
             if (_tool == ToolMode.Hand)
             {
-                RemoveResizeFrame();
+                if (_tool == ToolMode.Hand)
+                {
+                    RemoveResizeFrame();
+                }
 
                 var hitTestResult2 = VisualTreeHelper.HitTest(Viewport, screen);
                 if (hitTestResult2 != null)
                 {
-                    var hitElement = hitTestResult2.VisualHit;
-
-                    while (hitElement != null && !(hitElement is UIElement))
-                        hitElement = VisualTreeHelper.GetParent(hitElement);
-
-                    var uiElement = hitElement as UIElement;
+                    var uiElement = ResolveBoardElementFromHit(hitTestResult2.VisualHit as DependencyObject);
 
                     if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
                         !(uiElement is TextBox) && uiElement != _previewShape)
                     {
-                        if (uiElement is Polyline || uiElement is Rectangle || uiElement is Ellipse || uiElement is Image)
+                        if (IsBoardDraggableElement(uiElement))
                         {
                             CaptureBoardStateForUndo();
                             _isDraggingElement = true;
@@ -3392,7 +4486,11 @@ namespace WhiteSpace.Pages
                     }
                 }
 
-                StartPan(screen);
+                if (_tool == ToolMode.Hand)
+                {
+                    StartPan(screen);
+                }
+
                 return;
             }
 
@@ -3402,7 +4500,17 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if ((_tool == ToolMode.Rect || _tool == ToolMode.Ellipse) && e.LeftButton == MouseButtonState.Pressed)
+            if ((_tool == ToolMode.StickyNote) && e.LeftButton == MouseButtonState.Pressed)
+            {
+                _isPlacingSticky = true;
+                _stickyPlacementStartWorld = world;
+                EnsurePreviewSticky();
+                Viewport.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
+            if ((_tool == ToolMode.Shape) && e.LeftButton == MouseButtonState.Pressed)
             {
                 _isPlacingRectEllipse = true;
                 _rectPlacementStartWorld = world;
@@ -3440,27 +4548,18 @@ namespace WhiteSpace.Pages
             }
 
             var screen = e.GetPosition(BoardCanvas);
-            var world = ScreenToWorld(screen);
 
             var hitTestResult = VisualTreeHelper.HitTest(BoardCanvas, screen);
             if (hitTestResult != null)
             {
-                var hitElement = hitTestResult.VisualHit;
-
-                while (hitElement != null && !(hitElement is UIElement))
-                    hitElement = VisualTreeHelper.GetParent(hitElement);
-
-                var uiElement = hitElement as UIElement;
+                var uiElement = ResolveBoardElementFromHit(hitTestResult.VisualHit as DependencyObject);
 
                 if (uiElement != null && uiElement != BoardCanvas)
                 {
-                    if (_tool == ToolMode.Hand)
+                    if (uiElement is TextBox || IsBoardDraggableElement(uiElement))
                     {
-                        if (uiElement is Shape || uiElement is TextBox || uiElement is Polyline || uiElement is Image)
-                        {
-                            ShowResizeFrame(uiElement);
-                            e.Handled = true;
-                        }
+                        ShowResizeFrame(uiElement);
+                        e.Handled = true;
                     }
                 }
             }
@@ -3484,6 +4583,18 @@ namespace WhiteSpace.Pages
             {
                 _lastCursorPublishUtc = now;
                 _ = PublishCursorAsync(world, true);
+            }
+
+            if (_isDrawingConnector && _connectorPreviewLine != null &&
+                e.LeftButton == MouseButtonState.Pressed)
+            {
+                var worldMove = ScreenToWorld(screen);
+                if (_connectorPreviewLine.Points.Count >= 2)
+                {
+                    _connectorPreviewLine.Points[_connectorPreviewLine.Points.Count - 1] = worldMove;
+                }
+
+                return;
             }
 
             if (_isResizing && _resizeTarget != null)
@@ -3521,16 +4632,70 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
+        private async void HostWindow_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (_isPlacingRectEllipse && (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse))
+            if (!ReferenceEquals(Mouse.Captured, Viewport))
+            {
+                return;
+            }
+
+            var pos = e.GetPosition(Viewport);
+
+            if (_isDraggingElement && _dragElement is TextBox tb)
+            {
+                _isDraggingElement = false;
+                _dragElement = null;
+                tb.IsReadOnly = false;
+                tb.Cursor = Cursors.IBeam;
+                Viewport.ReleaseMouseCapture();
+                SaveTextBoxPosition(tb);
+                return;
+            }
+
+            await ProcessViewportMouseUpAsync(pos);
+        }
+
+        private async Task ProcessViewportMouseUpAsync(Point viewportPos)
+        {
+            if (!_isDrawingConnector && !_isPlacingSticky && !_isPlacingRectEllipse && !_isResizing && !_isDraggingElement &&
+                !_isDrawing && !_isPanning)
+            {
+                Viewport.ReleaseMouseCapture();
+                return;
+            }
+
+            if (_isDrawingConnector)
+            {
+                _isDrawingConnector = false;
+                Viewport.ReleaseMouseCapture();
+                var endWorld = ScreenToWorld(viewportPos);
+                await FinalizeConnectorFromDragAsync(endWorld);
+                return;
+            }
+
+            if (_isPlacingSticky && (_tool == ToolMode.StickyNote))
+            {
+                _isPlacingSticky = false;
+                Viewport.ReleaseMouseCapture();
+                var endWorld = ScreenToWorld(viewportPos);
+                await FinalizeStickyFromDragAsync(endWorld);
+                RemovePreviewSticky();
+                if (_tool == ToolMode.StickyNote)
+                {
+                    EnsurePreviewSticky();
+                }
+
+                return;
+            }
+
+            if (_isPlacingRectEllipse && (_tool == ToolMode.Shape))
             {
                 _isPlacingRectEllipse = false;
                 Viewport.ReleaseMouseCapture();
-                var endWorld = ScreenToWorld(e.GetPosition(Viewport));
+                var endWorld = ScreenToWorld(viewportPos);
                 await FinalizeRectEllipseFromDragAsync(endWorld);
                 RemovePreviewShape();
-                if (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse)
+                if (_tool == ToolMode.Shape)
                 {
                     EnsurePreviewShape();
                 }
@@ -3580,6 +4745,11 @@ namespace WhiteSpace.Pages
             Viewport.ReleaseMouseCapture();
         }
 
+        private async void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            await ProcessViewportMouseUpAsync(e.GetPosition(Viewport));
+        }
+
         private void MoveElementTo(Point world)
         {
             if (_dragElement == null) return;
@@ -3590,17 +4760,7 @@ namespace WhiteSpace.Pages
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
             if (shape != null)
             {
-                if (_dragElement is Shape visualShape)
-                {
-                    shape.X = offsetX + shape.Width / 2;
-                    shape.Y = offsetY + shape.Height / 2;
-                }
-                else if (_dragElement is TextBox textBox)
-                {
-                    shape.X = offsetX;
-                    shape.Y = offsetY;
-                }
-                else if (_dragElement is Polyline polyline)
+                if (_dragElement is Polyline polyline)
                 {
                     shape.X = offsetX;
                     shape.Y = offsetY;
@@ -3610,13 +4770,29 @@ namespace WhiteSpace.Pages
                     {
                         newPoints.Add(new Point(point.X + offsetX, point.Y + offsetY));
                     }
+
                     shape.DeserializedPoints = newPoints;
                     shape.Points = JsonConvert.SerializeObject(newPoints);
+                }
+                else if (_dragElement is TextBox textBox)
+                {
+                    shape.X = offsetX;
+                    shape.Y = offsetY;
                 }
                 else if (_dragElement is Image image)
                 {
                     shape.X = offsetX + image.ActualWidth / 2;
                     shape.Y = offsetY + image.ActualHeight / 2;
+                }
+                else if (_dragElement is Grid)
+                {
+                    shape.X = offsetX + shape.Width / 2;
+                    shape.Y = offsetY + shape.Height / 2;
+                }
+                else if (_dragElement is Shape)
+                {
+                    shape.X = offsetX + shape.Width / 2;
+                    shape.Y = offsetY + shape.Height / 2;
                 }
             }
 
@@ -3797,7 +4973,7 @@ namespace WhiteSpace.Pages
                 Type = "line",
                 X = startWorld.X,
                 Y = startWorld.Y,
-                Color = _currentColorString,
+                Color = _currentStrokeHex,
                 Id = uniqueId
             };
 
@@ -3810,15 +4986,9 @@ namespace WhiteSpace.Pages
         private void EnsurePreviewShape()
         {
             if (_previewShape != null) return;
+            if (_tool != ToolMode.Shape) return;
 
-            _previewShape = _tool switch
-            {
-                ToolMode.Ellipse => new Ellipse(),
-                ToolMode.Rect => new Rectangle(),
-                _ => null
-            };
-
-            if (_previewShape == null) return;
+            _previewShape = BuildInnerShapeVisual(BuildTransientPreviewShape());
 
             // При создании перетаскиванием — только заливка без контура (как в Figma)
             _previewShape.Stroke = Brushes.Transparent;
@@ -3840,7 +5010,7 @@ namespace WhiteSpace.Pages
             }
 
             const byte alpha = 120;
-            if (_currentBrush is SolidColorBrush scb)
+            if (GetBrushFromColor(_currentFillHex) is SolidColorBrush scb)
             {
                 var c = scb.Color;
                 _previewShape.Fill = new SolidColorBrush(Color.FromArgb(alpha, c.R, c.G, c.B));
@@ -3858,11 +5028,63 @@ namespace WhiteSpace.Pages
             _previewShape = null;
         }
 
+        private void EnsurePreviewSticky()
+        {
+            if (_previewStickyShape != null)
+            {
+                return;
+            }
+
+            if (_tool != ToolMode.StickyNote)
+            {
+                return;
+            }
+
+            _previewStickyShape = new Rectangle
+            {
+                Width = DefaultStickyW,
+                Height = DefaultStickyH,
+                RadiusX = 14,
+                RadiusY = 14,
+                Fill = GetBrushFromColor(_currentFillHex) is SolidColorBrush b
+                    ? new SolidColorBrush(Color.FromArgb(200, b.Color.R, b.Color.G, b.Color.B))
+                    : new SolidColorBrush(Color.FromArgb(200, 220, 232, 244)),
+                Stroke = Brushes.Transparent,
+                StrokeThickness = 0,
+                IsHitTestVisible = false
+            };
+            BoardCanvas.Children.Add(_previewStickyShape);
+        }
+
+        private void RemovePreviewSticky()
+        {
+            if (_previewStickyShape == null)
+            {
+                return;
+            }
+
+            BoardCanvas.Children.Remove(_previewStickyShape);
+            _previewStickyShape = null;
+        }
+
         private void UpdatePreview(Point world)
         {
+            if (_isPlacingSticky && _tool == ToolMode.StickyNote && _previewStickyShape != null)
+            {
+                var x = Math.Min(_stickyPlacementStartWorld.X, world.X);
+                var y = Math.Min(_stickyPlacementStartWorld.Y, world.Y);
+                var w = Math.Max(Math.Abs(world.X - _stickyPlacementStartWorld.X), 1);
+                var h = Math.Max(Math.Abs(world.Y - _stickyPlacementStartWorld.Y), 1);
+                _previewStickyShape.Width = w;
+                _previewStickyShape.Height = h;
+                Canvas.SetLeft(_previewStickyShape, x);
+                Canvas.SetTop(_previewStickyShape, y);
+                return;
+            }
+
             if (_previewShape == null) return;
 
-            if (_isPlacingRectEllipse && (_tool == ToolMode.Rect || _tool == ToolMode.Ellipse))
+            if (_isPlacingRectEllipse && (_tool == ToolMode.Shape))
             {
                 var x = Math.Min(_rectPlacementStartWorld.X, world.X);
                 var y = Math.Min(_rectPlacementStartWorld.Y, world.Y);
@@ -3875,19 +5097,15 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (_tool == ToolMode.Rect)
+            if (_tool == ToolMode.Shape)
             {
-                _previewShape.Width = DefaultRectW;
-                _previewShape.Height = DefaultRectH;
-                Canvas.SetLeft(_previewShape, world.X - DefaultRectW / 2);
-                Canvas.SetTop(_previewShape, world.Y - DefaultRectH / 2);
-            }
-            else if (_tool == ToolMode.Ellipse)
-            {
-                _previewShape.Width = DefaultEllipse;
-                _previewShape.Height = DefaultEllipse;
-                Canvas.SetLeft(_previewShape, world.X - DefaultEllipse / 2);
-                Canvas.SetTop(_previewShape, world.Y - DefaultEllipse / 2);
+                var circleLike = _shapeKind == "circle";
+                var pw = circleLike ? DefaultEllipse : DefaultRectW;
+                var ph = circleLike ? DefaultEllipse : DefaultRectH;
+                _previewShape.Width = pw;
+                _previewShape.Height = ph;
+                Canvas.SetLeft(_previewShape, world.X - pw / 2);
+                Canvas.SetTop(_previewShape, world.Y - ph / 2);
             }
         }
 
@@ -3899,7 +5117,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (_tool != ToolMode.Rect && _tool != ToolMode.Ellipse)
+            if (_tool != ToolMode.Shape)
             {
                 return;
             }
@@ -3915,20 +5133,23 @@ namespace WhiteSpace.Pages
 
             if (w < 8 && h < 8)
             {
-                if (_tool == ToolMode.Rect)
-                {
-                    w = DefaultRectW;
-                    h = DefaultRectH;
-                }
-                else
+                if (_shapeKind == "circle")
                 {
                     w = DefaultEllipse;
                     h = DefaultEllipse;
+                }
+                else
+                {
+                    w = DefaultRectW;
+                    h = DefaultRectH;
                 }
 
                 minX = x0 - w / 2;
                 minY = y0 - h / 2;
             }
+
+            w = Math.Max(w, MinRectEllipseWidth);
+            h = Math.Max(h, MinRectEllipseHeight);
 
             double cx = minX + w / 2;
             double cy = minY + h / 2;
@@ -3939,50 +5160,31 @@ namespace WhiteSpace.Pages
                 CaptureBoardStateForUndo();
                 int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
-                BoardShape shape = _tool switch
+                var (dbType, kindForJson) = ShapePalette.ResolveStorage(_shapeKind);
+                var shape = new BoardShape
                 {
-                    ToolMode.Rect => new BoardShape
-                    {
-                        BoardId = _boardId,
-                        Type = "rectangle",
-                        X = cx,
-                        Y = cy,
-                        Width = w,
-                        Height = h,
-                        Color = _currentColorString,
-                        Text = "",
-                        Id = uniqueId
-                    },
-                    ToolMode.Ellipse => new BoardShape
-                    {
-                        BoardId = _boardId,
-                        Type = "ellipse",
-                        X = cx,
-                        Y = cy,
-                        Width = w,
-                        Height = h,
-                        Color = _currentColorString,
-                        Text = "",
-                        Id = uniqueId
-                    },
-                    _ => null
+                    BoardId = _boardId,
+                    Type = dbType,
+                    X = cx,
+                    Y = cy,
+                    Width = w,
+                    Height = h,
+                    Color = _currentStrokeHex,
+                    Text = "",
+                    Id = uniqueId
                 };
 
-                if (shape == null)
+                var appearance = new RectEllipseAppearance { Mode = _nextRectFillMode };
+                if (kindForJson != null)
                 {
-                    return;
+                    appearance.ShapeKind = kindForJson;
                 }
 
-                new RectEllipseAppearance { Mode = _nextRectFillMode }.SaveTo(shape);
+                appearance.SaveTo(shape);
 
                 _shapesOnBoard.Add(shape);
 
-                UIElement element = shape.Type switch
-                {
-                    "rectangle" => CreateRectEllipseVisual(shape, true),
-                    "ellipse" => CreateRectEllipseVisual(shape, false),
-                    _ => null
-                };
+                UIElement element = CreateShapeBoardContainer(shape);
 
                 if (element != null)
                 {
@@ -3998,7 +5200,152 @@ namespace WhiteSpace.Pages
 
                     BoardCanvas.UpdateLayout();
                     ShowResizeFrame(element);
+                    SetTool(ToolMode.Hand);
                 }
+            }
+            finally
+            {
+                _isCreatingShape = false;
+            }
+        }
+
+        private async Task FinalizeStickyFromDragAsync(Point endWorld)
+        {
+            if (_isCreatingShape)
+            {
+                return;
+            }
+
+            if (_tool != ToolMode.StickyNote)
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            double x0 = _stickyPlacementStartWorld.X;
+            double y0 = _stickyPlacementStartWorld.Y;
+            double x1 = endWorld.X;
+            double y1 = endWorld.Y;
+            double minX = Math.Min(x0, x1);
+            double minY = Math.Min(y0, y1);
+            double w = Math.Max(Math.Abs(x1 - x0), 1);
+            double h = Math.Max(Math.Abs(y1 - y0), 1);
+
+            if (w < 8 && h < 8)
+            {
+                w = DefaultStickyW;
+                h = DefaultStickyH;
+                minX = x0 - w / 2;
+                minY = y0 - h / 2;
+            }
+
+            w = Math.Max(w, MinStickyWidth);
+            h = Math.Max(h, MinStickyHeight);
+
+            double cx = minX + w / 2;
+            double cy = minY + h / 2;
+
+            _isCreatingShape = true;
+            try
+            {
+                CaptureBoardStateForUndo();
+                int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+
+                var paperHex = NormalizeColorKey(_currentFillHex);
+                if (string.IsNullOrWhiteSpace(paperHex))
+                {
+                    paperHex = "#DCE8F2";
+                }
+
+                var meta = new StickyNoteAppearance
+                {
+                    Author = string.IsNullOrWhiteSpace(_cursorDisplayName) ? "УЧАСТНИК" : _cursorDisplayName.Trim(),
+                    PaperHex = paperHex
+                };
+
+                var shape = new BoardShape
+                {
+                    BoardId = _boardId,
+                    Type = "stickyNote",
+                    X = cx,
+                    Y = cy,
+                    Width = w,
+                    Height = h,
+                    Color = paperHex,
+                    Text = "",
+                    Id = uniqueId
+                };
+                meta.SaveTo(shape);
+
+                _shapesOnBoard.Add(shape);
+                var el = CreateStickyNoteBoardContainer(shape);
+                Canvas.SetLeft(el, cx - w / 2);
+                Canvas.SetTop(el, cy - h / 2);
+                BoardCanvas.Children.Add(el);
+
+                await _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
+                PushShapeToFirebase(shape);
+
+                BoardCanvas.UpdateLayout();
+                ShowResizeFrame(el);
+                SetTool(ToolMode.Hand);
+            }
+            finally
+            {
+                _isCreatingShape = false;
+            }
+        }
+
+        private async Task FinalizeConnectorFromDragAsync(Point endWorld)
+        {
+            if (_connectorPreviewLine != null)
+            {
+                BoardCanvas.Children.Remove(_connectorPreviewLine);
+                _connectorPreviewLine = null;
+            }
+
+            var start = _connectorAnchorWorld;
+            if (Math.Abs(start.X - endWorld.X) < 6 && Math.Abs(start.Y - endWorld.Y) < 6)
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+
+            _isCreatingShape = true;
+            try
+            {
+                var uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+                var shape = new BoardShape
+                {
+                    BoardId = _boardId,
+                    Type = "connector",
+                    Color = _currentStrokeHex,
+                    Points = JsonConvert.SerializeObject(new List<Point> { start, endWorld }),
+                    Id = uniqueId,
+                    X = (start.X + endWorld.X) / 2,
+                    Y = (start.Y + endWorld.Y) / 2,
+                    Width = Math.Abs(endWorld.X - start.X),
+                    Height = Math.Abs(endWorld.Y - start.Y),
+                    Text = ""
+                };
+
+                _shapesOnBoard.Add(shape);
+                AddShapeToCanvas(shape, false);
+
+                await _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
+                PushShapeToFirebase(shape);
             }
             finally
             {
@@ -4056,7 +5403,7 @@ namespace WhiteSpace.Pages
                 Width = tb.Width,
                 Height = tb.Height,
                 Text = tb.Text,
-                Color = _currentColorString,
+                Color = _currentStrokeHex,
                 Points = SerializeTextShapeStyle(initialFs),
                 Id = uniqueId
             };
@@ -4068,8 +5415,9 @@ namespace WhiteSpace.Pages
             // Отправляем в Firebase для реалтайм обновлений
             PushShapeToFirebase(shape);
 
-            tb.Focus();
-            tb.SelectAll();
+            BoardCanvas.UpdateLayout();
+            ShowResizeFrame(tb);
+            SetTool(ToolMode.Hand);
 
             _isCreatingShape = false;
         }
@@ -4154,11 +5502,14 @@ namespace WhiteSpace.Pages
             BoardCanvas.Children.Add(_resizeBorder);
 
             CreateResizeHandles(left, top, width, height);
+            TryAddConnectorAnchorPorts(element, left, top, width, height);
             SyncSelectionToolbar(element);
         }
 
         private void RemoveResizeFrame()
         {
+            RemoveAnchorPorts();
+
             if (_resizeBorder != null)
             {
                 BoardCanvas.Children.Remove(_resizeBorder);
@@ -4169,6 +5520,122 @@ namespace WhiteSpace.Pages
             _resizeTarget = null;
             ColorPanel.Visibility = Visibility.Visible;
             HideSelectionToolbar();
+        }
+
+        private void RemoveAnchorPorts()
+        {
+            foreach (var p in _anchorPortElements)
+            {
+                p.MouseLeftButtonDown -= ConnectorPort_MouseDown;
+                BoardCanvas.Children.Remove(p);
+            }
+
+            _anchorPortElements.Clear();
+        }
+
+        private void TryAddConnectorAnchorPorts(UIElement target, double left, double top, double w, double h)
+        {
+            RemoveAnchorPorts();
+
+            if (string.IsNullOrEmpty(target.Uid))
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == target.Uid);
+            if (shape == null || shape.Type is not ("rectangle" or "ellipse" or "stickyNote"))
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var positions = new (double X, double Y)[]
+            {
+                (left + w / 2, top),
+                (left + w, top + h / 2),
+                (left + w / 2, top + h),
+                (left, top + h / 2),
+            };
+
+            var sides = new[] { "n", "e", "s", "w" };
+
+            for (var i = 0; i < 4; i++)
+            {
+                var el = new Ellipse
+                {
+                    Width = 12,
+                    Height = 12,
+                    Fill = Brushes.White,
+                    Stroke = new SolidColorBrush(Color.FromRgb(0x2E, 0x90, 0xFF)),
+                    StrokeThickness = 2,
+                    Cursor = Cursors.Cross,
+                    Tag = $"port:{target.Uid}:{sides[i]}",
+                    IsHitTestVisible = true
+                };
+                el.MouseLeftButtonDown += ConnectorPort_MouseDown;
+                Canvas.SetLeft(el, positions[i].X - 6);
+                Canvas.SetTop(el, positions[i].Y - 6);
+                BoardCanvas.Children.Add(el);
+                _anchorPortElements.Add(el);
+            }
+        }
+
+        private void UpdateAnchorPortsPositions(double x, double y, double w, double h)
+        {
+            if (_anchorPortElements.Count != 4)
+            {
+                return;
+            }
+
+            var positions = new (double X, double Y)[]
+            {
+                (x + w / 2, y),
+                (x + w, y + h / 2),
+                (x + w / 2, y + h),
+                (x, y + h / 2),
+            };
+
+            for (var i = 0; i < 4; i++)
+            {
+                Canvas.SetLeft(_anchorPortElements[i], positions[i].X - 6);
+                Canvas.SetTop(_anchorPortElements[i], positions[i].Y - 6);
+            }
+        }
+
+        private void ConnectorPort_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is not Ellipse el || el.Tag is not string tag || !tag.StartsWith("port:", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            e.Handled = true;
+            _connectorAnchorWorld = ScreenToWorld(e.GetPosition(Viewport));
+            _isDrawingConnector = true;
+            _connectorPreviewLine = new Polyline
+            {
+                Stroke = GetBrushFromColor(_currentStrokeHex),
+                StrokeThickness = ConnectorStrokeThickness,
+                StrokeLineJoin = PenLineJoin.Round,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Triangle,
+                StrokeMiterLimit = 1,
+                Fill = Brushes.Transparent,
+                SnapsToDevicePixels = true
+            };
+            _connectorPreviewLine.Points.Add(_connectorAnchorWorld);
+            _connectorPreviewLine.Points.Add(_connectorAnchorWorld);
+            BoardCanvas.Children.Add(_connectorPreviewLine);
+            Viewport.CaptureMouse();
         }
 
         private void RemoveAllHandles()
@@ -4191,13 +5658,9 @@ namespace WhiteSpace.Pages
             var handlePositions = new Dictionary<string, (double X, double Y)>
             {
                 { "nw", (x, y) },
-                { "n", (x + w / 2, y) },
                 { "ne", (x + w, y) },
-                { "e", (x + w, y + h / 2) },
                 { "se", (x + w, y + h) },
-                { "s", (x + w / 2, y + h) },
                 { "sw", (x, y + h) },
-                { "w", (x, y + h / 2) }
             };
 
             foreach (var kvp in handlePositions)
@@ -4228,13 +5691,9 @@ namespace WhiteSpace.Pages
             var handlePositions = new Dictionary<string, (double X, double Y)>
             {
                 { "nw", (x, y) },
-                { "n", (x + w / 2, y) },
                 { "ne", (x + w, y) },
-                { "e", (x + w, y + h / 2) },
                 { "se", (x + w, y + h) },
-                { "s", (x + w / 2, y + h) },
                 { "sw", (x, y + h) },
-                { "w", (x, y + h / 2) }
             };
 
             foreach (var kvp in handlePositions)
@@ -4245,6 +5704,8 @@ namespace WhiteSpace.Pages
                     Canvas.SetTop(handle, kvp.Value.Y - 4);
                 }
             }
+
+            UpdateAnchorPortsPositions(x, y, w, h);
         }
 
         private Rectangle CreateHandle(string direction, double x, double y)
@@ -4338,9 +5799,52 @@ namespace WhiteSpace.Pages
             e.Handled = true;
         }
 
+        private void GetMinSizeForResizeTarget(UIElement? target, out double minW, out double minH)
+        {
+            minW = 16;
+            minH = 16;
+            if (target is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid))
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == fe.Uid);
+            if (shape == null)
+            {
+                return;
+            }
+
+            switch (shape.Type)
+            {
+                case "stickyNote":
+                    minW = MinStickyWidth;
+                    minH = MinStickyHeight;
+                    break;
+                case "rectangle":
+                case "ellipse":
+                    minW = MinRectEllipseWidth;
+                    minH = MinRectEllipseHeight;
+                    break;
+                case "text":
+                    minW = 40;
+                    minH = 24;
+                    break;
+                case "image":
+                    minW = 48;
+                    minH = 40;
+                    break;
+                default:
+                    minW = 24;
+                    minH = 24;
+                    break;
+            }
+        }
+
         private void ResizeElement(Point world)
         {
             if (_resizeTarget == null || string.IsNullOrEmpty(_resizeDirection)) return;
+
+            GetMinSizeForResizeTarget(_resizeTarget, out var minW, out var minH);
 
             double dx = world.X - _resizeStartWorld.X;
             double dy = world.Y - _resizeStartWorld.Y;
@@ -4352,22 +5856,22 @@ namespace WhiteSpace.Pages
 
             if (_resizeDirection.Contains("e"))
             {
-                newW = Math.Max(1, _startW + dx);
+                newW = Math.Max(minW, _startW + dx);
             }
             if (_resizeDirection.Contains("s"))
             {
-                newH = Math.Max(1, _startH + dy);
+                newH = Math.Max(minH, _startH + dy);
             }
             if (_resizeDirection.Contains("w"))
             {
                 double delta = dx;
-                newW = Math.Max(1, _startW - delta);
+                newW = Math.Max(minW, _startW - delta);
                 newX = _startX + delta;
             }
             if (_resizeDirection.Contains("n"))
             {
                 double delta = dy;
-                newH = Math.Max(1, _startH - delta);
+                newH = Math.Max(minH, _startH - delta);
                 newY = _startY + delta;
             }
 
@@ -4389,10 +5893,39 @@ namespace WhiteSpace.Pages
                     tbResize.FontSize = Math.Max(8, Math.Min(240, _textResizeStartFontSize * scale));
                     tbResize.CaretBrush = tbResize.Foreground;
                 }
+
+                if (fe is Grid resizeGrid
+                    && resizeGrid.Tag is Rectangle roundInner
+                    && !string.IsNullOrEmpty(fe.Uid)
+                    && _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == fe.Uid) is { } rs)
+                {
+                    var sk = RectEllipseAppearance.Parse(rs).ShapeKind;
+                    if (string.Equals(sk, "roundRect", StringComparison.Ordinal))
+                    {
+                        var rad = Math.Min(Math.Max(newW, 1), Math.Max(newH, 1)) * 0.15;
+                        roundInner.RadiusX = rad;
+                        roundInner.RadiusY = rad;
+                    }
+                }
+
+                if (fe is Grid labelGrid
+                    && !string.IsNullOrEmpty(labelGrid.Uid)
+                    && _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == labelGrid.Uid) is { } ls
+                    && ls.Type is "rectangle" or "ellipse")
+                {
+                    SyncShapeLabelPresenter(labelGrid, ls);
+                }
+
+                if (fe is Grid stickyGrid
+                    && !string.IsNullOrEmpty(stickyGrid.Uid)
+                    && _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == stickyGrid.Uid) is { } st
+                    && st.Type == "stickyNote")
+                {
+                    SyncStickyNoteAuthorAndText(stickyGrid, st);
+                }
             }
 
             UpdateResizeFrame(newX, newY, newW, newH);
-            PushRealtimeResizeUpdate(_resizeTarget);
         }
 
         private void PushRealtimeResizeUpdate(UIElement? target)
@@ -4559,10 +6092,45 @@ namespace WhiteSpace.Pages
                 }
                 else
                 {
-                    _currentBrush = selectedBrush;
-                    _currentColorString = selectedColorString;
-                    ApplyPreviewFillBrush();
+                    var hx = NormalizeColorKey(selectedColorString);
+                    if (!string.IsNullOrEmpty(hx) && new BrushConverter().ConvertFromString(hx) is Brush b)
+                    {
+                        _currentBrush = b;
+                        _currentStrokeHex = hx;
+                    }
+                    else
+                    {
+                        _currentBrush = selectedBrush;
+                        _currentStrokeHex = selectedColorString;
+                    }
+
+                    SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
                 }
+            }
+        }
+
+        private async void MainToolbarColorPicker_Click(object sender, RoutedEventArgs e)
+        {
+            if (!TryPromptColorPicker(isStrokeContour: true, out var hex))
+            {
+                return;
+            }
+
+            if (new BrushConverter().ConvertFromString(hex) is not Brush brush)
+            {
+                return;
+            }
+
+            if (_resizeTarget != null)
+            {
+                await ApplyColorToElement(_resizeTarget, brush, hex);
+            }
+            else
+            {
+                var norm = NormalizeColorKey(hex);
+                _currentStrokeHex = string.IsNullOrEmpty(norm) ? hex : norm;
+                _currentBrush = brush;
+                SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
             }
         }
 
@@ -4570,6 +6138,11 @@ namespace WhiteSpace.Pages
         {
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
             if (shape == null)
+            {
+                return;
+            }
+
+            if (shape.Type == "stickyNote")
             {
                 return;
             }
@@ -4583,7 +6156,19 @@ namespace WhiteSpace.Pages
 
             shape.Color = colorString;
 
-            if (element is Shape sh)
+            var inner = TryGetInnerShape(element);
+            if (inner != null)
+            {
+                if (shape.Type is "rectangle" or "ellipse")
+                {
+                    ApplyRectEllipseVisual(inner, shape);
+                }
+                else
+                {
+                    inner.Stroke = brush;
+                }
+            }
+            else if (element is Shape sh)
             {
                 if (shape.Type is "rectangle" or "ellipse")
                 {
@@ -4669,6 +6254,7 @@ namespace WhiteSpace.Pages
                 if (image != null)
                 {
                     ShowResizeFrame(image);
+                    SetTool(ToolMode.Hand);
                 }
             }
             finally
@@ -4680,7 +6266,8 @@ namespace WhiteSpace.Pages
         private void ResetToolColorToDefault()
         {
             _currentBrush = Brushes.Black;
-            _currentColorString = Brushes.Black.ToString();
+            _currentStrokeHex = "#000000";
+            _currentFillHex = "#FFFFFF";
         }
 
         private string GetSnapshotDirectory()
