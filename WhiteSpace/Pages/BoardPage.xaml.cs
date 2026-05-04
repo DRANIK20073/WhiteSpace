@@ -179,6 +179,7 @@ namespace WhiteSpace.Pages
         private bool _isPresenceHeartbeatInFlight;
         private bool _isPresenceUiRefreshInFlight;
         private bool _isPageUnloading;
+        private bool _processingViewportMouseUp;
         private Guid? _myUserId;
         private string? _myUserRole;
         private DateTime _myJoinedAtUtc = DateTime.MinValue;
@@ -207,6 +208,7 @@ namespace WhiteSpace.Pages
             Viewport.MouseUp += Viewport_MouseUp;
             Viewport.MouseWheel += Viewport_MouseWheel;
             Viewport.MouseLeave += Viewport_MouseLeave;
+            Viewport.LostMouseCapture += Viewport_LostMouseCapture;
 
             PreviewKeyDown += BoardPage_PreviewKeyDown;
 
@@ -421,6 +423,8 @@ namespace WhiteSpace.Pages
         {
             _isPageUnloading = true;
 
+            Viewport.LostMouseCapture -= Viewport_LostMouseCapture;
+
             if (_hostWindow != null)
             {
                 _hostWindow.PreviewMouseLeftButtonUp -= HostWindow_PreviewMouseLeftButtonUp;
@@ -606,6 +610,13 @@ namespace WhiteSpace.Pages
             }
             else
             {
+                if (FindUIElementByUid(shape.Id.ToString()) is { } existingUi)
+                {
+                    _shapesOnBoard.Add(shape);
+                    UpdateUIElementFromShape(existingUi, shape);
+                    return;
+                }
+
                 Console.WriteLine($"Получена новая фигура из Firebase: {shape.Id}, цвет {shape.Color}");
                 _shapesOnBoard.Add(shape);
                 AddShapeToCanvas(shape);
@@ -999,6 +1010,11 @@ namespace WhiteSpace.Pages
         private async void Viewport_MouseLeave(object sender, MouseEventArgs e)
         {
             await RemoveCurrentUserCursorAsync();
+        }
+
+        private async void Viewport_LostMouseCapture(object sender, MouseEventArgs e)
+        {
+            await ProcessViewportMouseUpAsync(Mouse.GetPosition(Viewport));
         }
 
         // Обновление списка участников из Firebase
@@ -2171,6 +2187,17 @@ namespace WhiteSpace.Pages
 
         private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true, ImageSource? prefetchedBoardImage = null, string? boardImageLocalFallbackPath = null)
         {
+            if (shape.Id > 0 && FindUIElementByUid(shape.Id.ToString()) is UIElement existingSameId)
+            {
+                if (addToBoardState && _shapesOnBoard.All(s => s.Id != shape.Id))
+                {
+                    _shapesOnBoard.Add(shape);
+                }
+
+                UpdateUIElementFromShape(existingSameId, shape);
+                return;
+            }
+
             Brush brush = GetBrushFromColor(shape.Color);
 
             if (shape.Type == "line")
@@ -4417,13 +4444,12 @@ namespace WhiteSpace.Pages
             _focusedBoardTextEdit = null;
         }
 
-        private async void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
+        private void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
             TryCommitBoardTextFocus(e);
             Viewport.Focus();
 
-            var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
-            if (userRole == "viewer")
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
             {
                 if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
                 {
@@ -4585,6 +4611,14 @@ namespace WhiteSpace.Pages
                 _ = PublishCursorAsync(world, true);
             }
 
+            if (e.LeftButton != MouseButtonState.Pressed &&
+                (_isPanning || _isResizing || _isDraggingElement || _isPlacingSticky || _isPlacingRectEllipse ||
+                 _isDrawingConnector || _isDrawing))
+            {
+                _ = ProcessViewportMouseUpAsync(e.GetPosition(Viewport));
+                return;
+            }
+
             if (_isDrawingConnector && _connectorPreviewLine != null &&
                 e.LeftButton == MouseButtonState.Pressed)
             {
@@ -4597,13 +4631,13 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (_isResizing && _resizeTarget != null)
+            if (_isResizing && _resizeTarget != null && e.LeftButton == MouseButtonState.Pressed)
             {
                 ResizeElement(world);
                 return;
             }
 
-            UpdatePreview(world);
+            UpdatePreview(world, e.LeftButton == MouseButtonState.Pressed);
 
             if (_isDrawing && _currentStroke != null && e.LeftButton == MouseButtonState.Pressed)
             {
@@ -4615,12 +4649,12 @@ namespace WhiteSpace.Pages
                 }
             }
 
-            if (_isDraggingElement && _dragElement != null)
+            if (_isDraggingElement && _dragElement != null && e.LeftButton == MouseButtonState.Pressed)
             {
                 MoveElementTo(world);
             }
 
-            if (_isPanning)
+            if (_isPanning && e.LeftButton == MouseButtonState.Pressed)
             {
                 BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
                 BoardTranslate.Y = _panStartY + (screen.Y - _panStartScreen.Y);
@@ -4656,6 +4690,24 @@ namespace WhiteSpace.Pages
         }
 
         private async Task ProcessViewportMouseUpAsync(Point viewportPos)
+        {
+            if (_processingViewportMouseUp)
+            {
+                return;
+            }
+
+            _processingViewportMouseUp = true;
+            try
+            {
+                await ProcessViewportMouseUpCoreAsync(viewportPos);
+            }
+            finally
+            {
+                _processingViewportMouseUp = false;
+            }
+        }
+
+        private async Task ProcessViewportMouseUpCoreAsync(Point viewportPos)
         {
             if (!_isDrawingConnector && !_isPlacingSticky && !_isPlacingRectEllipse && !_isResizing && !_isDraggingElement &&
                 !_isDrawing && !_isPanning)
@@ -5040,15 +5092,16 @@ namespace WhiteSpace.Pages
                 return;
             }
 
+            var stickyPaper = StickyNoteAppearance.DefaultPaperHex;
             _previewStickyShape = new Rectangle
             {
                 Width = DefaultStickyW,
                 Height = DefaultStickyH,
                 RadiusX = 14,
                 RadiusY = 14,
-                Fill = GetBrushFromColor(_currentFillHex) is SolidColorBrush b
+                Fill = GetBrushFromColor(stickyPaper) is SolidColorBrush b
                     ? new SolidColorBrush(Color.FromArgb(200, b.Color.R, b.Color.G, b.Color.B))
-                    : new SolidColorBrush(Color.FromArgb(200, 220, 232, 244)),
+                    : new SolidColorBrush(Color.FromArgb(200, 0xA8, 0xD8, 0xFF)),
                 Stroke = Brushes.Transparent,
                 StrokeThickness = 0,
                 IsHitTestVisible = false
@@ -5067,10 +5120,15 @@ namespace WhiteSpace.Pages
             _previewStickyShape = null;
         }
 
-        private void UpdatePreview(Point world)
+        private void UpdatePreview(Point world, bool leftButtonPressed)
         {
             if (_isPlacingSticky && _tool == ToolMode.StickyNote && _previewStickyShape != null)
             {
+                if (!leftButtonPressed)
+                {
+                    return;
+                }
+
                 var x = Math.Min(_stickyPlacementStartWorld.X, world.X);
                 var y = Math.Min(_stickyPlacementStartWorld.Y, world.Y);
                 var w = Math.Max(Math.Abs(world.X - _stickyPlacementStartWorld.X), 1);
@@ -5086,6 +5144,11 @@ namespace WhiteSpace.Pages
 
             if (_isPlacingRectEllipse && (_tool == ToolMode.Shape))
             {
+                if (!leftButtonPressed)
+                {
+                    return;
+                }
+
                 var x = Math.Min(_rectPlacementStartWorld.X, world.X);
                 var y = Math.Min(_rectPlacementStartWorld.Y, world.Y);
                 var w = Math.Max(Math.Abs(world.X - _rectPlacementStartWorld.X), 1);
@@ -5255,10 +5318,10 @@ namespace WhiteSpace.Pages
                 CaptureBoardStateForUndo();
                 int uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
 
-                var paperHex = NormalizeColorKey(_currentFillHex);
+                var paperHex = NormalizeColorKey(StickyNoteAppearance.DefaultPaperHex);
                 if (string.IsNullOrWhiteSpace(paperHex))
                 {
-                    paperHex = "#DCE8F2";
+                    paperHex = StickyNoteAppearance.DefaultPaperHex;
                 }
 
                 var meta = new StickyNoteAppearance

@@ -1113,10 +1113,13 @@ public class SupabaseService
     {
         try
         {
-            string pointsJson = null;
-            if (shape.DeserializedPoints != null && shape.DeserializedPoints.Count > 0)
+            // Points в БД: для линии и коннектора — JSON массива точек; для стикера/фигур/текста — готовая строка (метаданные).
+            var pointsToSave = shape.Points;
+            if (shape.DeserializedPoints != null && shape.DeserializedPoints.Count > 0 &&
+                (string.Equals(shape.Type, "line", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(shape.Type, "connector", StringComparison.OrdinalIgnoreCase)))
             {
-                pointsJson = JsonConvert.SerializeObject(shape.DeserializedPoints);
+                pointsToSave = JsonConvert.SerializeObject(shape.DeserializedPoints);
             }
 
             var result = await _client.From<BoardShape>().Upsert(new BoardShape
@@ -1130,7 +1133,7 @@ public class SupabaseService
                 Height = shape.Height,
                 Color = shape.Color,
                 Text = shape.Text,
-                Points = pointsJson
+                Points = pointsToSave
             });
 
             if (result.Models?.Any() == true)
@@ -1164,10 +1167,22 @@ public class SupabaseService
             {
                 foreach (var model in result.Models)
                 {
-                    if (!string.IsNullOrEmpty(model.Points))
+                    model.DeserializedPoints ??= new List<Point>();
+                    if (!string.IsNullOrEmpty(model.Points) &&
+                        (string.Equals(model.Type, "line", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(model.Type, "connector", StringComparison.OrdinalIgnoreCase)))
                     {
-                        model.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(model.Points);
+                        try
+                        {
+                            model.DeserializedPoints =
+                                JsonConvert.DeserializeObject<List<Point>>(model.Points) ?? new List<Point>();
+                        }
+                        catch
+                        {
+                            model.DeserializedPoints = new List<Point>();
+                        }
                     }
+
                     shapes.Add(model);
                 }
             }
@@ -1238,22 +1253,32 @@ public class SupabaseService
 
     public async Task<int> GenerateUniqueIdAsync(Guid boardId)
     {
-        int newId;
-        bool idExists;
-
-        do
+        try
         {
-            newId = Guid.NewGuid().GetHashCode();
-            var existingShape = await _client
+            var result = await _client
                 .From<BoardShape>()
-                .Where(s => s.BoardId == boardId && s.Id == newId)
+                .Where(s => s.BoardId == boardId)
                 .Get();
 
-            idExists = existingShape.Models?.Count > 0;
-        }
-        while (idExists);
+            var maxId = 0;
+            if (result.Models != null)
+            {
+                foreach (var m in result.Models)
+                {
+                    if (m.Id > maxId)
+                    {
+                        maxId = m.Id;
+                    }
+                }
+            }
 
-        return newId;
+            return maxId + 1;
+        }
+        catch
+        {
+            var h = Math.Abs(Guid.NewGuid().GetHashCode());
+            return h == 0 ? 1 : h;
+        }
     }
 
     public async Task<Board> JoinBoardAsync(string accessCode)

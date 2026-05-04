@@ -5,7 +5,11 @@ namespace WhiteSpace.Models;
 /// <summary>Метаданные стикера в поле <see cref="BoardShape.Points"/> (JSON, не координаты).</summary>
 public sealed class StickyNoteAppearance
 {
-    private const string DefaultPaper = "#DCE8F2";
+    /// <summary>Светло-синий цвет «бумаги» для новых стикеров.</summary>
+    private const string DefaultPaper = "#A8D8FF";
+
+    /// <summary>Цвет бумаги нового стикера по умолчанию (#RRGGBB).</summary>
+    public static string DefaultPaperHex => DefaultPaper;
 
     [JsonProperty("author")]
     public string? Author { get; set; }
