@@ -39,7 +39,6 @@ namespace WhiteSpace.Pages
         private DashboardSection _currentSection = DashboardSection.MyBoards;
         private bool _isCompactView;
         private string _userName = "Пользователь";
-        private string _userEmail = "email@example.com";
         private readonly DispatcherTimer _searchDebounceTimer;
         private readonly DispatcherTimer _toastAutoHideTimer;
         private AppPreferences _preferences = new();
@@ -163,21 +162,14 @@ namespace WhiteSpace.Pages
                     ? profile.Username
                     : "Пользователь";
 
-                _userEmail = !string.IsNullOrWhiteSpace(profile?.Email)
-                    ? profile.Email
-                    : "email@example.com";
-
                 GreetingTextBlock.Text = $"Здравствуйте, {_userName} 👋";
-                HeaderEmailTextBlock.Text = _userEmail;
                 SidebarUserNameTextBlock.Text = _userName;
-                SidebarUserEmailTextBlock.Text = _userEmail;
                 var initials = GetInitials(_userName);
                 UserInitialsTextBlock.Text = initials;
             }
             catch (Exception ex)
             {
                 GreetingTextBlock.Text = "Здравствуйте!";
-                HeaderEmailTextBlock.Text = "Профиль временно недоступен";
                 AppDialogService.ShowError($"Ошибка загрузки профиля: {ex.Message}", "Профиль");
             }
         }

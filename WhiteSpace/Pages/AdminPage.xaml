@@ -90,7 +90,7 @@
                     Click="Back_Click"/>
 
             <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                <TextBlock Text="Админка WhiteSpace"
+                <TextBlock Text="Панель Администратора"
                            FontSize="28"
                            FontWeight="Bold"
                            Foreground="{DynamicResource WsTextPrimaryBrush}"/>
@@ -98,7 +98,8 @@
                            Margin="0,4,0,0"
                            Text="Управление пользователями, досками и доступами"
                            FontSize="14"
-                           Foreground="{DynamicResource WsTextSecondaryBrush}"/>
+                           Foreground="{DynamicResource WsTextSecondaryBrush}"
+                           Visibility="Collapsed"/>
             </StackPanel>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal">
@@ -175,8 +176,7 @@
                           Margin="0,0,10,0"
                           VerticalContentAlignment="Center"
                           SelectionChanged="ScopeComboBox_SelectionChanged">
-                    <ComboBoxItem Content="Всё" IsSelected="True"/>
-                    <ComboBoxItem Content="Пользователи"/>
+                    <ComboBoxItem Content="Пользователи" IsSelected="True"/>
                     <ComboBoxItem Content="Доски"/>
                     <ComboBoxItem Content="Права доступа"/>
                 </ComboBox>
@@ -194,6 +194,11 @@
         </Border>
 
         <TabControl x:Name="AdminTabControl" Grid.Row="3">
+            <TabControl.Resources>
+                <Style TargetType="{x:Type TabPanel}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Style>
+            </TabControl.Resources>
             <TabItem Header="Пользователи">
                 <Border Style="{StaticResource PanelBorderStyle}" Padding="0">
                     <DataGrid x:Name="UsersGrid"

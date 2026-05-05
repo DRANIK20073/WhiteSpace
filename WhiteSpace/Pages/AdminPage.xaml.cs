@@ -37,11 +37,9 @@ public partial class AdminPage : Page
         var prefs = AppPreferences.Load();
         WhiteSpaceThemeManager.Apply(prefs);
         UiAnimationHelper.ApplyFadeIn(AdminRootGrid, prefs.EnableAnimations);
+        AdminTabControl.SelectedIndex = 0;
 
         _isConfiguredAdmin = await _service.IsCurrentUserAdminAsync();
-        AccessHintTextBlock.Text = _isConfiguredAdmin
-            ? "Администратор: полный доступ к управлению данными"
-            : "Режим чтения: опасные действия отключены";
 
         await LoadAdminDataAsync();
         _autoRefreshTimer.Start();
@@ -129,7 +127,7 @@ public partial class AdminPage : Page
 
         if (ScopeComboBox.SelectedItem is ComboBoxItem selectedItem)
         {
-            var selectedScope = selectedItem.Content?.ToString() ?? "Всё";
+            var selectedScope = selectedItem.Content?.ToString() ?? "Пользователи";
             if (selectedScope == "Пользователи")
             {
                 AdminTabControl.SelectedIndex = 0;
@@ -166,10 +164,10 @@ public partial class AdminPage : Page
 
     private void RefreshRows()
     {
-        var selectedScope = (ScopeComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Всё";
-        var includeUsers = selectedScope is "Всё" or "Пользователи";
-        var includeBoards = selectedScope is "Всё" or "Доски";
-        var includeMembers = selectedScope is "Всё" or "Права доступа";
+        var selectedScope = (ScopeComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Пользователи";
+        var includeUsers = selectedScope == "Пользователи";
+        var includeBoards = selectedScope == "Доски";
+        var includeMembers = selectedScope == "Права доступа";
         var search = SearchBox?.Text?.Trim() ?? string.Empty;
         var normalizedSearch = search.ToLowerInvariant();
 

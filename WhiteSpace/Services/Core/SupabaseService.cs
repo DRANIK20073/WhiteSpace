@@ -907,7 +907,6 @@ public class SupabaseService
             var user = _client.Auth.CurrentUser;
             if (user == null)
             {
-                AppDialogService.ShowWarning("Пользователь не авторизован", "Профиль");
                 return null;
             }
 
@@ -1218,10 +1217,51 @@ public class SupabaseService
     {
         try
         {
+            var shapesSnapshot = await _client
+                .From<BoardShape>()
+                .Where(shape => shape.BoardId == boardId)
+                .Get();
+
+            var shapes = shapesSnapshot.Models?.ToList() ?? new List<BoardShape>();
+            if (shapes.Count == 0)
+            {
+                return true;
+            }
+
             await _client
                 .From<BoardShape>()
                 .Where(shape => shape.BoardId == boardId)
                 .Delete();
+
+            var remainingAfterBulkDelete = await _client
+                .From<BoardShape>()
+                .Where(shape => shape.BoardId == boardId)
+                .Get();
+
+            var stillExists = remainingAfterBulkDelete.Models?.Any() == true;
+            if (!stillExists)
+            {
+                return true;
+            }
+
+            foreach (var shape in shapes)
+            {
+                await _client
+                    .From<BoardShape>()
+                    .Where(s => s.BoardId == boardId && s.Id == shape.Id)
+                    .Delete();
+            }
+
+            var remainingAfterFallback = await _client
+                .From<BoardShape>()
+                .Where(shape => shape.BoardId == boardId)
+                .Get();
+
+            if (remainingAfterFallback.Models?.Any() == true)
+            {
+                AppDialogService.ShowError("Не удалось удалить все элементы доски из базы данных.", "Доска");
+                return false;
+            }
 
             return true;
         }

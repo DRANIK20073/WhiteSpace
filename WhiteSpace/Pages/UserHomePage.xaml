@@ -553,7 +553,8 @@
                                                Foreground="{DynamicResource WsTextMutedBrush}"
                                                FontSize="11"
                                                Margin="0,2,0,0"
-                                               TextTrimming="CharacterEllipsis"/>
+                                               TextTrimming="CharacterEllipsis"
+                                               Visibility="Collapsed"/>
                                 </StackPanel>
                             </Grid>
                         </Button>
@@ -592,7 +593,8 @@
                                    Text="email@example.com"
                                    Margin="0,6,0,0"
                                    Foreground="{DynamicResource WsTextSecondaryBrush}"
-                                   FontSize="15"/>
+                                   FontSize="15"
+                                   Visibility="Collapsed"/>
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">

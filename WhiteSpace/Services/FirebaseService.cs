@@ -54,6 +54,53 @@ namespace WhiteSpace
                 });
         }
 
+        public IObservable<FirebaseShapesSnapshot> GetBoardShapesObservable(string boardId)
+        {
+            return _client
+                .Child(SHAPES_PATH)
+                .Child(boardId)
+                .AsObservable<object>()
+                .SelectMany(_ => Observable.FromAsync(async () =>
+                {
+                    try
+                    {
+                        var snapshot = await _client
+                            .Child(SHAPES_PATH)
+                            .Child(boardId)
+                            .OnceAsync<BoardShape>();
+
+                        var shapes = new List<BoardShape>();
+                        if (snapshot == null || snapshot.Count == 0)
+                        {
+                            return FirebaseShapesSnapshot.Success(shapes);
+                        }
+
+                        foreach (var item in snapshot)
+                        {
+                            var shape = item.Object;
+                            if (shape == null || !int.TryParse(item.Key, out var id))
+                            {
+                                continue;
+                            }
+
+                            shape.Id = id;
+                            if (Guid.TryParse(boardId, out var boardGuid))
+                            {
+                                shape.BoardId = boardGuid;
+                            }
+
+                            shapes.Add(shape);
+                        }
+
+                        return FirebaseShapesSnapshot.Success(shapes);
+                    }
+                    catch
+                    {
+                        return FirebaseShapesSnapshot.Failed();
+                    }
+                }));
+        }
+
         public async Task PushShapeAsync(string boardId, BoardShape shape)
         {
             if (Guid.TryParse(boardId, out Guid guid))
@@ -93,6 +140,31 @@ namespace WhiteSpace
                     .Child(shape.Id.ToString())
                     .PutAsync(shape);
             }
+        }
+
+        public async Task ReplaceBoardShapesAsync(string boardId, IEnumerable<BoardShape> shapes)
+        {
+            var payload = new Dictionary<string, BoardShape>();
+
+            foreach (var shape in shapes ?? Enumerable.Empty<BoardShape>())
+            {
+                if (shape == null || shape.Id <= 0)
+                {
+                    continue;
+                }
+
+                if (Guid.TryParse(boardId, out Guid boardGuid))
+                {
+                    shape.BoardId = boardGuid;
+                }
+
+                payload[shape.Id.ToString()] = shape;
+            }
+
+            await _client
+                .Child(SHAPES_PATH)
+                .Child(boardId)
+                .PutAsync(payload);
         }
 
         public async Task DeleteShapeAsync(string boardId, string shapeId)
@@ -443,6 +515,26 @@ namespace WhiteSpace
         public DateTime JoinedAt { get; set; }
         public bool IsOnline { get; set; }
         public DateTime LastSeenUtc { get; set; }
+    }
+
+    public sealed class FirebaseShapesSnapshot
+    {
+        public bool IsSuccess { get; init; }
+        public List<BoardShape> Shapes { get; init; } = new();
+
+        public static FirebaseShapesSnapshot Success(List<BoardShape> shapes) =>
+            new()
+            {
+                IsSuccess = true,
+                Shapes = shapes ?? new List<BoardShape>()
+            };
+
+        public static FirebaseShapesSnapshot Failed() =>
+            new()
+            {
+                IsSuccess = false,
+                Shapes = new List<BoardShape>()
+            };
     }
 
     public class FirebaseCursorState

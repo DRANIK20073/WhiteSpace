@@ -26,7 +26,8 @@
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#3B82F6"/>
+                                <Setter Property="Foreground" Value="White"/>
                                 <Setter Property="FontWeight" Value="SemiBold"/>
                             </Trigger>
                         </ControlTemplate.Triggers>

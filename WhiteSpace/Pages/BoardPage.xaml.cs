@@ -53,6 +53,7 @@ namespace WhiteSpace.Pages
         private bool _isRestoringHistory;
 
         private IDisposable? _shapesSubscription;
+        private IDisposable? _shapesSnapshotSubscription;
         private IDisposable? _membersSubscription;
         private IDisposable? _cursorsSubscription;
         private IDisposable? _chatSubscription;
@@ -245,7 +246,7 @@ namespace WhiteSpace.Pages
             UpdateShapesToolLabel();
 
             await LoadBoardMetadataAsync();
-            _isAdminSession = await _supabaseService.IsCurrentUserAdminAsync();
+            _isAdminSession = _returnToAdminPage || await _supabaseService.IsCurrentUserAdminAsync();
 
             // Загружаем фигуры из Supabase
             await LoadShapesFromSupabase();
@@ -396,11 +397,7 @@ namespace WhiteSpace.Pages
                 _shapesOnBoard = CloneShapes(snapshot);
                 RenderCurrentBoardState();
                 await _supabaseService.ReplaceBoardShapesAsync(_boardId, _shapesOnBoard);
-
-                foreach (var shape in _shapesOnBoard)
-                {
-                    PushShapeToFirebase(shape);
-                }
+                await _firebaseService.ReplaceBoardShapesAsync(_boardId.ToString(), _shapesOnBoard);
 
                 MarkSaved();
             }
@@ -439,6 +436,8 @@ namespace WhiteSpace.Pages
             // Отписываемся от событий при выходе
             _shapesSubscription?.Dispose();
             _shapesSubscription = null;
+            _shapesSnapshotSubscription?.Dispose();
+            _shapesSnapshotSubscription = null;
             _membersSubscription?.Dispose();
             _membersSubscription = null;
             _cursorsSubscription?.Dispose();
@@ -543,24 +542,69 @@ namespace WhiteSpace.Pages
             try
             {
                 _shapesSubscription?.Dispose();
+                _shapesSnapshotSubscription?.Dispose();
                 _shapesSubscription = _firebaseService
                     .GetShapesObservable(_boardId.ToString())
                     .Where(shape => shape != null)
                     .Subscribe(async shape =>
                     {
-                        // Игнорируем обновления, если идет загрузка из Supabase
                         if (_isLoadingShapes)
+                        {
                             return;
+                        }
 
                         await Application.Current.Dispatcher.InvokeAsync(() =>
                         {
                             UpdateOrAddShapeFromFirebase(shape);
                         });
                     });
+
+                _shapesSnapshotSubscription = _firebaseService
+                    .GetBoardShapesObservable(_boardId.ToString())
+                    .Subscribe(async snapshot =>
+                    {
+                        if (_isLoadingShapes || snapshot == null || !snapshot.IsSuccess)
+                        {
+                            return;
+                        }
+
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            RemoveShapesMissingInSnapshot(snapshot.Shapes);
+                        });
+                    });
             }
             catch (Exception ex)
             {
                 AppDialogService.ShowError($"Ошибка подписки на Firebase: {ex.Message}", "Доска");
+            }
+        }
+
+        private void RemoveShapesMissingInSnapshot(List<BoardShape> shapes)
+        {
+            var incomingShapes = (shapes ?? new List<BoardShape>())
+                .Where(shape => shape != null && shape.Id > 0)
+                .ToDictionary(shape => shape.Id, shape => shape);
+
+            var removedIds = _shapesOnBoard
+                .Where(shape => shape != null && !incomingShapes.ContainsKey(shape.Id))
+                .Select(shape => shape.Id)
+                .ToList();
+
+            foreach (var removedId in removedIds)
+            {
+                var removedUi = FindUIElementByUid(removedId.ToString());
+                if (removedUi != null)
+                {
+                    BoardCanvas.Children.Remove(removedUi);
+                }
+
+                _shapesOnBoard.RemoveAll(shape => shape.Id == removedId);
+            }
+
+            if (_resizeTarget != null && !_shapesOnBoard.Any(shape => shape.Id.ToString() == _resizeTarget.Uid))
+            {
+                RemoveResizeFrame();
             }
         }
 
@@ -578,7 +622,11 @@ namespace WhiteSpace.Pages
             {
                 var existingShape = _shapesOnBoard[existingShapeIndex];
                 var uiElement = FindUIElementByUid(shape.Id.ToString());
+                var previousType = existingShape.Type;
+                var previousPaletteId = ShapePalette.GetPaletteId(existingShape);
+                var typeChanged = !string.Equals(previousType, shape.Type, StringComparison.Ordinal);
 
+                existingShape.Type = shape.Type;
                 existingShape.Color = shape.Color;
                 existingShape.X = shape.X;
                 existingShape.Y = shape.Y;
@@ -591,10 +639,30 @@ namespace WhiteSpace.Pages
                 {
                     existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
                 }
+                else
+                {
+                    existingShape.DeserializedPoints = new List<Point>();
+                }
+
+                var currentPaletteId = ShapePalette.GetPaletteId(existingShape);
+                var paletteChanged = !string.Equals(previousPaletteId, currentPaletteId, StringComparison.Ordinal);
+                var shouldRecreateVisual = typeChanged || paletteChanged;
 
                 if (uiElement != null)
                 {
                     Console.WriteLine($"Получено обновление для фигуры {shape.Id}: цвет {shape.Color}");
+
+                    if (shouldRecreateVisual)
+                    {
+                        BoardCanvas.Children.Remove(uiElement);
+                        AddShapeToCanvas(existingShape, false);
+                        uiElement = FindUIElementByUid(shape.Id.ToString());
+                    }
+
+                    if (uiElement == null)
+                    {
+                        return;
+                    }
 
                     UpdateUIElementFromShape(uiElement, existingShape);
 
@@ -606,6 +674,10 @@ namespace WhiteSpace.Pages
                             targetPolyline.Points.Add(point);
                         }
                     }
+                }
+                else
+                {
+                    AddShapeToCanvas(existingShape, false);
                 }
             }
             else
@@ -1070,7 +1142,7 @@ namespace WhiteSpace.Pages
                     var currentUserMember = displayMembers.FirstOrDefault(m => m.UserId == currentUser?.Id);
                     if (currentUserMember != null)
                     {
-                        UsersListView.IsEnabled = currentUserMember.Role == "owner";
+                        UsersListView.IsEnabled = _isAdminSession || currentUserMember.Role == "owner";
                         Console.WriteLine($"Текущий пользователь имеет роль: {currentUserMember.Role}");
                     }
                 }
@@ -1177,7 +1249,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (boardMember.Role == "owner")
+            if (boardMember.Role == "owner" && !_isAdminSession)
             {
                 AppDialogService.ShowWarning("Вы не можете изменить роль владельца.", "Изменение роли");
                 return;
@@ -1187,6 +1259,7 @@ namespace WhiteSpace.Pages
             {
                 "viewer" => "editor",
                 "editor" => "viewer",
+                "owner" when _isAdminSession => "editor",
                 _ => boardMember.Role
             };
 
@@ -1311,9 +1384,9 @@ namespace WhiteSpace.Pages
                             _ => "Наблюдатель"
                         },
                         RoleActionLabel = member.Role == "viewer" ? "Сделать редактором" : "Сделать наблюдателем",
-                        RoleActionVisibility = member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
-                        ActionVisibility = accountIsCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
-                        RemoveActionVisibility = accountIsCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                        RoleActionVisibility = (_isAdminSession || member.Role != "owner") ? Visibility.Visible : Visibility.Collapsed,
+                        ActionVisibility = _isAdminSession ? Visibility.Visible : (accountIsCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible),
+                        RemoveActionVisibility = _isAdminSession ? Visibility.Visible : (accountIsCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible),
                         CurrentUserHint = accountIsCurrentUser ? "Вы" : string.Empty,
                         CurrentUserHintVisibility = accountIsCurrentUser ? Visibility.Visible : Visibility.Collapsed,
                         PresenceLabel = accountIsOnline ? "Онлайн" : "Не в сети",
@@ -1383,9 +1456,9 @@ namespace WhiteSpace.Pages
                         _ => "Наблюдатель"
                     },
                     RoleActionLabel = member.Role == "viewer" ? "Сделать редактором" : "Сделать наблюдателем",
-                    RoleActionVisibility = member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
-                    ActionVisibility = isCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
-                    RemoveActionVisibility = isCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible,
+                    RoleActionVisibility = (_isAdminSession || member.Role != "owner") ? Visibility.Visible : Visibility.Collapsed,
+                    ActionVisibility = _isAdminSession ? Visibility.Visible : (isCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible),
+                    RemoveActionVisibility = _isAdminSession ? Visibility.Visible : (isCurrentUser || member.Role == "owner" ? Visibility.Collapsed : Visibility.Visible),
                     CurrentUserHint = isCurrentUser ? "Вы" : string.Empty,
                     CurrentUserHintVisibility = isCurrentUser ? Visibility.Visible : Visibility.Collapsed,
                     PresenceLabel = isOnline ? "Онлайн" : "Не в сети",
@@ -1736,7 +1809,7 @@ namespace WhiteSpace.Pages
 
         private void NavigateBackFromBoard()
         {
-            NavigationService?.Navigate(_returnToAdminPage ? new AdminPage() : new UserHomePage());
+            NavigationService?.Navigate((_isAdminSession || _returnToAdminPage) ? new AdminPage() : new UserHomePage());
         }
 
         private void Invite_Click(object sender, RoutedEventArgs e)
@@ -1838,17 +1911,35 @@ namespace WhiteSpace.Pages
             }
 
             CaptureBoardStateForUndo();
+            if (!await _supabaseService.ClearBoardShapesAsync(_boardId))
+            {
+                return;
+            }
+
             _shapesOnBoard.Clear();
             RenderCurrentBoardState();
-
-            if (await _supabaseService.ClearBoardShapesAsync(_boardId))
-            {
-                MarkSaved();
-            }
+            await _firebaseService.ReplaceBoardShapesAsync(_boardId.ToString(), _shapesOnBoard);
+            MarkSaved();
         }
 
         private async void AddImage_Click(object sender, RoutedEventArgs e)
         {
+            if (_isAdminSession)
+            {
+                var adminDialog = new OpenFileDialog
+                {
+                    Title = "Выберите изображение",
+                    Filter = "Изображения|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp"
+                };
+
+                if (adminDialog.ShowDialog() == true)
+                {
+                    await AddImageToBoardAsync(adminDialog.FileName);
+                }
+
+                return;
+            }
+
             var userRole = await _supabaseService.GetUserRoleForBoardAsync(_boardId);
             if (userRole == "viewer")
             {
