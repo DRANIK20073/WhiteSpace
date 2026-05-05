@@ -23,9 +23,6 @@
   </ItemGroup>
 
 	<ItemGroup>
-		<None Update="register-protocol.ps1">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		</None>
 		<None Update="oauth-callback.html">
 			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
 		</None>
