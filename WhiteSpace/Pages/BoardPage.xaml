@@ -306,6 +306,14 @@
                                    Foreground="#C47F00"
                                    Visibility="Collapsed"
                                    VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PresentationModeBanner"
+                                   Text="Презентация: редактирование только у ведущего"
+                                   Margin="14,5,0,0"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Foreground="#7C3AED"
+                                   Visibility="Collapsed"
+                                   VerticalAlignment="Center"/>
                     </StackPanel>
                 </StackPanel>
 
@@ -335,7 +343,8 @@
                         <Button.ContextMenu>
                             <ContextMenu x:Name="BoardOptionsMenu"
                                          Placement="Bottom">
-                                <MenuItem Header="Включить режим презентации"
+                                <MenuItem x:Name="PresentationMenuItem"
+                                          Header="Включить режим презентации"
                                           Click="PresentationMode_Click"/>
                                 <MenuItem Header="Сохранить версию"
                                           Click="SaveVersion_Click"/>

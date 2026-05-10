@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using WhiteSpace.Models;
 
 namespace WhiteSpace
 {
@@ -18,6 +19,8 @@ namespace WhiteSpace
         private const string MEMBERS_PATH = "members";
         private const string CURSORS_PATH = "cursors";
         private const string CHAT_MESSAGES_PATH = "chat_messages";
+        private const string PRESENTATION_PATH = "presentation";
+        private const string BOARD_VERSIONS_PATH = "board_versions";
 
         public FirebaseService()
         {
@@ -502,9 +505,117 @@ namespace WhiteSpace
 
         #endregion
 
+        #region Presentation mode
+
+        public IObservable<bool> GetBoardPresentationActiveObservable(string boardId)
+        {
+            return _client
+                .Child(PRESENTATION_PATH)
+                .Child(boardId)
+                .AsObservable<object>()
+                .SelectMany(_ => Observable.FromAsync(async () =>
+                {
+                    try
+                    {
+                        var snap = await _client
+                            .Child(PRESENTATION_PATH)
+                            .Child(boardId)
+                            .OnceSingleAsync<FirebasePresentationState>();
+
+                        return snap?.Active == true;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }));
+        }
+
+        public async Task SetBoardPresentationActiveAsync(string boardId, bool active)
+        {
+            await _client
+                .Child(PRESENTATION_PATH)
+                .Child(boardId)
+                .PutAsync(new FirebasePresentationState
+                {
+                    Active = active,
+                    UpdatedAtUtc = DateTime.UtcNow
+                });
+        }
+
+        #endregion
+
+        #region Board versions
+
+        public async Task PushBoardVersionSnapshotAsync(string boardId, string versionKey, BoardVersionSnapshot snapshot)
+        {
+            await _client
+                .Child(BOARD_VERSIONS_PATH)
+                .Child(boardId)
+                .Child(versionKey)
+                .PutAsync(snapshot);
+        }
+
+        public async Task<List<(string Key, BoardVersionSnapshot Snapshot)>> GetBoardVersionSnapshotsAsync(string boardId)
+        {
+            try
+            {
+                var snap = await _client
+                    .Child(BOARD_VERSIONS_PATH)
+                    .Child(boardId)
+                    .OnceAsync<BoardVersionSnapshot>();
+
+                var list = new List<(string, BoardVersionSnapshot)>();
+                if (snap == null)
+                {
+                    return list;
+                }
+
+                foreach (var item in snap)
+                {
+                    if (item.Object != null && !string.IsNullOrWhiteSpace(item.Key))
+                    {
+                        list.Add((item.Key, item.Object));
+                    }
+                }
+
+                return list
+                    .OrderByDescending(x => x.Item2?.SavedAtUtc ?? DateTime.MinValue)
+                    .ToList();
+            }
+            catch
+            {
+                return new List<(string Key, BoardVersionSnapshot Snapshot)>();
+            }
+        }
+
+        public async Task DeleteBoardVersionAsync(string boardId, string versionKey)
+        {
+            try
+            {
+                await _client
+                    .Child(BOARD_VERSIONS_PATH)
+                    .Child(boardId)
+                    .Child(versionKey)
+                    .DeleteAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка удаления версии: {ex.Message}");
+            }
+        }
+
+        #endregion
+
         public void Dispose()
         {
         }
+    }
+
+    public sealed class FirebasePresentationState
+    {
+        public bool Active { get; set; }
+        public DateTime UpdatedAtUtc { get; set; }
     }
 
     // Класс для Firebase (с UserId как string)

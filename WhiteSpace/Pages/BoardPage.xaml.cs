@@ -10,7 +10,7 @@ using System.ComponentModel;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
+using System.Threading;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -21,7 +21,6 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -156,15 +155,14 @@ namespace WhiteSpace.Pages
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "WhiteSpace",
             "board-snapshots");
-        private bool _isPresentationMode;
-        private Rect _presentationRestoreBounds;
-        private WindowState _presentationRestoreWindowState = WindowState.Normal;
-        private ResizeMode _presentationRestoreResizeMode = ResizeMode.CanResize;
-        private bool _presentationStoredState;
+        private IDisposable? _presentationSubscription;
+        private bool _presentationLockedCollaborators;
+        private int? _connectorPortStartShapeId;
+        private string? _connectorPortStartSide;
         private DateTime _lastResizeRealtimePushUtc = DateTime.MinValue;
         private bool _removalHandled;
         private readonly DispatcherTimer _accessMonitorTimer = new() { Interval = TimeSpan.FromSeconds(2) };
-        private bool _isAccessCheckRunning;
+        private readonly SemaphoreSlim _permissionRefreshLock = new(1, 1);
         private readonly Dictionary<Guid, FirebaseBoardMember> _presenceByUserId = new();
         private Window? _hostWindow;
         private readonly Dictionary<Guid, FirebaseCursorState> _cursorByUserId = new();
@@ -279,15 +277,18 @@ namespace WhiteSpace.Pages
             // Устанавливаем начальный инструмент
             SetTool(ToolMode.Hand);
 
-            // Подписываемся на изменения фигур из Firebase (только для получения обновлений)
+            await InitCursorIdentityAsync();
+
+            // Подписываемся на изменения из Firebase после известного профиля (для мгновенной смены роли из списка участников)
             SubscribeToShapes();
+            SubscribeToPresentationMode();
             SubscribeToBoardMembers();
             SubscribeToCursors();
             SubscribeToChatMessages();
             await SetCurrentUserPresenceAsync(true);
-            await InitCursorIdentityAsync();
             ChatMessagesItemsControl.ItemsSource = _chatMessages;
             UsersListView.SelectedItem = null;
+            UpdatePresentationMenuForRole();
             _accessMonitorTimer.Start();
             _presenceHeartbeatTimer.Start();
             _presenceUiRefreshTimer.Start();
@@ -444,6 +445,8 @@ namespace WhiteSpace.Pages
             _cursorsSubscription = null;
             _chatSubscription?.Dispose();
             _chatSubscription = null;
+            _presentationSubscription?.Dispose();
+            _presentationSubscription = null;
             _accessMonitorTimer.Stop();
             _presenceHeartbeatTimer.Stop();
             _presenceUiRefreshTimer.Stop();
@@ -537,6 +540,96 @@ namespace WhiteSpace.Pages
         }
 
         // Подписка на изменения из Firebase (только для получения обновлений от других пользователей)
+        private void SubscribeToPresentationMode()
+        {
+            try
+            {
+                _presentationSubscription?.Dispose();
+                _presentationSubscription = _firebaseService
+                    .GetBoardPresentationActiveObservable(_boardId.ToString())
+                    .Subscribe(active =>
+                    {
+                        Application.Current?.Dispatcher.Invoke(() =>
+                        {
+                            _presentationLockedCollaborators = active;
+                            ApplyPresentationCollaborativeUi();
+                        });
+                    });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Подписка на режим презентации: {ex.Message}");
+            }
+        }
+
+        private bool IsBoardOwnerRole() =>
+            string.Equals(_myUserRole, "owner", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Наблюдатель или участник при активной презентации (редактирует только ведущий).</summary>
+        private bool IsBoardEditLockedForCurrentUser()
+        {
+            if (_isAdminSession)
+            {
+                return false;
+            }
+
+            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return _presentationLockedCollaborators && !IsBoardOwnerRole();
+        }
+
+        private void ApplyPresentationCollaborativeUi()
+        {
+            if (PresentationModeBanner != null)
+            {
+                PresentationModeBanner.Visibility = _presentationLockedCollaborators
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+
+            ApplyEditingToolsState();
+            UpdatePresentationMenuHeader();
+        }
+
+        private void ApplyEditingToolsState()
+        {
+            if (IsBoardEditLockedForCurrentUser())
+            {
+                DisableEditingTools();
+            }
+            else
+            {
+                EnableEditingTools();
+            }
+        }
+
+        private void UpdatePresentationMenuForRole()
+        {
+            if (PresentationMenuItem != null)
+            {
+                PresentationMenuItem.Visibility =
+                    (_isAdminSession || IsBoardOwnerRole()) ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            UpdatePresentationMenuHeader();
+        }
+
+        private void UpdatePresentationMenuHeader()
+        {
+            if (PresentationMenuItem == null)
+            {
+                return;
+            }
+
+            var on = _presentationLockedCollaborators;
+            PresentationMenuItem.Header = on
+                ? "Выключить режим презентации"
+                : "Включить режим презентации";
+        }
+
         private void SubscribeToShapes()
         {
             try
@@ -644,6 +737,11 @@ namespace WhiteSpace.Pages
                     existingShape.DeserializedPoints = new List<Point>();
                 }
 
+                if (shape.Type == "connector" && ConnectorAttachmentHelper.TryParse(existingShape.Text, out _))
+                {
+                    ApplyConnectorGeometryToBoardShape(existingShape);
+                }
+
                 var currentPaletteId = ShapePalette.GetPaletteId(existingShape);
                 var paletteChanged = !string.Equals(previousPaletteId, currentPaletteId, StringComparison.Ordinal);
                 var shouldRecreateVisual = typeChanged || paletteChanged;
@@ -678,6 +776,11 @@ namespace WhiteSpace.Pages
                 else
                 {
                     AddShapeToCanvas(existingShape, false);
+                }
+
+                if (shape.Type != "connector")
+                {
+                    RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
                 }
             }
             else
@@ -761,10 +864,25 @@ namespace WhiteSpace.Pages
             }
             else if (shape.Type == "line" || shape.Type == "connector")
             {
-                if (element is Polyline targetPolyline && !string.IsNullOrEmpty(shape.Points))
+                if (element is Polyline targetPolyline)
                 {
-                    var points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-                    if (points != null)
+                    List<Point>? points;
+                    if (shape.Type == "connector")
+                    {
+                        points = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+                        if (points.Count < 2 && !string.IsNullOrWhiteSpace(shape.Points))
+                        {
+                            points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                        }
+                    }
+                    else
+                    {
+                        points = string.IsNullOrEmpty(shape.Points)
+                            ? new List<Point>()
+                            : JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                    }
+
+                    if (points != null && points.Count > 0)
                     {
                         targetPolyline.Points.Clear();
                         foreach (var point in points)
@@ -1089,14 +1207,13 @@ namespace WhiteSpace.Pages
             await ProcessViewportMouseUpAsync(Mouse.GetPosition(Viewport));
         }
 
-        // Обновление списка участников из Firebase
-        // Обновление списка участников из Firebase
         private async Task UpdateBoardMembersFromFirebase(List<FirebaseBoardMember> members)
         {
             try
             {
                 Console.WriteLine($"Получено обновление участников из Firebase. Количество: {members?.Count ?? 0}");
 
+                ApplyCurrentUserRoleFromFirebaseMembers(members);
                 await RefreshCurrentUserPermissionsAsync();
                 var currentUser = _isAdminSession ? null : await _supabaseService.GetMyProfileAsync();
                 _presenceByUserId.Clear();
@@ -1540,6 +1657,7 @@ namespace WhiteSpace.Pages
             PenButton.IsEnabled = false;
             ShapesToolButton.IsEnabled = false;
             TextButton.IsEnabled = false;
+            StickyNoteButton.IsEnabled = false;
             UndoButton.IsEnabled = false;
             RedoButton.IsEnabled = false;
             ClearBoardButton.IsEnabled = false;
@@ -1552,6 +1670,7 @@ namespace WhiteSpace.Pages
             PenButton.IsEnabled = true;
             ShapesToolButton.IsEnabled = true;
             TextButton.IsEnabled = true;
+            StickyNoteButton.IsEnabled = true;
             UndoButton.IsEnabled = true;
             RedoButton.IsEnabled = true;
             ClearBoardButton.IsEnabled = true;
@@ -1562,32 +1681,30 @@ namespace WhiteSpace.Pages
         private void SetViewerMode(bool isViewer)
         {
             ViewerModeText.Visibility = isViewer ? Visibility.Visible : Visibility.Collapsed;
-            if (isViewer)
-            {
-                DisableEditingTools();
-            }
-            else
-            {
-                EnableEditingTools();
-            }
+            ApplyEditingToolsState();
         }
 
         private async Task RefreshCurrentUserPermissionsAsync()
         {
-            if (_removalHandled || _isAccessCheckRunning)
+            if (_removalHandled)
             {
                 return;
             }
 
-            if (_isAdminSession)
-            {
-                SetViewerMode(false);
-                return;
-            }
-
-            _isAccessCheckRunning = true;
+            await _permissionRefreshLock.WaitAsync();
             try
             {
+                if (_removalHandled)
+                {
+                    return;
+                }
+
+                if (_isAdminSession)
+                {
+                    SetViewerMode(false);
+                    return;
+                }
+
                 var currentUser = await _supabaseService.GetMyProfileAsync();
                 if (currentUser == null)
                 {
@@ -1611,12 +1728,48 @@ namespace WhiteSpace.Pages
                     return;
                 }
 
+                _myUserRole = role;
                 SetViewerMode(string.Equals(role, "viewer", StringComparison.OrdinalIgnoreCase));
+                UpdatePresentationMenuForRole();
             }
             finally
             {
-                _isAccessCheckRunning = false;
+                _permissionRefreshLock.Release();
             }
+        }
+
+        /// <summary>Сразу подтягиваем роль из Firebase (обновляется при смене роли владельцем), до запроса Supabase.</summary>
+        private void ApplyCurrentUserRoleFromFirebaseMembers(List<FirebaseBoardMember>? members)
+        {
+            if (_isAdminSession || members == null || members.Count == 0 || !_myUserId.HasValue)
+            {
+                return;
+            }
+
+            FirebaseBoardMember? mine = null;
+            foreach (var m in members)
+            {
+                if (Guid.TryParse(m.UserId, out var uid) && uid == _myUserId.Value)
+                {
+                    mine = m;
+                    break;
+                }
+            }
+
+            if (mine == null || string.IsNullOrWhiteSpace(mine.Role))
+            {
+                return;
+            }
+
+            var incoming = mine.Role.Trim();
+            if (string.Equals(_myUserRole, incoming, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _myUserRole = incoming;
+            SetViewerMode(string.Equals(incoming, "viewer", StringComparison.OrdinalIgnoreCase));
+            UpdatePresentationMenuForRole();
         }
 
         private void Share_Click(object sender, RoutedEventArgs e)
@@ -1658,70 +1811,34 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void PresentationMode_Click(object sender, RoutedEventArgs e)
+        private async void PresentationMode_Click(object sender, RoutedEventArgs e)
         {
-            if (Application.Current.MainWindow is not Window window)
+            if (!_isAdminSession && !IsBoardOwnerRole())
             {
+                AppDialogService.ShowInfo(
+                    "Режим презентации может включить только владелец доски.",
+                    "Презентация");
                 return;
             }
 
-            _isPresentationMode = !_isPresentationMode;
+            var nextActive = !_presentationLockedCollaborators;
 
-            if (_isPresentationMode)
+            try
             {
-                _presentationRestoreWindowState = window.WindowState;
-                _presentationRestoreResizeMode = window.ResizeMode;
-                if (window.WindowState == WindowState.Maximized)
-                {
-                    var rb = window.RestoreBounds;
-                    _presentationRestoreBounds = new Rect(rb.Left, rb.Top, rb.Width, rb.Height);
-                }
-                else
-                {
-                    _presentationRestoreBounds = new Rect(window.Left, window.Top, window.Width, window.Height);
-                }
-
-                _presentationStoredState = true;
-
-                window.Topmost = true;
-                window.WindowStyle = WindowStyle.None;
-                window.ResizeMode = ResizeMode.NoResize;
-                window.WindowState = WindowState.Normal;
-
-                if (!TryPlaceWindowOnContainingMonitorFullscreen(window))
-                {
-                    window.Left = SystemParameters.WorkArea.Left;
-                    window.Top = SystemParameters.WorkArea.Top;
-                    window.Width = SystemParameters.WorkArea.Width;
-                    window.Height = SystemParameters.WorkArea.Height;
-                }
-
-                AppDialogService.ShowInfo(
-                    "Режим презентации: окно на весь текущий монитор. Повторите команду в меню, чтобы выйти.",
-                    "Презентация");
+                await _firebaseService.SetBoardPresentationActiveAsync(_boardId.ToString(), nextActive);
             }
-            else
+            catch (Exception ex)
             {
-                window.Topmost = false;
-                window.WindowStyle = WindowStyle.SingleBorderWindow;
-                window.ResizeMode = _presentationStoredState
-                    ? _presentationRestoreResizeMode
-                    : ResizeMode.CanResize;
-
-                if (_presentationStoredState)
-                {
-                    window.WindowState = WindowState.Normal;
-                    window.Left = _presentationRestoreBounds.Left;
-                    window.Top = _presentationRestoreBounds.Top;
-                    window.Width = _presentationRestoreBounds.Width;
-                    window.Height = _presentationRestoreBounds.Height;
-                    window.WindowState = _presentationRestoreWindowState;
-                }
-
-                _presentationStoredState = false;
-
-                AppDialogService.ShowInfo("Режим презентации выключен.", "Презентация");
+                System.Diagnostics.Debug.WriteLine($"Firebase презентация: {ex.Message}");
             }
+
+            AppDialogService.ShowInfo(
+                nextActive
+                    ? "Режим презентации включён: участники не смогут редактировать доску, пока вы его не выключите."
+                    : "Режим презентации выключен.",
+                "Презентация");
+
+            UpdatePresentationMenuHeader();
         }
 
         private async void SaveVersion_Click(object sender, RoutedEventArgs e)
@@ -1745,57 +1862,113 @@ namespace WhiteSpace.Pages
             var filePath = IOPath.Combine(snapshotDirectory, fileName);
 
             await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(payload, Formatting.Indented));
+
+            try
+            {
+                var versionKey = $"v-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
+                await _firebaseService.PushBoardVersionSnapshotAsync(_boardId.ToString(), versionKey, payload);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Версия в Firebase: {ex.Message}");
+            }
+
             MarkSaved();
-            AppDialogService.ShowSuccess("Текущая версия отмечена как сохранённая.", "Версия доски");
+            AppDialogService.ShowSuccess("Версия сохранена локально и в облаке для участников доски.", "Версия доски");
         }
 
         private async void VersionHistory_Click(object sender, RoutedEventArgs e)
         {
+            var items = new List<BoardVersionHistoryDialog.VersionListItem>();
+
+            try
+            {
+                var remote = await _firebaseService.GetBoardVersionSnapshotsAsync(_boardId.ToString());
+                foreach (var entry in remote)
+                {
+                    var snap = entry.Snapshot;
+                    if (snap?.Shapes == null)
+                    {
+                        continue;
+                    }
+
+                    items.Add(new BoardVersionHistoryDialog.VersionListItem
+                    {
+                        Key = entry.Key,
+                        Source = "cloud",
+                        Snapshot = snap,
+                        DisplayLabel =
+                            $"Облако · {snap.SavedAtUtc.ToLocalTime():g} · {entry.Key}"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Версии Firebase: {ex.Message}");
+            }
+
             var snapshotDirectory = GetSnapshotDirectory();
-            if (!Directory.Exists(snapshotDirectory))
+            if (Directory.Exists(snapshotDirectory))
             {
-                AppDialogService.ShowInfo("Сохраненных версий пока нет.", "История версий");
+                foreach (var path in Directory.GetFiles(snapshotDirectory, "version-*.json")
+                             .OrderByDescending(path => path))
+                {
+                    try
+                    {
+                        var json = await File.ReadAllTextAsync(path);
+                        var payload = JsonConvert.DeserializeObject<BoardVersionSnapshot>(json);
+                        if (payload?.Shapes == null)
+                        {
+                            continue;
+                        }
+
+                        items.Add(new BoardVersionHistoryDialog.VersionListItem
+                        {
+                            Key = path,
+                            Source = "local",
+                            Snapshot = payload,
+                            DisplayLabel =
+                                $"На устройстве · {payload.SavedAtUtc.ToLocalTime():g} · {IOPath.GetFileName(path)}"
+                        });
+                    }
+                    catch
+                    {
+                        // пропускаем повреждённый файл
+                    }
+                }
+            }
+
+            var ordered = items.OrderByDescending(i => i.Snapshot.SavedAtUtc).ToList();
+
+            if (ordered.Count == 0)
+            {
+                AppDialogService.ShowInfo("Сохранённых версий пока нет.", "История версий");
                 return;
             }
 
-            var snapshots = Directory
-                .GetFiles(snapshotDirectory, "version-*.json")
-                .OrderByDescending(path => path)
-                .Take(10)
-                .ToList();
-
-            if (snapshots.Count == 0)
+            var dlg = new BoardVersionHistoryDialog(ordered)
             {
-                AppDialogService.ShowInfo("Сохраненных версий пока нет.", "История версий");
-                return;
-            }
+                Owner = Window.GetWindow(this)
+            };
 
-            var versionsPreview = string.Join(
-                Environment.NewLine,
-                snapshots.Select((path, index) => $"{index + 1}. {IOPath.GetFileNameWithoutExtension(path)}"));
-
-            var shouldRestore = AppDialogService.ShowConfirmation(
-                $"Найдено версий: {snapshots.Count}\n\n{versionsPreview}\n\nВосстановить самую свежую версию?",
-                "История версий",
-                "Восстановить",
-                "Закрыть");
-
-            if (!shouldRestore)
+            if (dlg.ShowDialog() != true || dlg.SelectedVersion == null)
             {
                 return;
             }
 
-            var latestSnapshot = await File.ReadAllTextAsync(snapshots[0]);
-            var payload = JsonConvert.DeserializeObject<BoardVersionSnapshot>(latestSnapshot);
-            if (payload?.Shapes == null)
+            var selected = dlg.SelectedVersion;
+            if (!AppDialogService.ShowConfirmation(
+                    "Восстановить выбранную версию? Текущее состояние будет сохранено в стеке отмены.",
+                    "История версий",
+                    "Восстановить",
+                    "Отмена"))
             {
-                AppDialogService.ShowError("Не удалось прочитать сохраненную версию.", "История версий");
                 return;
             }
 
             _undoHistory.Push(CloneShapes(_shapesOnBoard));
-            await RestoreBoardStateAsync(payload.Shapes);
-            AppDialogService.ShowSuccess("Последняя сохраненная версия восстановлена.", "История версий");
+            await RestoreBoardStateAsync(selected.Snapshot.Shapes);
+            AppDialogService.ShowSuccess("Выбранная версия восстановлена.", "История версий");
         }
 
         private async void DeleteBoardMenu_Click(object sender, RoutedEventArgs e)
@@ -2409,22 +2582,25 @@ namespace WhiteSpace.Pages
             }
             else if (shape.Type == "connector")
             {
-                if (string.IsNullOrWhiteSpace(shape.Points))
+                if (ConnectorAttachmentHelper.TryParse(shape.Text, out _))
                 {
-                    return;
+                    ApplyConnectorGeometryToBoardShape(shape);
                 }
 
-                List<Point>? cpoints;
-                try
+                var cpoints = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+                if (cpoints.Count < 2 && !string.IsNullOrWhiteSpace(shape.Points))
                 {
-                    cpoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-                }
-                catch
-                {
-                    return;
+                    try
+                    {
+                        cpoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
+                    }
+                    catch
+                    {
+                        cpoints = new List<Point>();
+                    }
                 }
 
-                if (cpoints == null || cpoints.Count < 2)
+                if (cpoints.Count < 2)
                 {
                     return;
                 }
@@ -2755,7 +2931,7 @@ namespace WhiteSpace.Pages
         /// <summary>Сбрасывает режим правки текста у стикеров при выборе «Руки» (вложенный TextBox не обходится циклом по Children).</summary>
         private void LockStickyNoteEditorsForHandTool()
         {
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -3461,7 +3637,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -3544,7 +3720,7 @@ namespace WhiteSpace.Pages
 
                 if (isSticky && !isStrokeContour)
                 {
-                    if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+                    if (IsBoardEditLockedForCurrentUser())
                     {
                         return;
                     }
@@ -3577,7 +3753,7 @@ namespace WhiteSpace.Pages
                 }
                 else if (isRe && !isStrokeContour)
                 {
-                    if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+                    if (IsBoardEditLockedForCurrentUser())
                     {
                         return;
                     }
@@ -3670,12 +3846,110 @@ namespace WhiteSpace.Pages
                 return false;
             }
 
-            if (!_shapesOnBoard.Any(s => s.Id.ToString() == fe.Uid))
+            var boardShape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == fe.Uid);
+            if (boardShape == null)
+            {
+                return false;
+            }
+
+            if (boardShape.Type == "connector"
+                && ConnectorAttachmentHelper.TryParse(boardShape.Text, out var connAtt)
+                && connAtt.HasAnyAttachment)
             {
                 return false;
             }
 
             return u is Grid or Shape or Image or Polyline;
+        }
+
+        private void ApplyConnectorGeometryToBoardShape(BoardShape connector)
+        {
+            var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(connector, _shapesOnBoard);
+            if (pts.Count < 2)
+            {
+                return;
+            }
+
+            connector.DeserializedPoints = pts;
+            connector.Points = JsonConvert.SerializeObject(pts);
+
+            var minX = pts.Min(p => p.X);
+            var maxX = pts.Max(p => p.X);
+            var minY = pts.Min(p => p.Y);
+            var maxY = pts.Max(p => p.Y);
+
+            connector.X = (minX + maxX) / 2;
+            connector.Y = (minY + maxY) / 2;
+            connector.Width = Math.Max(maxX - minX, 1);
+            connector.Height = Math.Max(maxY - minY, 1);
+        }
+
+        private async Task RefreshConnectorsReferencingShapeAsync(int shapeId)
+        {
+            foreach (var connector in _shapesOnBoard
+                         .Where(s => s.Type == "connector" && ConnectorAttachmentHelper.ReferencesShape(s, shapeId))
+                         .ToList())
+            {
+                ApplyConnectorGeometryToBoardShape(connector);
+                await _supabaseService.SaveShapeAsync(connector);
+                MarkSaved();
+                PushShapeToFirebase(connector);
+
+                if (FindUIElementByUid(connector.Id.ToString()) is Polyline pl)
+                {
+                    var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(connector, _shapesOnBoard);
+                    pl.Points.Clear();
+                    foreach (var p in pts)
+                    {
+                        pl.Points.Add(p);
+                    }
+                }
+            }
+        }
+
+        /// <summary>Только UI: при реалтайм-обновлении фигуры пересчитываем привязанные стрелки без записи в БД.</summary>
+        private void RefreshConnectorVisualsReferencingShapeLocal(int shapeId)
+        {
+            foreach (var connector in _shapesOnBoard.Where(s =>
+                         s.Type == "connector" && ConnectorAttachmentHelper.ReferencesShape(s, shapeId)))
+            {
+                ApplyConnectorGeometryToBoardShape(connector);
+                if (FindUIElementByUid(connector.Id.ToString()) is not Polyline pl)
+                {
+                    continue;
+                }
+
+                var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(connector, _shapesOnBoard);
+                pl.Points.Clear();
+                foreach (var p in pts)
+                {
+                    pl.Points.Add(p);
+                }
+            }
+        }
+
+        private bool TryGetConnectorPortAtViewport(Point viewportPos, out int shapeId, out string side)
+        {
+            shapeId = 0;
+            side = "";
+            var hit = VisualTreeHelper.HitTest(Viewport, viewportPos);
+            DependencyObject? cur = hit?.VisualHit;
+            while (cur != null)
+            {
+                if (cur is Ellipse el && el.Tag is string tag && tag.StartsWith("port:", StringComparison.Ordinal))
+                {
+                    var parts = tag.Split(':');
+                    if (parts.Length >= 3 && int.TryParse(parts[1], out shapeId))
+                    {
+                        side = parts[2];
+                        return true;
+                    }
+                }
+
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+
+            return false;
         }
 
         /// <summary>Поднимается от визуала попадания до контейнера доски с Uid (клик по заливке/контуру фигуры).</summary>
@@ -3765,7 +4039,7 @@ namespace WhiteSpace.Pages
             inner.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             inner.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            var readOnlyUser = string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase);
+            var readOnlyUser = IsBoardEditLockedForCurrentUser();
             var noteTb = new TextBox
             {
                 Text = shape.Text ?? "",
@@ -3927,7 +4201,7 @@ namespace WhiteSpace.Pages
         private async void ShapeBoardContainer_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             if (e.ClickCount != 2 || sender is not Grid grid ||
-                string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+                IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -4212,7 +4486,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -4285,7 +4559,7 @@ namespace WhiteSpace.Pages
 
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
 
-            var readOnly = string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase);
+            var readOnly = IsBoardEditLockedForCurrentUser();
             SelectionToolbarDeleteButton.IsEnabled = !readOnly;
 
             var canEditGeometry = shape != null && (shape.Type == "rectangle" || shape.Type == "ellipse");
@@ -4430,7 +4704,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -4498,7 +4772,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -4540,7 +4814,7 @@ namespace WhiteSpace.Pages
             TryCommitBoardTextFocus(e);
             Viewport.Focus();
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
                 {
@@ -4812,7 +5086,7 @@ namespace WhiteSpace.Pages
                 _isDrawingConnector = false;
                 Viewport.ReleaseMouseCapture();
                 var endWorld = ScreenToWorld(viewportPos);
-                await FinalizeConnectorFromDragAsync(endWorld);
+                await FinalizeConnectorFromDragAsync(endWorld, viewportPos);
                 return;
             }
 
@@ -5019,6 +5293,11 @@ namespace WhiteSpace.Pages
 
                 // Отправляем в Firebase для реалтайм обновлений
                 PushShapeToFirebase(shape);
+
+                if (shape.Type != "connector")
+                {
+                    await RefreshConnectorsReferencingShapeAsync(shape.Id);
+                }
             }
         }
 
@@ -5034,6 +5313,8 @@ namespace WhiteSpace.Pages
 
                 // Отправляем в Firebase для реалтайм обновлений
                 PushShapeToFirebase(shape);
+
+                await RefreshConnectorsReferencingShapeAsync(shape.Id);
             }
         }
 
@@ -5375,7 +5656,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -5455,7 +5736,7 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async Task FinalizeConnectorFromDragAsync(Point endWorld)
+        private async Task FinalizeConnectorFromDragAsync(Point endWorld, Point viewportPos)
         {
             if (_connectorPreviewLine != null)
             {
@@ -5463,13 +5744,55 @@ namespace WhiteSpace.Pages
                 _connectorPreviewLine = null;
             }
 
-            var start = _connectorAnchorWorld;
-            if (Math.Abs(start.X - endWorld.X) < 6 && Math.Abs(start.Y - endWorld.Y) < 6)
+            var attachment = new ConnectorAttachment();
+            var startWorld = _connectorAnchorWorld;
+
+            if (_connectorPortStartShapeId.HasValue && !string.IsNullOrEmpty(_connectorPortStartSide))
+            {
+                attachment.StartShapeId = _connectorPortStartShapeId.Value;
+                attachment.StartSide = _connectorPortStartSide;
+                var startShape = _shapesOnBoard.FirstOrDefault(s => s.Id == attachment.StartShapeId.Value);
+                if (startShape != null)
+                {
+                    startWorld = ConnectorAttachmentHelper.GetAnchorWorldPoint(startShape, attachment.StartSide);
+                }
+            }
+
+            if (TryGetConnectorPortAtViewport(viewportPos, out var endPortShapeId, out var endPortSide))
+            {
+                attachment.EndShapeId = endPortShapeId;
+                attachment.EndSide = endPortSide;
+            }
+
+            _connectorPortStartShapeId = null;
+            _connectorPortStartSide = null;
+
+            var p0 = startWorld;
+            var p1 = endWorld;
+            if (attachment.StartShapeId.HasValue)
+            {
+                var s0 = _shapesOnBoard.FirstOrDefault(x => x.Id == attachment.StartShapeId.Value);
+                if (s0 != null)
+                {
+                    p0 = ConnectorAttachmentHelper.GetAnchorWorldPoint(s0, attachment.StartSide);
+                }
+            }
+
+            if (attachment.EndShapeId.HasValue)
+            {
+                var s1 = _shapesOnBoard.FirstOrDefault(x => x.Id == attachment.EndShapeId.Value);
+                if (s1 != null)
+                {
+                    p1 = ConnectorAttachmentHelper.GetAnchorWorldPoint(s1, attachment.EndSide);
+                }
+            }
+
+            if (Math.Abs(p0.X - p1.X) < 6 && Math.Abs(p0.Y - p1.Y) < 6)
             {
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -5485,14 +5808,14 @@ namespace WhiteSpace.Pages
                     BoardId = _boardId,
                     Type = "connector",
                     Color = _currentStrokeHex,
-                    Points = JsonConvert.SerializeObject(new List<Point> { start, endWorld }),
+                    Points = JsonConvert.SerializeObject(new List<Point> { p0, p1 }),
                     Id = uniqueId,
-                    X = (start.X + endWorld.X) / 2,
-                    Y = (start.Y + endWorld.Y) / 2,
-                    Width = Math.Abs(endWorld.X - start.X),
-                    Height = Math.Abs(endWorld.Y - start.Y),
-                    Text = ""
+                    Text = attachment.HasAnyAttachment
+                        ? ConnectorAttachmentHelper.SerializeForStorage(attachment)
+                        : ""
                 };
+
+                ApplyConnectorGeometryToBoardShape(shape);
 
                 _shapesOnBoard.Add(shape);
                 AddShapeToCanvas(shape, false);
@@ -5702,7 +6025,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
@@ -5767,13 +6090,30 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            if (string.Equals(_myUserRole, "viewer", StringComparison.OrdinalIgnoreCase))
+            if (IsBoardEditLockedForCurrentUser())
             {
                 return;
             }
 
             e.Handled = true;
-            _connectorAnchorWorld = ScreenToWorld(e.GetPosition(Viewport));
+
+            _connectorPortStartShapeId = null;
+            _connectorPortStartSide = null;
+            var tagParts = tag.Split(':');
+            if (tagParts.Length >= 3 && int.TryParse(tagParts[1], out var portShapeId))
+            {
+                _connectorPortStartShapeId = portShapeId;
+                _connectorPortStartSide = tagParts[2];
+                var portShape = _shapesOnBoard.FirstOrDefault(s => s.Id == portShapeId);
+                _connectorAnchorWorld = portShape != null
+                    ? ConnectorAttachmentHelper.GetAnchorWorldPoint(portShape, tagParts[2])
+                    : ScreenToWorld(e.GetPosition(Viewport));
+            }
+            else
+            {
+                _connectorAnchorWorld = ScreenToWorld(e.GetPosition(Viewport));
+            }
+
             _isDrawingConnector = true;
             _connectorPreviewLine = new Polyline
             {
@@ -6191,6 +6531,11 @@ namespace WhiteSpace.Pages
 
             if (_resizeTarget is Polyline polyline)
             {
+                if (shape.Type == "connector")
+                {
+                    shape.Text = "";
+                }
+
                 // Для линии сохраняем все точки
                 shape.DeserializedPoints = new List<Point>(polyline.Points);
                 shape.Points = JsonConvert.SerializeObject(polyline.Points);
@@ -6231,6 +6576,11 @@ namespace WhiteSpace.Pages
 
             // Отправляем в Firebase для реалтайм обновлений
             PushShapeToFirebase(shape);
+
+            if (shape.Type != "connector")
+            {
+                await RefreshConnectorsReferencingShapeAsync(shape.Id);
+            }
         }
 
         private async void Color_Click(object sender, RoutedEventArgs e)
@@ -6446,46 +6796,6 @@ namespace WhiteSpace.Pages
             return fallback;
         }
 
-        /// <summary>
-        /// Разворачивает окно на границы того монитора, где оно сейчас находится (не на все мониторы сразу).
-        /// </summary>
-        private static bool TryPlaceWindowOnContainingMonitorFullscreen(Window window)
-        {
-            try
-            {
-                var hwnd = new WindowInteropHelper(window).EnsureHandle();
-                var hMonitor = PresentationNative.MonitorFromWindow(hwnd, PresentationNative.MonitorDefaultToNearest);
-                var mi = new PresentationNative.MONITORINFO
-                {
-                    cbSize = (uint)Marshal.SizeOf<PresentationNative.MONITORINFO>()
-                };
-
-                if (!PresentationNative.GetMonitorInfo(hMonitor, ref mi))
-                {
-                    return false;
-                }
-
-                var src = HwndSource.FromHwnd(hwnd);
-                if (src?.CompositionTarget == null)
-                {
-                    return false;
-                }
-
-                var fromDevice = src.CompositionTarget.TransformFromDevice;
-                var topLeft = fromDevice.Transform(new Point(mi.rcMonitor.Left, mi.rcMonitor.Top));
-                var bottomRight = fromDevice.Transform(new Point(mi.rcMonitor.Right, mi.rcMonitor.Bottom));
-                window.Left = topLeft.X;
-                window.Top = topLeft.Y;
-                window.Width = Math.Max(1, bottomRight.X - topLeft.X);
-                window.Height = Math.Max(1, bottomRight.Y - topLeft.Y);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
         private sealed class TextShapeStyleJson
         {
             [JsonProperty("fs")]
@@ -6528,41 +6838,6 @@ namespace WhiteSpace.Pages
             tb.BorderBrush = Brushes.Transparent;
             tb.CaretBrush = foreground;
         }
-
-        private static class PresentationNative
-        {
-            public const uint MonitorDefaultToNearest = 2;
-
-            [DllImport("user32.dll")]
-            public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-
-            [DllImport("user32.dll", CharSet = CharSet.Auto)]
-            public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-            [StructLayout(LayoutKind.Sequential)]
-            public struct MONITORINFO
-            {
-                public uint cbSize;
-                public RECT rcMonitor;
-                public RECT rcWork;
-                public uint dwFlags;
-            }
-
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT
-            {
-                public int Left;
-                public int Top;
-                public int Right;
-                public int Bottom;
-            }
-        }
-    }
-
-    public sealed class BoardVersionSnapshot
-    {
-        public DateTime SavedAtUtc { get; set; }
-        public List<BoardShape> Shapes { get; set; } = new();
     }
 
     public sealed class BoardParticipantCard
