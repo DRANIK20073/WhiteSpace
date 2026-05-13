@@ -1,0 +1,112 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ClassDiagram MajorVersion="1" MinorVersion="1">
+  <Class Name="Board">
+    <Position X="0.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAIAAAAAEAAACIAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Models\Board.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="BoardShape">
+    <Position X="2.25" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAABAAAgAAAAAAAAEAAgAAAAAAAAQAAiAAAYAA=</HashCode>
+      <FileName>Models\BoardShape.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="Profile">
+    <Position X="4" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAAACAAAAAAASAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Models\Profile.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.Pages.BoardMember">
+    <Position X="5.75" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAAAAIAAAAAEAAAAAgAgAAAAAAAAAAAAQAAAAA=</HashCode>
+      <FileName>Models\BoardMember.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.Pages.AdminCredential">
+    <Position X="7.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAACAAAAAAAAAAAAECAAAAAAAAAAAAACAAAQAAAAAAA=</HashCode>
+      <FileName>Models\AdminCredential.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.Models.BoardVersionSnapshot">
+    <Position X="9.25" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAEAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Models\BoardVersionSnapshot.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.FirebaseService">
+    <Position X="0.5" Y="2.75" Width="1.5" />
+    <Compartments>
+      <Compartment Name="Methods" Collapsed="true" />
+    </Compartments>
+    <TypeIdentifier>
+      <HashCode>AAAA0AAoQiCAAEAEAADAEAAAEKAIAQBgQADAAACYQgg=</HashCode>
+      <FileName>Services\FirebaseService.cs</FileName>
+    </TypeIdentifier>
+    <Lollipop Position="0.2" />
+  </Class>
+  <Class Name="WhiteSpace.FirebaseShapesSnapshot">
+    <Position X="2.25" Y="3.75" Width="1.5" />
+    <Compartments>
+      <Compartment Name="Methods" Collapsed="true" />
+    </Compartments>
+    <TypeIdentifier>
+      <HashCode>AAAEBAAAAAAAAAAAAAAAAAAAAgAAAAAAABAAAAAAAAA=</HashCode>
+      <FileName>Services\FirebaseService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.FirebaseBoardMember">
+    <Position X="4" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AEAAAAAAAAIAAAAAEAAAAAgAAACAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Services\FirebaseService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.FirebaseCursorState">
+    <Position X="5.75" Y="2.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>EAAAEAAAAAAAEAAAAAAAAAgAAAAAAAAAAAAAAAAAYAA=</HashCode>
+      <FileName>Services\FirebaseService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.FirebasePresentationState">
+    <Position X="7.5" Y="2.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAA=</HashCode>
+      <FileName>Services\FirebaseService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="WhiteSpace.FirebaseChatMessage">
+    <Position X="9.25" Y="2" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AQACAAAAAAAAAAAAAAAAAAgAAAABAAAAAQAACAAAAAA=</HashCode>
+      <FileName>Services\FirebaseService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="SupabaseService">
+    <Position X="11" Y="0.5" Width="1.5" />
+    <Compartments>
+      <Compartment Name="Methods" Collapsed="true" />
+    </Compartments>
+    <NestedTypes>
+      <Class Name="SupabaseService.PasswordResetPayload" Collapsed="true">
+        <TypeIdentifier>
+          <NewMemberFileName>Services\Core\SupabaseService.cs</NewMemberFileName>
+        </TypeIdentifier>
+      </Class>
+    </NestedTypes>
+    <TypeIdentifier>
+      <HashCode>ACAA0KiAMRAAKEGTAHGAEA+CJCAwRCgZBxEAAICBAGQ=</HashCode>
+      <FileName>Services\Core\SupabaseService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Font Name="Segoe UI" Size="9" />
+</ClassDiagram>
