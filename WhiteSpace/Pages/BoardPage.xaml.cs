@@ -21,6 +21,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -56,8 +57,8 @@ namespace WhiteSpace.Pages
         private IDisposable? _membersSubscription;
         private IDisposable? _cursorsSubscription;
         private IDisposable? _chatSubscription;
-        private enum ToolMode { Hand, Pen, Shape, Text, StickyNote, Arrow }
-        private ToolMode _tool = ToolMode.Hand;
+        private enum ToolMode { Hand, Select, Pen, Marker, Eraser, Shape, Text, StickyNote, Comment, Arrow }
+        private ToolMode _tool = ToolMode.Select;
 
         private bool _isPlacingSticky;
         private Point _stickyPlacementStartWorld;
@@ -80,9 +81,16 @@ namespace WhiteSpace.Pages
         private Point _panStartScreen;
         private double _panStartX, _panStartY;
 
-        // Рисование (карандаш)
+        // Рисование (карандаш / маркер)
         private bool _isDrawing;
         private Polyline _currentStroke;
+        private bool _isErasing;
+        private Polyline? _eraserTrailLine;
+        private const double EraserHitRadius = 20;
+
+        // Комментарий на доске
+        private Border? _commentComposer;
+        private Point _pendingCommentWorld;
 
         // Выбор цвета: заливка и контур независимы (пресеты и «без выделения»).
         private Brush _currentBrush = Brushes.Black;
@@ -137,12 +145,32 @@ namespace WhiteSpace.Pages
         private UIElement _selectedElement;
         private Point _dragOffsetWorld;
         private Point _dragStartWorld;
+        private Point _dragLastWorld;
+
+        private bool _isMarqueeSelecting;
+        private Point _marqueeStartWorld;
+        private Rectangle? _marqueeRect;
+        private readonly List<UIElement> _multiSelectedElements = new();
+        private sealed class MultiDragSnapshot
+        {
+            public Point Anchor { get; init; }
+            public List<Point>? PolylinePoints { get; init; }
+            public required UIElement Element { get; init; }
+        }
+
+        private readonly Dictionary<int, MultiDragSnapshot> _multiDragSnapshots = new();
+        private Point _multiDragStartWorld;
         private bool _wasTextEditingEnabled;
 
         // Словарь для хранения ручек изменения размера
         private Dictionary<string, Rectangle> _resizeHandles = new Dictionary<string, Rectangle>();
 
         private readonly List<FrameworkElement> _anchorPortElements = new();
+        private readonly List<Ellipse> _connectorEndpointElements = new();
+        private readonly List<Ellipse> _snapHighlightPortElements = new();
+        private bool _isDraggingConnectorEndpoint;
+        private string? _connectorEndpointDragWhich;
+        private int _connectorEndpointDragShapeId;
 
         private bool _isDrawingConnector;
         private Point _connectorAnchorWorld;
@@ -275,7 +303,7 @@ namespace WhiteSpace.Pages
             CenterViewport();
 
             // Устанавливаем начальный инструмент
-            SetTool(ToolMode.Hand);
+            SetTool(ToolMode.Select);
 
             await InitCursorIdentityAsync();
 
@@ -300,6 +328,8 @@ namespace WhiteSpace.Pages
             if (_hostWindow != null)
             {
                 _hostWindow.PreviewMouseLeftButtonUp += HostWindow_PreviewMouseLeftButtonUp;
+                _hostWindow.PreviewMouseDown += HostWindow_PreviewMouseDown;
+                _hostWindow.PreviewKeyDown += HostWindow_PreviewKeyDown;
             }
         }
 
@@ -361,6 +391,7 @@ namespace WhiteSpace.Pages
 
         private void RenderCurrentBoardState()
         {
+            RemoveEraserTrail();
             RemoveResizeFrame();
             RemovePreviewShape();
 
@@ -395,10 +426,15 @@ namespace WhiteSpace.Pages
             _isRestoringHistory = true;
             try
             {
-                _shapesOnBoard = CloneShapes(snapshot);
+                var newShapes = CloneShapes(snapshot);
+
+                _shapesOnBoard = newShapes;
                 RenderCurrentBoardState();
+                RemoveResizeFrame();
+                ClearMultiSelection();
+
                 await _supabaseService.ReplaceBoardShapesAsync(_boardId, _shapesOnBoard);
-                await _firebaseService.ReplaceBoardShapesAsync(_boardId.ToString(), _shapesOnBoard);
+                await _firebaseService.ClearAndReplaceBoardShapesAsync(_boardId.ToString(), _shapesOnBoard);
 
                 MarkSaved();
             }
@@ -426,6 +462,8 @@ namespace WhiteSpace.Pages
             if (_hostWindow != null)
             {
                 _hostWindow.PreviewMouseLeftButtonUp -= HostWindow_PreviewMouseLeftButtonUp;
+                _hostWindow.PreviewMouseDown -= HostWindow_PreviewMouseDown;
+                _hostWindow.PreviewKeyDown -= HostWindow_PreviewKeyDown;
                 _hostWindow = null;
             }
 
@@ -608,10 +646,20 @@ namespace WhiteSpace.Pages
 
         private void UpdatePresentationMenuForRole()
         {
+            var ownerOrAdmin = _isAdminSession || IsBoardOwnerRole();
             if (PresentationMenuItem != null)
             {
-                PresentationMenuItem.Visibility =
-                    (_isAdminSession || IsBoardOwnerRole()) ? Visibility.Visible : Visibility.Collapsed;
+                PresentationMenuItem.Visibility = ownerOrAdmin ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            if (SaveVersionMenuItem != null)
+            {
+                SaveVersionMenuItem.Visibility = ownerOrAdmin ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            if (VersionHistoryMenuItem != null)
+            {
+                VersionHistoryMenuItem.Visibility = ownerOrAdmin ? Visibility.Visible : Visibility.Collapsed;
             }
 
             UpdatePresentationMenuHeader();
@@ -638,8 +686,7 @@ namespace WhiteSpace.Pages
                 _shapesSnapshotSubscription?.Dispose();
                 _shapesSubscription = _firebaseService
                     .GetShapesObservable(_boardId.ToString())
-                    .Where(shape => shape != null)
-                    .Subscribe(async shape =>
+                    .Subscribe(async change =>
                     {
                         if (_isLoadingShapes)
                         {
@@ -648,7 +695,20 @@ namespace WhiteSpace.Pages
 
                         await Application.Current.Dispatcher.InvokeAsync(() =>
                         {
-                            UpdateOrAddShapeFromFirebase(shape);
+                            if (change.IsDelete)
+                            {
+                                if (change.ShapeId > 0)
+                                {
+                                    RemoveShapeFromBoardLocal(change.ShapeId);
+                                }
+
+                                return;
+                            }
+
+                            if (change.Shape != null)
+                            {
+                                UpdateOrAddShapeFromFirebase(change.Shape);
+                            }
                         });
                     });
 
@@ -663,7 +723,7 @@ namespace WhiteSpace.Pages
 
                         await Application.Current.Dispatcher.InvokeAsync(() =>
                         {
-                            RemoveShapesMissingInSnapshot(snapshot.Shapes);
+                            ApplyRemoteShapesSnapshot(snapshot.Shapes);
                         });
                     });
             }
@@ -673,7 +733,37 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private void RemoveShapesMissingInSnapshot(List<BoardShape> shapes)
+        private void ApplyRemoteShapesSnapshot(List<BoardShape>? shapes)
+        {
+            var incoming = (shapes ?? new List<BoardShape>())
+                .Where(shape => shape != null && shape.Id > 0)
+                .ToList();
+
+            PurgeOrphanBoardVisuals(incoming.Select(shape => shape.Id));
+            RemoveShapesMissingInSnapshot(incoming);
+
+            foreach (var shape in incoming)
+            {
+                UpdateOrAddShapeFromFirebase(shape);
+            }
+        }
+
+        private void PurgeOrphanBoardVisuals(IEnumerable<int> validShapeIds)
+        {
+            var valid = validShapeIds.ToHashSet();
+            foreach (var child in BoardCanvas.Children.OfType<FrameworkElement>()
+                         .Where(c => !string.IsNullOrEmpty(c.Uid)).ToList())
+            {
+                if (int.TryParse(child.Uid, out var id) && !valid.Contains(id))
+                {
+                    BoardCanvas.Children.Remove(child);
+                }
+            }
+
+            _shapesOnBoard.RemoveAll(shape => !valid.Contains(shape.Id));
+        }
+
+        private void RemoveShapesMissingInSnapshot(List<BoardShape>? shapes)
         {
             var incomingShapes = (shapes ?? new List<BoardShape>())
                 .Where(shape => shape != null && shape.Id > 0)
@@ -686,18 +776,46 @@ namespace WhiteSpace.Pages
 
             foreach (var removedId in removedIds)
             {
-                var removedUi = FindUIElementByUid(removedId.ToString());
-                if (removedUi != null)
-                {
-                    BoardCanvas.Children.Remove(removedUi);
-                }
-
-                _shapesOnBoard.RemoveAll(shape => shape.Id == removedId);
+                RemoveShapeFromBoardLocal(removedId);
             }
 
             if (_resizeTarget != null && !_shapesOnBoard.Any(shape => shape.Id.ToString() == _resizeTarget.Uid))
             {
                 RemoveResizeFrame();
+            }
+
+            if (_multiSelectedElements.Count > 0)
+            {
+                _multiSelectedElements.RemoveAll(el =>
+                    el is FrameworkElement fe &&
+                    !_shapesOnBoard.Any(s => s.Id.ToString() == fe.Uid));
+                if (_multiSelectedElements.Count == 0)
+                {
+                    RemoveResizeFrame();
+                }
+            }
+        }
+
+        private void RemoveShapeFromBoardLocal(int shapeId)
+        {
+            var uid = shapeId.ToString();
+            foreach (var child in BoardCanvas.Children.OfType<FrameworkElement>().Where(c => c.Uid == uid).ToList())
+            {
+                BoardCanvas.Children.Remove(child);
+            }
+
+            _shapesOnBoard.RemoveAll(shape => shape.Id == shapeId);
+
+            if (_resizeTarget is FrameworkElement fe && fe.Uid == uid)
+            {
+                RemoveResizeFrame();
+            }
+
+            _multiSelectedElements.RemoveAll(el =>
+                el is FrameworkElement mfe && mfe.Uid == uid);
+            if (_multiSelectedElements.Count == 0 && _resizeTarget == null)
+            {
+                HideSelectionToolbar();
             }
         }
 
@@ -728,7 +846,7 @@ namespace WhiteSpace.Pages
                 existingShape.Text = shape.Text;
                 existingShape.Points = shape.Points;
 
-                if (shape.Type is "line" or "connector" && !string.IsNullOrEmpty(shape.Points))
+                if (shape.Type is "line" or "marker" or "connector" && !string.IsNullOrEmpty(shape.Points))
                 {
                     existingShape.DeserializedPoints = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
                 }
@@ -764,13 +882,19 @@ namespace WhiteSpace.Pages
 
                     UpdateUIElementFromShape(uiElement, existingShape);
 
-                    if (shape.Type == "line" && uiElement is Polyline targetPolyline)
+                    if (shape.Type is "line" or "marker" && uiElement is Polyline targetPolyline)
                     {
                         targetPolyline.Points.Clear();
                         foreach (var point in existingShape.DeserializedPoints)
                         {
                             targetPolyline.Points.Add(point);
                         }
+
+                        ApplyStrokeStyleToPolyline(targetPolyline, existingShape, GetBrushFromColor(existingShape.Color));
+                    }
+                    else if (shape.Type == "comment" && uiElement is Grid commentGrid)
+                    {
+                        SyncCommentVisual(commentGrid, existingShape);
                     }
                 }
                 else
@@ -835,6 +959,10 @@ namespace WhiteSpace.Pages
             {
                 polyline.Stroke = brush;
             }
+            else if (element is Canvas canvas && shape.Type == "connector")
+            {
+                ConnectorVisualHelper.ApplyStyle(canvas, shape, brush, ConnectorStrokeThickness);
+            }
             else if (element is TextBox textBox)
             {
                 textBox.Foreground = brush;
@@ -851,7 +979,13 @@ namespace WhiteSpace.Pages
             }
 
             // Обновляем позицию и размеры
-            if (shape.Type == "text")
+            if (shape.Type == "comment" && element is Grid commentGrid)
+            {
+                Canvas.SetLeft(element, shape.X);
+                Canvas.SetTop(element, shape.Y);
+                SyncCommentVisual(commentGrid, shape);
+            }
+            else if (shape.Type == "text")
             {
                 Canvas.SetLeft(element, shape.X);
                 Canvas.SetTop(element, shape.Y);
@@ -862,25 +996,28 @@ namespace WhiteSpace.Pages
                     tb.Height = shape.Height;
                 }
             }
-            else if (shape.Type == "line" || shape.Type == "connector")
+            else if (shape.Type is "line" or "marker" or "connector")
             {
-                if (element is Polyline targetPolyline)
+                List<Point>? points;
+                if (shape.Type == "connector")
                 {
-                    List<Point>? points;
-                    if (shape.Type == "connector")
+                    points = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+                    if (points.Count < 2 && !string.IsNullOrWhiteSpace(shape.Points))
                     {
-                        points = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
-                        if (points.Count < 2 && !string.IsNullOrWhiteSpace(shape.Points))
-                        {
-                            points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
-                        }
+                        points = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
                     }
-                    else
+
+                    if (FindUIElementByUid(shape.Id.ToString()) is { } connUi && points is { Count: > 0 })
                     {
-                        points = string.IsNullOrEmpty(shape.Points)
-                            ? new List<Point>()
-                            : JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                        ConnectorVisualHelper.UpdatePoints(connUi, shape, points, brush, ConnectorStrokeThickness);
                     }
+                }
+                else if (element is Polyline targetPolyline)
+                {
+                    ApplyStrokeStyleToPolyline(targetPolyline, shape, brush);
+                    points = string.IsNullOrEmpty(shape.Points)
+                        ? new List<Point>()
+                        : JsonConvert.DeserializeObject<List<Point>>(shape.Points);
 
                     if (points != null && points.Count > 0)
                     {
@@ -1655,6 +1792,11 @@ namespace WhiteSpace.Pages
         private void DisableEditingTools()
         {
             PenButton.IsEnabled = false;
+            if (SelectButton != null) SelectButton.IsEnabled = false;
+            if (ArrowToolButton != null) ArrowToolButton.IsEnabled = false;
+            if (MarkerButton != null) MarkerButton.IsEnabled = false;
+            if (EraserButton != null) EraserButton.IsEnabled = false;
+            if (CommentButton != null) CommentButton.IsEnabled = false;
             ShapesToolButton.IsEnabled = false;
             TextButton.IsEnabled = false;
             StickyNoteButton.IsEnabled = false;
@@ -1668,6 +1810,11 @@ namespace WhiteSpace.Pages
         private void EnableEditingTools()
         {
             PenButton.IsEnabled = true;
+            if (SelectButton != null) SelectButton.IsEnabled = true;
+            if (ArrowToolButton != null) ArrowToolButton.IsEnabled = true;
+            if (MarkerButton != null) MarkerButton.IsEnabled = true;
+            if (EraserButton != null) EraserButton.IsEnabled = true;
+            if (CommentButton != null) CommentButton.IsEnabled = true;
             ShapesToolButton.IsEnabled = true;
             TextButton.IsEnabled = true;
             StickyNoteButton.IsEnabled = true;
@@ -1796,12 +1943,6 @@ namespace WhiteSpace.Pages
         private void Help_Click(object sender, RoutedEventArgs e) =>
             HelpService.Show(Window.GetWindow(this), "board");
 
-        private void SaveBoard_Click(object sender, RoutedEventArgs e)
-        {
-            MarkSaved();
-            AppDialogService.ShowSuccess("Все изменения уже сохраняются автоматически.", "Сохранение");
-        }
-
         private void BoardMenuButton_Click(object sender, RoutedEventArgs e)
         {
             if (BoardMenuButton.ContextMenu != null)
@@ -1843,25 +1984,24 @@ namespace WhiteSpace.Pages
 
         private async void SaveVersion_Click(object sender, RoutedEventArgs e)
         {
+            if (!_isAdminSession && !IsBoardOwnerRole())
+            {
+                AppDialogService.ShowWarning("Сохранять версии доски может только владелец.", "Версия доски");
+                return;
+            }
+
             if (_shapesOnBoard.Count == 0)
             {
                 AppDialogService.ShowInfo("На доске пока нет объектов для сохранения версии.", "Версия доски");
                 return;
             }
 
-            var snapshotDirectory = GetSnapshotDirectory();
-            Directory.CreateDirectory(snapshotDirectory);
-
             var payload = new BoardVersionSnapshot
             {
+                Name = $"Версия от {DateTime.UtcNow:dd MMMM yyyy, HH:mm}",
                 SavedAtUtc = DateTime.UtcNow,
                 Shapes = CloneShapes(_shapesOnBoard)
             };
-
-            var fileName = $"version-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json";
-            var filePath = IOPath.Combine(snapshotDirectory, fileName);
-
-            await File.WriteAllTextAsync(filePath, JsonConvert.SerializeObject(payload, Formatting.Indented));
 
             try
             {
@@ -1874,13 +2014,69 @@ namespace WhiteSpace.Pages
             }
 
             MarkSaved();
-            AppDialogService.ShowSuccess("Версия сохранена локально и в облаке для участников доски.", "Версия доски");
+            AppDialogService.ShowSuccess("Версия сохранена в облаке для всех участников доски.", "Версия доски");
         }
 
         private async void VersionHistory_Click(object sender, RoutedEventArgs e)
         {
-            var items = new List<BoardVersionHistoryDialog.VersionListItem>();
+            if (!_isAdminSession && !IsBoardOwnerRole())
+            {
+                AppDialogService.ShowWarning("Загружать версии доски может только владелец.", "История версий");
+                return;
+            }
 
+            var ordered = await LoadCloudVersionItemsAsync();
+
+            if (ordered.Count == 0)
+            {
+                AppDialogService.ShowInfo("Сохранённых облачных версий пока нет.", "История версий");
+                return;
+            }
+
+            while (true)
+            {
+                var dlg = new BoardVersionHistoryDialog(ordered)
+                {
+                    Owner = Window.GetWindow(this)
+                };
+
+                if (dlg.ShowDialog() == true && dlg.SelectedVersion != null)
+                {
+                    if (!AppDialogService.ShowConfirmation(
+                            "Восстановить выбранную версию? Текущее состояние будет сохранено в стеке отмены, лишние объекты удалятся у всех участников.",
+                            "История версий",
+                            "Восстановить",
+                            "Отмена"))
+                    {
+                        return;
+                    }
+
+                    _undoHistory.Push(CloneShapes(_shapesOnBoard));
+                    await RestoreBoardStateAsync(dlg.SelectedVersion.Snapshot.Shapes);
+                    AppDialogService.ShowSuccess("Выбранная версия восстановлена для всех участников.", "История версий");
+                    return;
+                }
+
+                if (dlg.DeleteRequested && dlg.SelectedVersion != null)
+                {
+                    await _firebaseService.DeleteBoardVersionAsync(_boardId.ToString(), dlg.SelectedVersion.Key);
+                    ordered.RemoveAll(i => i.Key == dlg.SelectedVersion.Key);
+                    if (ordered.Count == 0)
+                    {
+                        AppDialogService.ShowInfo("Все версии удалены.", "История версий");
+                        return;
+                    }
+
+                    continue;
+                }
+
+                return;
+            }
+        }
+
+        private async Task<List<BoardVersionHistoryDialog.VersionListItem>> LoadCloudVersionItemsAsync()
+        {
+            var items = new List<BoardVersionHistoryDialog.VersionListItem>();
             try
             {
                 var remote = await _firebaseService.GetBoardVersionSnapshotsAsync(_boardId.ToString());
@@ -1895,10 +2091,8 @@ namespace WhiteSpace.Pages
                     items.Add(new BoardVersionHistoryDialog.VersionListItem
                     {
                         Key = entry.Key,
-                        Source = "cloud",
                         Snapshot = snap,
-                        DisplayLabel =
-                            $"Облако · {snap.SavedAtUtc.ToLocalTime():g} · {entry.Key}"
+                        DisplayLabel = snap.GetDisplayName()
                     });
                 }
             }
@@ -1907,68 +2101,7 @@ namespace WhiteSpace.Pages
                 System.Diagnostics.Debug.WriteLine($"Версии Firebase: {ex.Message}");
             }
 
-            var snapshotDirectory = GetSnapshotDirectory();
-            if (Directory.Exists(snapshotDirectory))
-            {
-                foreach (var path in Directory.GetFiles(snapshotDirectory, "version-*.json")
-                             .OrderByDescending(path => path))
-                {
-                    try
-                    {
-                        var json = await File.ReadAllTextAsync(path);
-                        var payload = JsonConvert.DeserializeObject<BoardVersionSnapshot>(json);
-                        if (payload?.Shapes == null)
-                        {
-                            continue;
-                        }
-
-                        items.Add(new BoardVersionHistoryDialog.VersionListItem
-                        {
-                            Key = path,
-                            Source = "local",
-                            Snapshot = payload,
-                            DisplayLabel =
-                                $"На устройстве · {payload.SavedAtUtc.ToLocalTime():g} · {IOPath.GetFileName(path)}"
-                        });
-                    }
-                    catch
-                    {
-                        // пропускаем повреждённый файл
-                    }
-                }
-            }
-
-            var ordered = items.OrderByDescending(i => i.Snapshot.SavedAtUtc).ToList();
-
-            if (ordered.Count == 0)
-            {
-                AppDialogService.ShowInfo("Сохранённых версий пока нет.", "История версий");
-                return;
-            }
-
-            var dlg = new BoardVersionHistoryDialog(ordered)
-            {
-                Owner = Window.GetWindow(this)
-            };
-
-            if (dlg.ShowDialog() != true || dlg.SelectedVersion == null)
-            {
-                return;
-            }
-
-            var selected = dlg.SelectedVersion;
-            if (!AppDialogService.ShowConfirmation(
-                    "Восстановить выбранную версию? Текущее состояние будет сохранено в стеке отмены.",
-                    "История версий",
-                    "Восстановить",
-                    "Отмена"))
-            {
-                return;
-            }
-
-            _undoHistory.Push(CloneShapes(_shapesOnBoard));
-            await RestoreBoardStateAsync(selected.Snapshot.Shapes);
-            AppDialogService.ShowSuccess("Выбранная версия восстановлена.", "История версий");
+            return items.OrderByDescending(i => i.Snapshot.SavedAtUtc).ToList();
         }
 
         private async void DeleteBoardMenu_Click(object sender, RoutedEventArgs e)
@@ -2464,7 +2597,7 @@ namespace WhiteSpace.Pages
 
             Brush brush = GetBrushFromColor(shape.Color);
 
-            if (shape.Type == "line")
+            if (shape.Type is "line" or "marker")
             {
                 if (string.IsNullOrWhiteSpace(shape.Points))
                 {
@@ -2488,13 +2621,12 @@ namespace WhiteSpace.Pages
 
                 var polyline = new Polyline
                 {
-                    Stroke = brush,
-                    StrokeThickness = 2,
                     StrokeLineJoin = PenLineJoin.Round,
                     StrokeStartLineCap = PenLineCap.Round,
                     StrokeEndLineCap = PenLineCap.Round,
                     Uid = shape.Id.ToString()
                 };
+                ApplyStrokeStyleToPolyline(polyline, shape, brush);
 
                 foreach (var point in points)
                 {
@@ -2502,6 +2634,17 @@ namespace WhiteSpace.Pages
                 }
 
                 BoardCanvas.Children.Add(polyline);
+                if (addToBoardState)
+                {
+                    _shapesOnBoard.Add(shape);
+                }
+            }
+            else if (shape.Type == "comment")
+            {
+                var commentVisual = CreateCommentBoardContainer(shape);
+                Canvas.SetLeft(commentVisual, shape.X);
+                Canvas.SetTop(commentVisual, shape.Y);
+                BoardCanvas.Children.Add(commentVisual);
                 if (addToBoardState)
                 {
                     _shapesOnBoard.Add(shape);
@@ -2605,24 +2748,7 @@ namespace WhiteSpace.Pages
                     return;
                 }
 
-                var conn = new Polyline
-                {
-                    Stroke = brush,
-                    StrokeThickness = ConnectorStrokeThickness,
-                    StrokeLineJoin = PenLineJoin.Round,
-                    StrokeStartLineCap = PenLineCap.Round,
-                    StrokeEndLineCap = PenLineCap.Triangle,
-                    StrokeMiterLimit = 1,
-                    Fill = Brushes.Transparent,
-                    SnapsToDevicePixels = true,
-                    Uid = shape.Id.ToString()
-                };
-
-                foreach (var point in cpoints)
-                {
-                    conn.Points.Add(point);
-                }
-
+                var conn = ConnectorVisualHelper.Build(shape, cpoints, brush, ConnectorStrokeThickness);
                 BoardCanvas.Children.Add(conn);
                 if (addToBoardState)
                 {
@@ -2763,10 +2889,11 @@ namespace WhiteSpace.Pages
             var textBox = sender as TextBox;
             if (textBox == null) return;
 
-            if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
+            if (_tool == ToolMode.Select && e.LeftButton == MouseButtonState.Pressed)
             {
                 var world = ScreenToWorld(e.GetPosition(Viewport));
                 _dragStartWorld = world;
+                _dragLastWorld = world;
                 CaptureBoardStateForUndo();
 
                 _wasTextEditingEnabled = !textBox.IsReadOnly;
@@ -2825,7 +2952,12 @@ namespace WhiteSpace.Pages
 
         // Инструменты
         private void Hand_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Hand);
+        private void Select_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Select);
+        private void ArrowTool_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Arrow);
         private void Pen_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Pen);
+        private void Marker_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Marker);
+        private void Eraser_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Eraser);
+        private void Comment_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Comment);
         private void Text_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.Text);
 
         private void StickyNote_Click(object sender, RoutedEventArgs e) => SetTool(ToolMode.StickyNote);
@@ -2860,17 +2992,21 @@ namespace WhiteSpace.Pages
         private void SetTool(ToolMode tool)
         {
             _tool = tool;
-            ColorPanel.Visibility = Visibility.Visible;
+            ColorPanel.Visibility = tool is ToolMode.Eraser or ToolMode.Comment
+                ? Visibility.Collapsed
+                : Visibility.Visible;
 
             _isDrawing = false;
             _currentStroke = null;
+            _isErasing = false;
             _isPanning = false;
             _isDraggingElement = false;
             _dragElement = null;
             _isPlacingRectEllipse = false;
             _isPlacingSticky = false;
+            HideCommentComposer();
 
-            if (tool != ToolMode.Hand && tool != ToolMode.Arrow)
+            if (tool != ToolMode.Select && tool != ToolMode.Arrow)
             {
                 RemoveResizeFrame();
             }
@@ -2891,7 +3027,11 @@ namespace WhiteSpace.Pages
             Viewport.Cursor = _tool switch
             {
                 ToolMode.Hand => Cursors.Hand,
+                ToolMode.Select => Cursors.Arrow,
                 ToolMode.Pen => Cursors.Pen,
+                ToolMode.Marker => Cursors.Pen,
+                ToolMode.Eraser => Cursors.SizeAll,
+                ToolMode.Comment => Cursors.Cross,
                 ToolMode.Text => Cursors.IBeam,
                 ToolMode.Arrow => Cursors.Cross,
                 _ => Cursors.Cross
@@ -2901,10 +3041,10 @@ namespace WhiteSpace.Pages
             {
                 if (child is TextBox textBox)
                 {
-                    if (_tool == ToolMode.Hand)
+                    if (_tool is ToolMode.Hand or ToolMode.Select)
                     {
                         textBox.IsReadOnly = true;
-                        textBox.Cursor = Cursors.Hand;
+                        textBox.Cursor = _tool == ToolMode.Hand ? Cursors.Hand : Cursors.Arrow;
                         textBox.Background = Brushes.Transparent;
                     }
                     else if (_tool == ToolMode.Text)
@@ -2922,7 +3062,7 @@ namespace WhiteSpace.Pages
                 }
             }
 
-            if (_tool == ToolMode.Hand)
+            if (_tool is ToolMode.Hand or ToolMode.Select)
             {
                 LockStickyNoteEditorsForHandTool();
             }
@@ -3026,19 +3166,29 @@ namespace WhiteSpace.Pages
 
         private void UpdateSelectionToolbarPosition()
         {
-            if (SelectionToolbarPanel == null || SelectionToolbarPanel.Visibility != Visibility.Visible || _resizeBorder == null)
+            if (SelectionToolbarPanel == null || SelectionToolbarPanel.Visibility != Visibility.Visible)
             {
                 return;
             }
 
-            double left = Canvas.GetLeft(_resizeBorder);
-            double top = Canvas.GetTop(_resizeBorder);
-            double w = _resizeBorder.Width;
-            double h = _resizeBorder.Height;
-            if (double.IsNaN(left)) left = 0;
-            if (double.IsNaN(top)) top = 0;
+            if (!TryGetSelectionBounds(out var left, out var top, out var w, out var h))
+            {
+                return;
+            }
 
-            var worldTopCenter = new Point(left + w / 2, top);
+            Point worldTopCenter;
+            var shape = _resizeTarget is FrameworkElement fe
+                ? _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == fe.Uid)
+                : null;
+            if (shape?.Type == "comment")
+            {
+                worldTopCenter = new Point(shape.X + 20, shape.Y);
+            }
+            else
+            {
+                worldTopCenter = new Point(left + w / 2, top);
+            }
+
             var vp = WorldToViewport(worldTopCenter);
 
             SelectionToolbarPanel.UpdateLayout();
@@ -3839,9 +3989,29 @@ namespace WhiteSpace.Pages
             return null;
         }
 
-        private bool IsBoardDraggableElement(UIElement? u)
+        private bool IsBoardSelectableElement(UIElement? u)
         {
             if (u is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid) || u == _previewShape)
+            {
+                return false;
+            }
+
+            if (!_shapesOnBoard.Any(s => s.Id.ToString() == fe.Uid))
+            {
+                return false;
+            }
+
+            return u is Grid or Shape or Image or Polyline or Canvas;
+        }
+
+        private bool IsBoardDraggableElement(UIElement? u)
+        {
+            if (!IsBoardSelectableElement(u))
+            {
+                return false;
+            }
+
+            if (u is not FrameworkElement fe)
             {
                 return false;
             }
@@ -3852,14 +4022,32 @@ namespace WhiteSpace.Pages
                 return false;
             }
 
-            if (boardShape.Type == "connector"
-                && ConnectorAttachmentHelper.TryParse(boardShape.Text, out var connAtt)
-                && connAtt.HasAnyAttachment)
+            if (boardShape.Type == "comment")
             {
-                return false;
+                return true;
             }
 
-            return u is Grid or Shape or Image or Polyline;
+            return u is Grid or Shape or Image or Polyline or Canvas;
+        }
+
+        private void DetachConnectorForFreeDrag(BoardShape connector)
+        {
+            if (!ConnectorAttachmentHelper.TryDeserialize(connector.Text, out var att) || !att.HasAnyAttachment)
+            {
+                return;
+            }
+
+            var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(connector, _shapesOnBoard);
+            att.StartShapeId = null;
+            att.StartSide = null;
+            att.EndShapeId = null;
+            att.EndSide = null;
+            connector.Text = ConnectorAttachmentHelper.SerializeForStorage(att);
+            if (pts.Count >= 2)
+            {
+                connector.DeserializedPoints = pts;
+                connector.Points = JsonConvert.SerializeObject(pts);
+            }
         }
 
         private void ApplyConnectorGeometryToBoardShape(BoardShape connector)
@@ -3895,14 +4083,11 @@ namespace WhiteSpace.Pages
                 MarkSaved();
                 PushShapeToFirebase(connector);
 
-                if (FindUIElementByUid(connector.Id.ToString()) is Polyline pl)
+                if (FindUIElementByUid(connector.Id.ToString()) is { } ui)
                 {
                     var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(connector, _shapesOnBoard);
-                    pl.Points.Clear();
-                    foreach (var p in pts)
-                    {
-                        pl.Points.Add(p);
-                    }
+                    ConnectorVisualHelper.UpdatePoints(
+                        ui, connector, pts, GetBrushFromColor(connector.Color), ConnectorStrokeThickness);
                 }
             }
         }
@@ -3914,17 +4099,14 @@ namespace WhiteSpace.Pages
                          s.Type == "connector" && ConnectorAttachmentHelper.ReferencesShape(s, shapeId)))
             {
                 ApplyConnectorGeometryToBoardShape(connector);
-                if (FindUIElementByUid(connector.Id.ToString()) is not Polyline pl)
+                if (FindUIElementByUid(connector.Id.ToString()) is not { } ui)
                 {
                     continue;
                 }
 
                 var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(connector, _shapesOnBoard);
-                pl.Points.Clear();
-                foreach (var p in pts)
-                {
-                    pl.Points.Add(p);
-                }
+                ConnectorVisualHelper.UpdatePoints(
+                    ui, connector, pts, GetBrushFromColor(connector.Color), ConnectorStrokeThickness);
             }
         }
 
@@ -3967,7 +4149,7 @@ namespace WhiteSpace.Pages
                     continue;
                 }
 
-                if (cur is Grid or Image or Polyline or TextBox)
+                if (cur is Grid or Image or Polyline or TextBox or Canvas)
                 {
                     return fe;
                 }
@@ -4481,7 +4663,7 @@ namespace WhiteSpace.Pages
             }
 
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
-            if (shape == null || shape.Type is not ("rectangle" or "ellipse"))
+            if (shape == null)
             {
                 return;
             }
@@ -4492,8 +4674,38 @@ namespace WhiteSpace.Pages
             }
 
             var normalized = dashTag.ToLowerInvariant();
-            var app = RectEllipseAppearance.Parse(shape);
             var effective = normalized == "solid" ? null : normalized;
+
+            if (shape.Type == "connector")
+            {
+                if (!ConnectorAttachmentHelper.TryDeserialize(shape.Text, out var connAtt))
+                {
+                    connAtt = new ConnectorAttachment();
+                }
+
+                if (string.Equals(connAtt.StrokeDash ?? "", effective ?? "", StringComparison.Ordinal))
+                {
+                    UpdateStrokeStyleButtonStyles(effective ?? "solid");
+                    return;
+                }
+
+                CaptureBoardStateForUndo();
+                connAtt.StrokeDash = effective;
+                shape.Text = ConnectorAttachmentHelper.SerializeForStorage(connAtt);
+                ConnectorVisualHelper.ApplyStyle(_resizeTarget, shape, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+                UpdateStrokeStyleButtonStyles(effective ?? "solid");
+                await _supabaseService.SaveShapeAsync(shape);
+                MarkSaved();
+                PushShapeToFirebase(shape);
+                return;
+            }
+
+            if (shape.Type is not ("rectangle" or "ellipse"))
+            {
+                return;
+            }
+
+            var app = RectEllipseAppearance.Parse(shape);
             if (string.Equals(app.StrokeDash ?? "", effective ?? "", StringComparison.Ordinal))
             {
                 UpdateStrokeStyleButtonStyles(effective ?? "solid");
@@ -4515,6 +4727,94 @@ namespace WhiteSpace.Pages
             await _supabaseService.SaveShapeAsync(shape);
             MarkSaved();
             PushShapeToFirebase(shape);
+        }
+
+        private void ConnectorArrowEnd_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button b && b.Tag is string tag)
+            {
+                _ = ApplyConnectorArrowAsync(end: true, tag);
+            }
+        }
+
+        private void ConnectorArrowStart_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button b && b.Tag is string tag)
+            {
+                _ = ApplyConnectorArrowAsync(end: false, tag);
+            }
+        }
+
+        private async Task ApplyConnectorArrowAsync(bool end, string arrowKind)
+        {
+            if (_resizeTarget == null)
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape?.Type != "connector" || IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            if (!ConnectorAttachmentHelper.TryDeserialize(shape.Text, out var att))
+            {
+                att = new ConnectorAttachment();
+            }
+
+            var normalized = arrowKind.ToLowerInvariant();
+            if (end)
+            {
+                if (att.EffectiveArrowEnd() == normalized)
+                {
+                    return;
+                }
+
+                att.ArrowEnd = normalized == "block" ? null : normalized;
+            }
+            else
+            {
+                if (att.EffectiveArrowStart() == normalized)
+                {
+                    return;
+                }
+
+                att.ArrowStart = normalized == "none" ? null : normalized;
+            }
+
+            CaptureBoardStateForUndo();
+            shape.Text = ConnectorAttachmentHelper.SerializeForStorage(att);
+            ConnectorVisualHelper.ApplyStyle(_resizeTarget, shape, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+            UpdateConnectorArrowButtonStyles(att);
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+        }
+
+        private void UpdateConnectorArrowButtonStyles(ConnectorAttachment att)
+        {
+            void StyleWrap(WrapPanel? panel, string active)
+            {
+                if (panel == null)
+                {
+                    return;
+                }
+
+                foreach (var child in panel.Children.OfType<Button>())
+                {
+                    var on = child.Tag is string t &&
+                             string.Equals(t, active, StringComparison.OrdinalIgnoreCase);
+                    child.Background = on
+                        ? new SolidColorBrush(Color.FromRgb(0x8B, 0x5C, 0xF6))
+                        : new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+                    child.Foreground = Brushes.White;
+                    child.BorderThickness = new Thickness(0);
+                }
+            }
+
+            StyleWrap(ConnectorArrowEndRow, att.EffectiveArrowEnd());
+            StyleWrap(ConnectorArrowStartRow, att.EffectiveArrowStart());
         }
 
         private static string NormalizeColorKey(string? value)
@@ -4558,27 +4858,55 @@ namespace WhiteSpace.Pages
             EnsureSelectionToolbarShapePaletteBuilt();
 
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == element.Uid);
+            var isMultiSelect = _multiSelectedElements.Count > 1;
 
             var readOnly = IsBoardEditLockedForCurrentUser();
             SelectionToolbarDeleteButton.IsEnabled = !readOnly;
 
+            var isComment = shape?.Type == "comment";
+            var isConnector = shape?.Type == "connector";
+
+            if (isMultiSelect)
+            {
+                SelectionToolbarShapeButton.Visibility = Visibility.Collapsed;
+                if (SelectionToolbarFillButton != null)
+                {
+                    SelectionToolbarFillButton.Visibility = Visibility.Collapsed;
+                }
+
+                if (SelectionToolbarStrokeButton != null)
+                {
+                    SelectionToolbarStrokeButton.Visibility = Visibility.Collapsed;
+                }
+
+                if (ConnectorArrowSection != null)
+                {
+                    ConnectorArrowSection.Visibility = Visibility.Collapsed;
+                }
+
+                SelectionToolbarPanel.Visibility = Visibility.Visible;
+                Dispatcher.BeginInvoke(new Action(UpdateSelectionToolbarPosition), DispatcherPriority.Loaded);
+                return;
+            }
             var canEditGeometry = shape != null && (shape.Type == "rectangle" || shape.Type == "ellipse");
-            var strokeOnly = shape?.Type is "line" or "connector";
+            var strokeOnly = shape?.Type is "line" or "marker" or "connector";
             SelectionToolbarShapeButton.IsEnabled = !readOnly && canEditGeometry;
             if (SelectionToolbarStrokeButton != null)
             {
-                SelectionToolbarStrokeButton.IsEnabled = !readOnly && shape != null;
-                SelectionToolbarStrokeButton.Visibility = shape?.Type == "stickyNote"
+                SelectionToolbarStrokeButton.IsEnabled = !readOnly && shape != null && !isComment;
+                SelectionToolbarStrokeButton.Visibility = shape?.Type is "stickyNote" or "comment"
                     ? Visibility.Collapsed
                     : Visibility.Visible;
             }
 
             if (SelectionToolbarFillButton != null)
             {
-                SelectionToolbarFillButton.Visibility = strokeOnly ? Visibility.Collapsed : Visibility.Visible;
+                SelectionToolbarFillButton.Visibility = strokeOnly || isComment
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
             }
 
-            SelectionToolbarFillButton.IsEnabled = !readOnly && shape != null && !strokeOnly;
+            SelectionToolbarFillButton.IsEnabled = !readOnly && shape != null && !strokeOnly && !isComment;
 
             if (FillModeButtonRow != null)
             {
@@ -4587,7 +4915,14 @@ namespace WhiteSpace.Pages
 
             if (StrokeStyleRow != null)
             {
-                StrokeStyleRow.Visibility = canEditGeometry ? Visibility.Visible : Visibility.Collapsed;
+                StrokeStyleRow.Visibility = canEditGeometry || isConnector
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+
+            if (ConnectorArrowSection != null)
+            {
+                ConnectorArrowSection.Visibility = isConnector ? Visibility.Visible : Visibility.Collapsed;
             }
 
             _suppressSelectionToolbarSync = true;
@@ -4626,6 +4961,14 @@ namespace WhiteSpace.Pages
                 {
                     fillRing = shape.Color;
                     strokeRing = shape.Color;
+                }
+
+                if (isConnector && ConnectorAttachmentHelper.TryDeserialize(shape!.Text, out var connMeta))
+                {
+                    UpdateStrokeStyleButtonStyles(string.IsNullOrWhiteSpace(connMeta.StrokeDash)
+                        ? "solid"
+                        : connMeta.StrokeDash);
+                    UpdateConnectorArrowButtonStyles(connMeta);
                 }
 
                 SyncPaletteGridRingHighlights(fillRing, strokeRing);
@@ -4723,51 +5066,96 @@ namespace WhiteSpace.Pages
             }
 
             await _firebaseService.DeleteShapeAsync(_boardId.ToString(), shape.Id.ToString());
-
-            BoardCanvas.Children.Remove(_resizeTarget);
-            _shapesOnBoard.Remove(shape);
-            RemoveResizeFrame();
+            RemoveShapeFromBoardLocal(shape.Id);
             MarkSaved();
         }
 
         private async void SelectionToolbarDelete_Click(object sender, RoutedEventArgs e)
         {
-            await DeleteSelectedShapeAsync();
+            await DeleteCurrentSelectionAsync();
         }
 
-        private async void BoardPage_PreviewKeyDown(object sender, KeyEventArgs e)
+        private bool HasMultiSelection() => _multiSelectedElements.Count > 1;
+
+        private List<BoardShape> CollectMultiSelectedShapes()
         {
-            if (e.Key != Key.Delete)
+            var result = new List<BoardShape>();
+            var seenIds = new HashSet<int>();
+
+            foreach (var el in _multiSelectedElements)
             {
+                if (el is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid))
+                {
+                    continue;
+                }
+
+                if (!int.TryParse(fe.Uid, out var shapeId))
+                {
+                    continue;
+                }
+
+                if (!seenIds.Add(shapeId))
+                {
+                    continue;
+                }
+
+                var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == shapeId);
+                if (shape != null)
+                {
+                    result.Add(shape);
+                }
+            }
+
+            return result;
+        }
+
+        private async Task DeleteCurrentSelectionAsync()
+        {
+            if (HasMultiSelection())
+            {
+                await DeleteMultiSelectedAsync();
                 return;
             }
 
-            if (Keyboard.FocusedElement is TextBox focusedTb)
+            await DeleteSelectedShapeAsync();
+        }
+
+        private bool IsEditingTextOnBoard()
+        {
+            if (Keyboard.FocusedElement is not TextBox tb)
             {
-                // Отдельная текстовая фигура (весь элемент — TextBox): Delete удаляет символы.
-                if (_resizeTarget is TextBox rt && ReferenceEquals(rt, focusedTb))
-                {
-                    return;
-                }
-
-                // Вложенный редактор (стикер, подпись фигуры): не удаляем объект целиком.
-                if (_resizeTarget is FrameworkElement host
-                    && IsDescendantOf(focusedTb, host)
-                    && !ReferenceEquals(focusedTb, host))
-                {
-                    if (_resizeTarget is Grid stickyGrid
-                        && TryGetStickyNoteBodyTextBox(stickyGrid) is { } snTb
-                        && ReferenceEquals(snTb, focusedTb)
-                        && !snTb.IsReadOnly)
-                    {
-                        return;
-                    }
-
-                    return;
-                }
+                return false;
             }
 
-            if (_resizeTarget == null)
+            if (tb.Name == "ChatInputBox")
+            {
+                return true;
+            }
+
+            if (_resizeTarget is TextBox rt && ReferenceEquals(rt, tb))
+            {
+                return true;
+            }
+
+            if (_focusedBoardTextEdit != null && ReferenceEquals(_focusedBoardTextEdit, tb))
+            {
+                return true;
+            }
+
+            if (_resizeTarget is Grid stickyGrid
+                && TryGetStickyNoteBodyTextBox(stickyGrid) is { } snTb
+                && ReferenceEquals(snTb, tb)
+                && !snTb.IsReadOnly)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private async Task TryDeleteSelectionFromKeyboardAsync()
+        {
+            if (_resizeTarget == null && _multiSelectedElements.Count == 0)
             {
                 return;
             }
@@ -4777,7 +5165,53 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            await DeleteSelectedShapeAsync();
+            await DeleteCurrentSelectionAsync();
+        }
+
+        private async void BoardPage_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Delete && e.Key != Key.Back)
+            {
+                return;
+            }
+
+            if (IsEditingTextOnBoard())
+            {
+                return;
+            }
+
+            if (_resizeTarget == null && _multiSelectedElements.Count == 0)
+            {
+                return;
+            }
+
+            await TryDeleteSelectionFromKeyboardAsync();
+            e.Handled = true;
+        }
+
+        private async void HostWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Delete && e.Key != Key.Back)
+            {
+                return;
+            }
+
+            if (!IsLoaded || _isPageUnloading)
+            {
+                return;
+            }
+
+            if (IsEditingTextOnBoard())
+            {
+                return;
+            }
+
+            if (_resizeTarget == null && _multiSelectedElements.Count == 0)
+            {
+                return;
+            }
+
+            await TryDeleteSelectionFromKeyboardAsync();
             e.Handled = true;
         }
 
@@ -4814,9 +5248,16 @@ namespace WhiteSpace.Pages
             TryCommitBoardTextFocus(e);
             Viewport.Focus();
 
+            if (e.ChangedButton == MouseButton.Middle)
+            {
+                StartPan(e.GetPosition(Viewport));
+                e.Handled = true;
+                return;
+            }
+
             if (IsBoardEditLockedForCurrentUser())
             {
-                if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
+                if (e.LeftButton == MouseButtonState.Pressed)
                 {
                     StartPan(e.GetPosition(Viewport));
                 }
@@ -4842,52 +5283,146 @@ namespace WhiteSpace.Pages
             if (_isDraggingElement)
                 return;
 
-            if (_tool == ToolMode.Hand)
+            if (_tool == ToolMode.Hand && e.LeftButton == MouseButtonState.Pressed)
             {
-                if (_tool == ToolMode.Hand)
+                StartPan(screen);
+                return;
+            }
+
+            if (_tool == ToolMode.Arrow && e.LeftButton == MouseButtonState.Pressed)
+            {
+                RemoveResizeFrame();
+                _connectorPortStartShapeId = null;
+                _connectorPortStartSide = null;
+                _connectorAnchorWorld = world;
+                _isDrawingConnector = true;
+                _connectorPreviewLine = new Polyline
                 {
-                    RemoveResizeFrame();
+                    Stroke = GetBrushFromColor(_currentStrokeHex),
+                    StrokeThickness = ConnectorStrokeThickness,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Triangle,
+                    Fill = Brushes.Transparent
+                };
+                _connectorPreviewLine.Points.Add(world);
+                _connectorPreviewLine.Points.Add(world);
+                BoardCanvas.Children.Add(_connectorPreviewLine);
+                ShowConnectorSnapHighlights(null);
+                Viewport.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
+            if (_tool == ToolMode.Select && e.LeftButton == MouseButtonState.Pressed)
+            {
+                if (_multiSelectedElements.Count > 1 && IsWorldPointInMultiSelection(world))
+                {
+                    BeginMultiSelectionDrag(world);
+                    e.Handled = true;
+                    return;
                 }
 
                 var hitTestResult2 = VisualTreeHelper.HitTest(Viewport, screen);
-                if (hitTestResult2 != null)
+                var uiElement = hitTestResult2 != null
+                    ? ResolveBoardElementFromHit(hitTestResult2.VisualHit as DependencyObject)
+                    : null;
+
+                if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
+                    !(uiElement is TextBox) && uiElement != _previewShape && IsBoardSelectableElement(uiElement))
                 {
-                    var uiElement = ResolveBoardElementFromHit(hitTestResult2.VisualHit as DependencyObject);
-
-                    if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
-                        !(uiElement is TextBox) && uiElement != _previewShape)
+                    if (_multiSelectedElements.Count > 1 && _multiSelectedElements.Contains(uiElement))
                     {
-                        if (IsBoardDraggableElement(uiElement))
-                        {
-                            CaptureBoardStateForUndo();
-                            _isDraggingElement = true;
-                            _dragElement = uiElement;
+                        BeginMultiSelectionDrag(world);
+                        e.Handled = true;
+                        return;
+                    }
 
+                    ClearMultiSelection();
+                    ShowResizeFrame(uiElement);
+
+                    if (IsBoardDraggableElement(uiElement))
+                    {
+                        var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == uiElement.Uid);
+                        if (shape?.Type == "connector")
+                        {
+                            DetachConnectorForFreeDrag(shape);
+                            if (FindUIElementByUid(shape.Id.ToString()) is { } connUi)
+                            {
+                                var pts = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
+                                ConnectorVisualHelper.UpdatePoints(
+                                    connUi, shape, pts, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+                            }
+                        }
+
+                        CaptureBoardStateForUndo();
+                        _isDraggingElement = true;
+                        _dragElement = uiElement;
+                        _dragLastWorld = world;
+
+                        if (shape?.Type == "connector")
+                        {
+                            Viewport.CaptureMouse();
+                        }
+                        else
+                        {
                             double left = Canvas.GetLeft(uiElement);
                             double top = Canvas.GetTop(uiElement);
                             if (double.IsNaN(left)) left = 0;
                             if (double.IsNaN(top)) top = 0;
-
                             _dragOffsetWorld = new Point(world.X - left, world.Y - top);
                             Viewport.CaptureMouse();
-
-                            ShowResizeFrame(uiElement);
-                            return;
                         }
                     }
+
+                    return;
                 }
 
-                if (_tool == ToolMode.Hand)
+                RemoveResizeFrame();
+                ClearMultiSelection();
+                _isMarqueeSelecting = true;
+                _marqueeStartWorld = world;
+                _marqueeRect = new Rectangle
                 {
-                    StartPan(screen);
-                }
-
+                    Stroke = new SolidColorBrush(Color.FromRgb(0x2E, 0x90, 0xFF)),
+                    StrokeThickness = 1.5,
+                    StrokeDashArray = new DoubleCollection { 4, 3 },
+                    Fill = new SolidColorBrush(Color.FromArgb(40, 0x2E, 0x90, 0xFF)),
+                    IsHitTestVisible = false
+                };
+                UpdateMarqueeRect(world);
+                BoardCanvas.Children.Add(_marqueeRect);
+                Viewport.CaptureMouse();
                 return;
             }
 
             if (_tool == ToolMode.Pen && e.LeftButton == MouseButtonState.Pressed)
             {
-                StartStroke(world);
+                StartStroke(world, isMarker: false);
+                return;
+            }
+
+            if (_tool == ToolMode.Marker && e.LeftButton == MouseButtonState.Pressed)
+            {
+                StartStroke(world, isMarker: true);
+                return;
+            }
+
+            if (_tool == ToolMode.Eraser && e.LeftButton == MouseButtonState.Pressed)
+            {
+                _isErasing = true;
+                CaptureBoardStateForUndo();
+                StartEraserTrail(world);
+                TryEraseAt(world);
+                Viewport.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
+            if (_tool == ToolMode.Comment && e.LeftButton == MouseButtonState.Pressed)
+            {
+                ShowCommentComposerAt(world);
+                e.Handled = true;
                 return;
             }
 
@@ -4932,13 +5467,19 @@ namespace WhiteSpace.Pages
 
         private void BoardCanvas_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
-            if (_tool != ToolMode.Hand)
+            if (_tool != ToolMode.Select)
             {
                 e.Handled = true;
                 return;
             }
 
             var screen = e.GetPosition(BoardCanvas);
+            var world = ScreenToWorld(e.GetPosition(Viewport));
+
+            if (_multiSelectedElements.Count > 1 && IsWorldPointInMultiSelection(world))
+            {
+                return;
+            }
 
             var hitTestResult = VisualTreeHelper.HitTest(BoardCanvas, screen);
             if (hitTestResult != null)
@@ -4947,8 +5488,14 @@ namespace WhiteSpace.Pages
 
                 if (uiElement != null && uiElement != BoardCanvas)
                 {
-                    if (uiElement is TextBox || IsBoardDraggableElement(uiElement))
+                    if (_multiSelectedElements.Count > 1 && _multiSelectedElements.Contains(uiElement))
                     {
+                        return;
+                    }
+
+                    if (uiElement is TextBox || IsBoardSelectableElement(uiElement))
+                    {
+                        ClearMultiSelection();
                         ShowResizeFrame(uiElement);
                         e.Handled = true;
                     }
@@ -4976,9 +5523,10 @@ namespace WhiteSpace.Pages
                 _ = PublishCursorAsync(world, true);
             }
 
-            if (e.LeftButton != MouseButtonState.Pressed &&
+            var pointerDown = e.LeftButton == MouseButtonState.Pressed || e.MiddleButton == MouseButtonState.Pressed;
+            if (!pointerDown &&
                 (_isPanning || _isResizing || _isDraggingElement || _isPlacingSticky || _isPlacingRectEllipse ||
-                 _isDrawingConnector || _isDrawing))
+                 _isDrawingConnector || _isDrawing || _isErasing || _isDraggingConnectorEndpoint || _isMarqueeSelecting))
             {
                 _ = ProcessViewportMouseUpAsync(e.GetPosition(Viewport));
                 return;
@@ -4988,9 +5536,30 @@ namespace WhiteSpace.Pages
                 e.LeftButton == MouseButtonState.Pressed)
             {
                 var worldMove = ScreenToWorld(screen);
-                if (_connectorPreviewLine.Points.Count >= 2)
+                _connectorPreviewLine.Points.Clear();
+                if (_connectorPortStartShapeId.HasValue
+                    && !string.IsNullOrEmpty(_connectorPortStartSide))
                 {
-                    _connectorPreviewLine.Points[_connectorPreviewLine.Points.Count - 1] = worldMove;
+                    var startShape = _shapesOnBoard.FirstOrDefault(s => s.Id == _connectorPortStartShapeId.Value);
+                    if (startShape != null)
+                    {
+                        var anchor = ConnectorAttachmentHelper.GetAnchorWorldPoint(startShape, _connectorPortStartSide);
+                        foreach (var p in ConnectorAttachmentHelper.ComputeOrthogonalRouteToFreePoint(
+                                     anchor, worldMove, _connectorPortStartSide))
+                        {
+                            _connectorPreviewLine.Points.Add(p);
+                        }
+                    }
+                    else
+                    {
+                        _connectorPreviewLine.Points.Add(_connectorAnchorWorld);
+                        _connectorPreviewLine.Points.Add(worldMove);
+                    }
+                }
+                else
+                {
+                    _connectorPreviewLine.Points.Add(_connectorAnchorWorld);
+                    _connectorPreviewLine.Points.Add(worldMove);
                 }
 
                 return;
@@ -5014,21 +5583,55 @@ namespace WhiteSpace.Pages
                 }
             }
 
+            if (_isErasing && e.LeftButton == MouseButtonState.Pressed)
+            {
+                AppendEraserTrail(world);
+                TryEraseAt(world);
+            }
+
+            if (_isDraggingConnectorEndpoint && e.LeftButton == MouseButtonState.Pressed)
+            {
+                UpdateConnectorEndpointDrag(world, e.GetPosition(Viewport));
+            }
+
             if (_isDraggingElement && _dragElement != null && e.LeftButton == MouseButtonState.Pressed)
             {
                 MoveElementTo(world);
             }
 
-            if (_isPanning && e.LeftButton == MouseButtonState.Pressed)
+            if (_isPanning && (e.LeftButton == MouseButtonState.Pressed || e.MiddleButton == MouseButtonState.Pressed))
             {
                 BoardTranslate.X = _panStartX + (screen.X - _panStartScreen.X);
                 BoardTranslate.Y = _panStartY + (screen.Y - _panStartScreen.Y);
             }
 
-            if (SelectionToolbarPanel?.Visibility == Visibility.Visible && _resizeBorder != null)
+            if (_isMarqueeSelecting && _marqueeRect != null)
+            {
+                UpdateMarqueeRect(world);
+                return;
+            }
+
+            if (SelectionToolbarPanel?.Visibility == Visibility.Visible &&
+                (_resizeBorder != null || _resizeTarget != null))
             {
                 UpdateSelectionToolbarPosition();
             }
+        }
+
+        private void HostWindow_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ChangedButton != MouseButton.Middle || IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            if (_tool != ToolMode.Select && _tool != ToolMode.Hand)
+            {
+                return;
+            }
+
+            StartPan(e.GetPosition(Viewport));
+            e.Handled = true;
         }
 
         private async void HostWindow_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -5074,9 +5677,42 @@ namespace WhiteSpace.Pages
 
         private async Task ProcessViewportMouseUpCoreAsync(Point viewportPos)
         {
-            if (!_isDrawingConnector && !_isPlacingSticky && !_isPlacingRectEllipse && !_isResizing && !_isDraggingElement &&
-                !_isDrawing && !_isPanning)
+            if (_isMarqueeSelecting)
             {
+                _isMarqueeSelecting = false;
+                var endWorld = ScreenToWorld(viewportPos);
+                FinalizeMarqueeSelection(endWorld);
+                if (_marqueeRect != null)
+                {
+                    BoardCanvas.Children.Remove(_marqueeRect);
+                    _marqueeRect = null;
+                }
+
+                Viewport.ReleaseMouseCapture();
+                return;
+            }
+
+            if (!_isDrawingConnector && !_isPlacingSticky && !_isPlacingRectEllipse && !_isResizing && !_isDraggingElement &&
+                !_isDrawing && !_isPanning && !_isErasing && !_isDraggingConnectorEndpoint && !_isMarqueeSelecting)
+            {
+                Viewport.ReleaseMouseCapture();
+                return;
+            }
+
+            if (_isDraggingConnectorEndpoint)
+            {
+                _isDraggingConnectorEndpoint = false;
+                _connectorEndpointDragWhich = null;
+                Viewport.ReleaseMouseCapture();
+                var endWorld = ScreenToWorld(viewportPos);
+                await FinalizeConnectorEndpointDragAsync(endWorld, viewportPos);
+                return;
+            }
+
+            if (_isErasing)
+            {
+                _isErasing = false;
+                RemoveEraserTrail();
                 Viewport.ReleaseMouseCapture();
                 return;
             }
@@ -5084,6 +5720,7 @@ namespace WhiteSpace.Pages
             if (_isDrawingConnector)
             {
                 _isDrawingConnector = false;
+                ClearConnectorSnapHighlights();
                 Viewport.ReleaseMouseCapture();
                 var endWorld = ScreenToWorld(viewportPos);
                 await FinalizeConnectorFromDragAsync(endWorld, viewportPos);
@@ -5131,12 +5768,18 @@ namespace WhiteSpace.Pages
 
             if (_isDraggingElement && !(_dragElement is TextBox))
             {
-                if (_dragElement != null)
+                if (_multiSelectedElements.Count > 1)
                 {
-                    await SaveElementPositionAsync(_dragElement); // Изменено на асинхронный метод
+                    await SaveMultiSelectionPositionsAsync();
                 }
+                else if (_dragElement != null)
+                {
+                    await SaveElementPositionAsync(_dragElement);
+                }
+
                 _isDraggingElement = false;
                 _dragElement = null;
+                _multiDragSnapshots.Clear();
             }
 
             if (_isDrawing)
@@ -5164,17 +5807,60 @@ namespace WhiteSpace.Pages
 
         private async void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
+            if (e.ChangedButton == MouseButton.Middle && _isPanning)
+            {
+                _isPanning = false;
+                Viewport.ReleaseMouseCapture();
+                return;
+            }
+
             await ProcessViewportMouseUpAsync(e.GetPosition(Viewport));
         }
 
         private void MoveElementTo(Point world)
         {
+            if (_multiSelectedElements.Count > 1 && _isDraggingElement)
+            {
+                MoveMultiSelectionTo(world);
+                return;
+            }
+
             if (_dragElement == null) return;
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
+
+            if (shape?.Type == "connector" && _dragElement is Canvas)
+            {
+                var delta = new Point(world.X - _dragLastWorld.X, world.Y - _dragLastWorld.Y);
+                _dragLastWorld = world;
+                if (ConnectorVisualHelper.GetLine(_dragElement) is Polyline line)
+                {
+                    for (var i = 0; i < line.Points.Count; i++)
+                    {
+                        var p = line.Points[i];
+                        line.Points[i] = new Point(p.X + delta.X, p.Y + delta.Y);
+                    }
+
+                    shape.DeserializedPoints = line.Points.Select(p => new Point(p.X, p.Y)).ToList();
+                    shape.Points = JsonConvert.SerializeObject(shape.DeserializedPoints);
+                    ApplyConnectorGeometryToBoardShape(shape);
+                    ConnectorVisualHelper.UpdatePoints(
+                        _dragElement, shape, shape.DeserializedPoints,
+                        GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+                }
+
+                if (_resizeBorder != null)
+                {
+                    UpdateSelectionBoundsFromElement(_dragElement);
+                }
+
+                UpdateSelectionToolbarPosition();
+                return;
+            }
 
             double offsetX = world.X - _dragOffsetWorld.X;
             double offsetY = world.Y - _dragOffsetWorld.Y;
 
-            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _dragElement.Uid);
             if (shape != null)
             {
                 if (_dragElement is Polyline polyline)
@@ -5203,13 +5889,26 @@ namespace WhiteSpace.Pages
                 }
                 else if (_dragElement is Grid)
                 {
-                    shape.X = offsetX + shape.Width / 2;
-                    shape.Y = offsetY + shape.Height / 2;
+                    if (shape.Type == "comment")
+                    {
+                        shape.X = offsetX;
+                        shape.Y = offsetY;
+                    }
+                    else
+                    {
+                        shape.X = offsetX + shape.Width / 2;
+                        shape.Y = offsetY + shape.Height / 2;
+                    }
                 }
                 else if (_dragElement is Shape)
                 {
                     shape.X = offsetX + shape.Width / 2;
                     shape.Y = offsetY + shape.Height / 2;
+                }
+
+                if (shape.Type is "rectangle" or "ellipse" or "stickyNote" or "image")
+                {
+                    RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
                 }
             }
 
@@ -5248,6 +5947,10 @@ namespace WhiteSpace.Pages
                 }
 
                 UpdateResizeHandles(offsetX, offsetY, width, height);
+            }
+
+            if (_resizeTarget == _dragElement)
+            {
                 UpdateSelectionToolbarPosition();
             }
         }
@@ -5262,12 +5965,20 @@ namespace WhiteSpace.Pages
                     shape.X = Canvas.GetLeft(textBox);
                     shape.Y = Canvas.GetTop(textBox);
                 }
+                else if (element is Canvas canvas && shape.Type == "connector")
+                {
+                    if (ConnectorVisualHelper.GetLine(canvas) is Polyline line)
+                    {
+                        shape.DeserializedPoints = line.Points.Select(p => new Point(p.X, p.Y)).ToList();
+                        shape.Points = JsonConvert.SerializeObject(shape.DeserializedPoints);
+                        ApplyConnectorGeometryToBoardShape(shape);
+                    }
+                }
                 else if (element is Polyline polyline)
                 {
                     shape.X = Canvas.GetLeft(element);
                     shape.Y = Canvas.GetTop(element);
 
-                    // Обновляем точки линии
                     var newPoints = new List<Point>();
                     foreach (var point in polyline.Points)
                     {
@@ -5285,6 +5996,19 @@ namespace WhiteSpace.Pages
                 {
                     shape.X = Canvas.GetLeft(element) + image.ActualWidth / 2;
                     shape.Y = Canvas.GetTop(element) + image.ActualHeight / 2;
+                }
+                else if (element is Grid grid)
+                {
+                    if (shape.Type == "comment")
+                    {
+                        shape.X = Canvas.GetLeft(grid);
+                        shape.Y = Canvas.GetTop(grid);
+                    }
+                    else
+                    {
+                        shape.X = Canvas.GetLeft(grid) + shape.Width / 2;
+                        shape.Y = Canvas.GetTop(grid) + shape.Height / 2;
+                    }
                 }
 
                 // Сохраняем в Supabase
@@ -5371,15 +6095,19 @@ namespace WhiteSpace.Pages
             Viewport.CaptureMouse();
         }
 
-        private async void StartStroke(Point startWorld)
+        private async void StartStroke(Point startWorld, bool isMarker)
         {
             CaptureBoardStateForUndo();
             _isDrawing = true;
 
+            var style = isMarker ? StrokeStyleMetadataHelper.ForMarker() : StrokeStyleMetadataHelper.ForPen();
+            var thickness = style.Thickness;
+            var strokeBrush = ApplyOpacityToBrush(_currentBrush, style.Opacity);
+
             _currentStroke = new Polyline
             {
-                Stroke = _currentBrush,
-                StrokeThickness = 2,
+                Stroke = strokeBrush,
+                StrokeThickness = thickness,
                 StrokeLineJoin = PenLineJoin.Round,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round
@@ -5394,10 +6122,11 @@ namespace WhiteSpace.Pages
             var shape = new BoardShape
             {
                 BoardId = _boardId,
-                Type = "line",
+                Type = isMarker ? "marker" : "line",
                 X = startWorld.X,
                 Y = startWorld.Y,
                 Color = _currentStrokeHex,
+                Text = StrokeStyleMetadataHelper.Serialize(style),
                 Id = uniqueId
             };
 
@@ -5405,6 +6134,33 @@ namespace WhiteSpace.Pages
 
             _shapesOnBoard.Add(shape);
             Viewport.CaptureMouse();
+        }
+
+        private static Brush ApplyOpacityToBrush(Brush brush, double opacity)
+        {
+            if (brush is SolidColorBrush scb)
+            {
+                var c = scb.Color;
+                var a = (byte)Math.Clamp((int)(opacity * 255), 0, 255);
+                return new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B));
+            }
+
+            return brush;
+        }
+
+        private static void ApplyStrokeStyleToPolyline(Polyline polyline, BoardShape shape, Brush baseBrush)
+        {
+            if (StrokeStyleMetadataHelper.TryParse(shape.Text, out var style))
+            {
+                polyline.StrokeThickness = style.Thickness;
+                polyline.Stroke = ApplyOpacityToBrush(baseBrush, style.Opacity);
+                return;
+            }
+
+            polyline.StrokeThickness = shape.Type == "marker" ? 14 : 2;
+            polyline.Stroke = shape.Type == "marker"
+                ? ApplyOpacityToBrush(baseBrush, 0.42)
+                : baseBrush;
         }
 
         private void EnsurePreviewShape()
@@ -5635,7 +6391,7 @@ namespace WhiteSpace.Pages
 
                     BoardCanvas.UpdateLayout();
                     ShowResizeFrame(element);
-                    SetTool(ToolMode.Hand);
+                    SetTool(ToolMode.Select);
                 }
             }
             finally
@@ -5728,7 +6484,7 @@ namespace WhiteSpace.Pages
 
                 BoardCanvas.UpdateLayout();
                 ShowResizeFrame(el);
-                SetTool(ToolMode.Hand);
+                SetTool(ToolMode.Select);
             }
             finally
             {
@@ -5762,6 +6518,16 @@ namespace WhiteSpace.Pages
             {
                 attachment.EndShapeId = endPortShapeId;
                 attachment.EndSide = endPortSide;
+            }
+            else if (ConnectorAttachmentHelper.TryFindNearestPort(
+                         endWorld,
+                         _shapesOnBoard,
+                         attachment.StartShapeId,
+                         out var nearShapeId,
+                         out var nearSide))
+            {
+                attachment.EndShapeId = nearShapeId;
+                attachment.EndSide = nearSide;
             }
 
             _connectorPortStartShapeId = null;
@@ -5894,7 +6660,7 @@ namespace WhiteSpace.Pages
 
             BoardCanvas.UpdateLayout();
             ShowResizeFrame(tb);
-            SetTool(ToolMode.Hand);
+            SetTool(ToolMode.Select);
 
             _isCreatingShape = false;
         }
@@ -5907,9 +6673,29 @@ namespace WhiteSpace.Pages
 
             _resizeTarget = element;
 
+            var selectedShape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == (element as FrameworkElement)?.Uid);
+            var isConnector = selectedShape?.Type == "connector";
+            if (selectedShape?.Type == "comment")
+            {
+                SyncSelectionToolbar(element);
+                UpdateSelectionToolbarPosition();
+                return;
+            }
+
             double left, top, width, height;
 
-            if (element is Polyline polyline)
+            if (ConnectorVisualHelper.GetLine(element) is Polyline connectorLine && connectorLine.Points.Count > 0)
+            {
+                double minX = connectorLine.Points.Min(p => p.X);
+                double maxX = connectorLine.Points.Max(p => p.X);
+                double minY = connectorLine.Points.Min(p => p.Y);
+                double maxY = connectorLine.Points.Max(p => p.Y);
+                left = minX;
+                top = minY;
+                width = Math.Max(maxX - minX, 1);
+                height = Math.Max(maxY - minY, 1);
+            }
+            else if (element is Polyline polyline)
             {
                 if (polyline.Points.Count > 0)
                 {
@@ -5978,17 +6764,26 @@ namespace WhiteSpace.Pages
 
             BoardCanvas.Children.Add(_resizeBorder);
 
-            CreateResizeHandles(left, top, width, height);
+            if (!isConnector)
+            {
+                CreateResizeHandles(left, top, width, height);
+            }
+
             TryAddConnectorAnchorPorts(element, left, top, width, height);
+            TryAddConnectorEndpointHandles(element);
             SyncSelectionToolbar(element);
+            UpdateSelectionToolbarPosition();
         }
 
         private void RemoveResizeFrame()
         {
             RemoveAnchorPorts();
+            RemoveConnectorEndpointHandles();
+            ClearConnectorSnapHighlights();
 
             if (_resizeBorder != null)
             {
+                _resizeBorder.MouseLeftButtonDown -= GroupSelectionFrame_MouseLeftButtonDown;
                 BoardCanvas.Children.Remove(_resizeBorder);
                 _resizeBorder = null;
             }
@@ -6129,7 +6924,51 @@ namespace WhiteSpace.Pages
             _connectorPreviewLine.Points.Add(_connectorAnchorWorld);
             _connectorPreviewLine.Points.Add(_connectorAnchorWorld);
             BoardCanvas.Children.Add(_connectorPreviewLine);
+            ShowConnectorSnapHighlights(_connectorPortStartShapeId);
             Viewport.CaptureMouse();
+        }
+
+        private void ShowConnectorSnapHighlights(int? excludeShapeId)
+        {
+            ClearConnectorSnapHighlights();
+
+            foreach (var shape in _shapesOnBoard)
+            {
+                if (shape.Type is not ("rectangle" or "ellipse" or "stickyNote"))
+                {
+                    continue;
+                }
+
+                foreach (var side in new[] { "n", "e", "s", "w" })
+                {
+                    var world = ConnectorAttachmentHelper.GetAnchorWorldPoint(shape, side);
+                    var el = new Ellipse
+                    {
+                        Width = 18,
+                        Height = 18,
+                        Fill = new SolidColorBrush(Color.FromArgb(220, 0x8B, 0x5C, 0xF6)),
+                        Stroke = Brushes.White,
+                        StrokeThickness = 2.5,
+                        IsHitTestVisible = false,
+                        Opacity = shape.Id == excludeShapeId ? 0.55 : 1
+                    };
+                    Canvas.SetLeft(el, world.X - 9);
+                    Canvas.SetTop(el, world.Y - 9);
+                    BoardCanvas.Children.Add(el);
+                    Panel.SetZIndex(el, 1000);
+                    _snapHighlightPortElements.Add(el);
+                }
+            }
+        }
+
+        private void ClearConnectorSnapHighlights()
+        {
+            foreach (var el in _snapHighlightPortElements)
+            {
+                BoardCanvas.Children.Remove(el);
+            }
+
+            _snapHighlightPortElements.Clear();
         }
 
         private void RemoveAllHandles()
@@ -6758,7 +7597,7 @@ namespace WhiteSpace.Pages
                 if (image != null)
                 {
                     ShowResizeFrame(image);
-                    SetTool(ToolMode.Hand);
+                    SetTool(ToolMode.Select);
                 }
             }
             finally
@@ -6837,6 +7676,1248 @@ namespace WhiteSpace.Pages
             tb.BorderThickness = new Thickness(0);
             tb.BorderBrush = Brushes.Transparent;
             tb.CaretBrush = foreground;
+        }
+
+        private const string CommentExpandedTag = "commentExpanded";
+        private const string CommentAuthorTag = "commentAuthor";
+        private const string CommentMessageTag = "commentMessage";
+        private const string CommentTimeTag = "commentTime";
+
+        private Grid CreateCommentBoardContainer(BoardShape shape)
+        {
+            BoardCommentMetadataHelper.TryParse(shape.Text, out var meta);
+            var initials = GetInitials(meta.DisplayAuthor());
+            var accent = GetCommentAccentBrush(meta.DisplayAuthor());
+
+            var root = new Grid
+            {
+                Uid = shape.Id.ToString(),
+                Width = 320,
+                Height = 72,
+                Background = Brushes.Transparent
+            };
+
+            var pin = new Border
+            {
+                Width = 40,
+                Height = 44,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                Background = Brushes.White,
+                CornerRadius = new CornerRadius(20, 20, 4, 20),
+                Padding = new Thickness(4),
+                Cursor = Cursors.Hand
+            };
+            pin.Effect = new DropShadowEffect
+            {
+                BlurRadius = 10,
+                ShadowDepth = 1,
+                Opacity = 0.25,
+                Color = Colors.Black
+            };
+
+            var avatar = new Border
+            {
+                Width = 30,
+                Height = 30,
+                CornerRadius = new CornerRadius(15),
+                Background = accent,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = initials,
+                    Foreground = Brushes.White,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 14,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            pin.Child = avatar;
+
+            var expanded = new Border
+            {
+                Tag = CommentExpandedTag,
+                Visibility = Visibility.Collapsed,
+                MinWidth = 220,
+                MaxWidth = 280,
+                Margin = new Thickness(48, 0, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                Background = Brushes.White,
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(12, 10, 14, 10),
+                Cursor = Cursors.Arrow
+            };
+            expanded.Effect = new DropShadowEffect
+            {
+                BlurRadius = 14,
+                ShadowDepth = 2,
+                Opacity = 0.28,
+                Color = Colors.Black
+            };
+
+            var header = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+            header.Children.Add(new TextBlock
+            {
+                Tag = CommentAuthorTag,
+                Text = meta.DisplayAuthor(),
+                FontWeight = FontWeights.Bold,
+                FontSize = 13,
+                Foreground = Brushes.Black
+            });
+            header.Children.Add(new TextBlock
+            {
+                Tag = CommentTimeTag,
+                Text = " " + BoardCommentMetadataHelper.FormatRelativeTime(meta.CreatedAtUtc),
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                Margin = new Thickness(6, 1, 0, 0)
+            });
+
+            var message = new TextBlock
+            {
+                Tag = CommentMessageTag,
+                Text = meta.Message,
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 13,
+                Foreground = Brushes.Black
+            };
+
+            var body = new StackPanel();
+            body.Children.Add(header);
+            body.Children.Add(message);
+            expanded.Child = body;
+
+            root.Children.Add(expanded);
+            root.Children.Add(pin);
+
+            root.MouseEnter += (_, _) => expanded.Visibility = Visibility.Visible;
+            root.MouseLeave += (_, _) => expanded.Visibility = Visibility.Collapsed;
+
+            return root;
+        }
+
+        private void SyncCommentVisual(Grid grid, BoardShape shape)
+        {
+            BoardCommentMetadataHelper.TryParse(shape.Text, out var meta);
+            foreach (var child in FindVisualChildren<TextBlock>(grid))
+            {
+                if (child.Tag as string == CommentAuthorTag)
+                {
+                    child.Text = meta.DisplayAuthor();
+                }
+                else if (child.Tag as string == CommentTimeTag)
+                {
+                    child.Text = " " + BoardCommentMetadataHelper.FormatRelativeTime(meta.CreatedAtUtc);
+                }
+                else if (child.Tag as string == CommentMessageTag)
+                {
+                    child.Text = meta.Message;
+                }
+            }
+        }
+
+        private static Brush GetCommentAccentBrush(string displayName)
+        {
+            var hash = displayName.GetHashCode(StringComparison.OrdinalIgnoreCase);
+            var colors = new[]
+            {
+                Color.FromRgb(0x22, 0xC5, 0x5E),
+                Color.FromRgb(0x8B, 0x5C, 0xF6),
+                Color.FromRgb(0x3B, 0x82, 0xF6),
+                Color.FromRgb(0xF5, 0x9E, 0x0B)
+            };
+            return new SolidColorBrush(colors[Math.Abs(hash) % colors.Length]);
+        }
+
+        private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
+        {
+            if (parent == null)
+            {
+                yield break;
+            }
+
+            var count = VisualTreeHelper.GetChildrenCount(parent);
+            for (var i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T match)
+                {
+                    yield return match;
+                }
+
+                foreach (var nested in FindVisualChildren<T>(child))
+                {
+                    yield return nested;
+                }
+            }
+        }
+
+        private void ShowCommentComposerAt(Point world)
+        {
+            if (IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            HideCommentComposer();
+            _pendingCommentWorld = world;
+
+            var input = new TextBox
+            {
+                MinWidth = 200,
+                FontSize = 14,
+                Padding = new Thickness(12, 8, 40, 8),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                BorderThickness = new Thickness(0),
+                Text = ""
+            };
+            input.KeyDown += async (_, ke) =>
+            {
+                if (ke.Key == Key.Enter && Keyboard.Modifiers != ModifierKeys.Shift)
+                {
+                    ke.Handled = true;
+                    await FinalizeCommentFromComposerAsync(input.Text);
+                }
+            };
+
+            var sendBtn = new Button
+            {
+                Width = 28,
+                Height = 28,
+                Content = "↑",
+                FontWeight = FontWeights.Bold,
+                Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE5, 0xEA)),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            sendBtn.Click += async (_, _) => await FinalizeCommentFromComposerAsync(input.Text);
+
+            var inner = new Grid();
+            inner.Children.Add(input);
+            inner.Children.Add(sendBtn);
+
+            var accent = GetCommentAccentBrush(_cursorDisplayName);
+            var avatar = new Border
+            {
+                Width = 36,
+                Height = 36,
+                CornerRadius = new CornerRadius(18, 18, 4, 18),
+                Background = Brushes.White,
+                Padding = new Thickness(3),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new Border
+                {
+                    Width = 28,
+                    Height = 28,
+                    CornerRadius = new CornerRadius(14),
+                    Background = accent,
+                    Child = new TextBlock
+                    {
+                        Text = GetInitials(_cursorDisplayName),
+                        Foreground = Brushes.White,
+                        FontWeight = FontWeights.Bold,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                }
+            };
+
+            input.MinWidth = 220;
+            input.Background = Brushes.Transparent;
+            input.Foreground = Brushes.Black;
+
+            var row = new Grid { MinWidth = 300 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn(avatar, 0);
+            Grid.SetColumn(inner, 1);
+            row.Children.Add(avatar);
+            row.Children.Add(inner);
+
+            _commentComposer = new Border
+            {
+                Background = Brushes.White,
+                CornerRadius = new CornerRadius(24),
+                Padding = new Thickness(8, 6, 8, 8),
+                Child = row,
+                MinWidth = 320,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x6B, 0xE8)),
+                BorderThickness = new Thickness(0, 0, 0, 2)
+            };
+            _commentComposer.Effect = new DropShadowEffect
+            {
+                BlurRadius = 16,
+                ShadowDepth = 2,
+                Opacity = 0.22,
+                Color = Colors.Black
+            };
+
+            Canvas.SetLeft(_commentComposer, world.X);
+            Canvas.SetTop(_commentComposer, world.Y);
+            BoardCanvas.Children.Add(_commentComposer);
+            input.Focus();
+        }
+
+        private void HideCommentComposer()
+        {
+            if (_commentComposer == null)
+            {
+                return;
+            }
+
+            BoardCanvas.Children.Remove(_commentComposer);
+            _commentComposer = null;
+        }
+
+        private async Task FinalizeCommentFromComposerAsync(string text)
+        {
+            var message = text?.Trim() ?? "";
+            if (string.IsNullOrEmpty(message))
+            {
+                HideCommentComposer();
+                return;
+            }
+
+            if (IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            HideCommentComposer();
+            CaptureBoardStateForUndo();
+
+            var meta = new BoardCommentMetadata
+            {
+                AuthorId = _myUserId?.ToString(),
+                AuthorName = string.IsNullOrWhiteSpace(_cursorDisplayName) ? "Участник" : _cursorDisplayName.Trim(),
+                Message = message,
+                CreatedAtUtc = DateTime.UtcNow
+            };
+
+            var uniqueId = await _supabaseService.GenerateUniqueIdAsync(_boardId);
+            var shape = new BoardShape
+            {
+                BoardId = _boardId,
+                Type = "comment",
+                X = _pendingCommentWorld.X,
+                Y = _pendingCommentWorld.Y,
+                Width = 40,
+                Height = 44,
+                Text = BoardCommentMetadataHelper.Serialize(meta),
+                Id = uniqueId
+            };
+
+            _shapesOnBoard.Add(shape);
+            AddShapeToCanvas(shape, false);
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+            SetTool(ToolMode.Select);
+        }
+
+        private void TryEraseAt(Point world)
+        {
+            var toRemove = new List<BoardShape>();
+            foreach (var shape in _shapesOnBoard)
+            {
+                if (IsPointOnShape(world, shape, EraserHitRadius))
+                {
+                    toRemove.Add(shape);
+                }
+            }
+
+            foreach (var shape in toRemove)
+            {
+                _ = EraseShapeAsync(shape);
+            }
+        }
+
+        private bool IsPointOnShape(Point world, BoardShape shape, double radius)
+        {
+            if (shape.Type is "line" or "marker")
+            {
+                var points = shape.DeserializedPoints;
+                if (points.Count == 0 && !string.IsNullOrWhiteSpace(shape.Points))
+                {
+                    try
+                    {
+                        points = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+
+                return IsPointNearPolyline(world, points, radius);
+            }
+
+            if (shape.Type == "connector")
+            {
+                var points = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+                return IsPointNearPolyline(world, points, radius);
+            }
+
+            if (shape.Type == "comment")
+            {
+                return world.X >= shape.X - radius && world.X <= shape.X + 40 + radius
+                       && world.Y >= shape.Y - radius && world.Y <= shape.Y + 44 + radius;
+            }
+
+            if (shape.Type == "text")
+            {
+                return world.X >= shape.X - radius && world.X <= shape.X + shape.Width + radius
+                       && world.Y >= shape.Y - radius && world.Y <= shape.Y + shape.Height + radius;
+            }
+
+            var left = shape.X - shape.Width / 2 - radius;
+            var top = shape.Y - shape.Height / 2 - radius;
+            var right = shape.X + shape.Width / 2 + radius;
+            var bottom = shape.Y + shape.Height / 2 + radius;
+            return world.X >= left && world.X <= right && world.Y >= top && world.Y <= bottom;
+        }
+
+        private bool TryGetSelectionBounds(out double left, out double top, out double width, out double height)
+        {
+            left = top = width = height = 0;
+            if (_resizeBorder != null)
+            {
+                left = Canvas.GetLeft(_resizeBorder);
+                top = Canvas.GetTop(_resizeBorder);
+                width = _resizeBorder.Width;
+                height = _resizeBorder.Height;
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
+                return true;
+            }
+
+            if (_resizeTarget is FrameworkElement fe)
+            {
+                if (ConnectorVisualHelper.GetLine(fe) is Polyline line && line.Points.Count > 0)
+                {
+                    left = line.Points.Min(p => p.X);
+                    top = line.Points.Min(p => p.Y);
+                    width = Math.Max(line.Points.Max(p => p.X) - left, 1);
+                    height = Math.Max(line.Points.Max(p => p.Y) - top, 1);
+                    return true;
+                }
+
+                left = Canvas.GetLeft(fe);
+                top = Canvas.GetTop(fe);
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
+                width = fe.ActualWidth > 0 ? fe.ActualWidth : fe.Width;
+                height = fe.ActualHeight > 0 ? fe.ActualHeight : fe.Height;
+                if (width < 1) width = 1;
+                if (height < 1) height = 1;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void UpdateSelectionBoundsFromElement(UIElement element)
+        {
+            if (_resizeBorder == null || !TryGetElementWorldBounds(element, out var left, out var top, out var w, out var h))
+            {
+                return;
+            }
+
+            Canvas.SetLeft(_resizeBorder, left);
+            Canvas.SetTop(_resizeBorder, top);
+            _resizeBorder.Width = w;
+            _resizeBorder.Height = h;
+        }
+
+        private static bool TryGetElementWorldBounds(UIElement element, out double left, out double top, out double w, out double h)
+        {
+            left = top = 0;
+            w = h = 1;
+            if (ConnectorVisualHelper.GetLine(element) is Polyline line && line.Points.Count > 0)
+            {
+                left = line.Points.Min(p => p.X);
+                top = line.Points.Min(p => p.Y);
+                w = Math.Max(line.Points.Max(p => p.X) - left, 1);
+                h = Math.Max(line.Points.Max(p => p.Y) - top, 1);
+                return true;
+            }
+
+            if (element is not FrameworkElement fe)
+            {
+                return false;
+            }
+
+            left = Canvas.GetLeft(fe);
+            top = Canvas.GetTop(fe);
+            if (double.IsNaN(left)) left = 0;
+            if (double.IsNaN(top)) top = 0;
+            w = fe.ActualWidth > 1 ? fe.ActualWidth : (fe.Width > 1 ? fe.Width : 1);
+            h = fe.ActualHeight > 1 ? fe.ActualHeight : (fe.Height > 1 ? fe.Height : 1);
+            return true;
+        }
+
+        private void UpdateMarqueeRect(Point world)
+        {
+            if (_marqueeRect == null)
+            {
+                return;
+            }
+
+            var left = Math.Min(_marqueeStartWorld.X, world.X);
+            var top = Math.Min(_marqueeStartWorld.Y, world.Y);
+            var w = Math.Abs(world.X - _marqueeStartWorld.X);
+            var h = Math.Abs(world.Y - _marqueeStartWorld.Y);
+            Canvas.SetLeft(_marqueeRect, left);
+            Canvas.SetTop(_marqueeRect, top);
+            _marqueeRect.Width = Math.Max(w, 1);
+            _marqueeRect.Height = Math.Max(h, 1);
+        }
+
+        private void FinalizeMarqueeSelection(Point world)
+        {
+            var left = Math.Min(_marqueeStartWorld.X, world.X);
+            var top = Math.Min(_marqueeStartWorld.Y, world.Y);
+            var right = Math.Max(_marqueeStartWorld.X, world.X);
+            var bottom = Math.Max(_marqueeStartWorld.Y, world.Y);
+            if (right - left < 4 && bottom - top < 4)
+            {
+                return;
+            }
+
+            var hits = new List<UIElement>();
+            foreach (var child in BoardCanvas.Children.OfType<FrameworkElement>())
+            {
+                if (string.IsNullOrEmpty(child.Uid) || !IsBoardSelectableElement(child))
+                {
+                    continue;
+                }
+
+                if (!TryGetElementWorldBounds(child, out var elLeft, out var elTop, out var elW, out var elH))
+                {
+                    continue;
+                }
+
+                var elRight = elLeft + elW;
+                var elBottom = elTop + elH;
+                if (elRight >= left && elLeft <= right && elBottom >= top && elTop <= bottom)
+                {
+                    hits.Add(child);
+                }
+            }
+
+            if (hits.Count == 0)
+            {
+                return;
+            }
+
+            if (hits.Count == 1)
+            {
+                ShowResizeFrame(hits[0]);
+                return;
+            }
+
+            ShowGroupSelectionFrame(hits);
+        }
+
+        private void ShowGroupSelectionFrame(List<UIElement> elements)
+        {
+            RemoveResizeFrame();
+            _multiSelectedElements.Clear();
+            _multiSelectedElements.AddRange(elements);
+            _resizeTarget = elements[0];
+
+            var left = double.MaxValue;
+            var top = double.MaxValue;
+            var right = double.MinValue;
+            var bottom = double.MinValue;
+            foreach (var el in elements)
+            {
+                if (!TryGetElementWorldBounds(el, out var l, out var t, out var w, out var h))
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, l);
+                top = Math.Min(top, t);
+                right = Math.Max(right, l + w);
+                bottom = Math.Max(bottom, t + h);
+            }
+
+            _resizeBorder = new Rectangle
+            {
+                Width = Math.Max(right - left, 1),
+                Height = Math.Max(bottom - top, 1),
+                Stroke = Brushes.DodgerBlue,
+                StrokeThickness = 1,
+                StrokeDashArray = new DoubleCollection { 3, 2 },
+                Fill = Brushes.Transparent,
+                IsHitTestVisible = true,
+                Cursor = Cursors.SizeAll
+            };
+            Canvas.SetLeft(_resizeBorder, left);
+            Canvas.SetTop(_resizeBorder, top);
+            _resizeBorder.MouseLeftButtonDown += GroupSelectionFrame_MouseLeftButtonDown;
+            BoardCanvas.Children.Add(_resizeBorder);
+            Panel.SetZIndex(_resizeBorder, 15000);
+            SyncSelectionToolbar(elements[0]);
+            UpdateSelectionToolbarPosition();
+        }
+
+        private void GroupSelectionFrame_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (_multiSelectedElements.Count < 2)
+            {
+                return;
+            }
+
+            var world = ScreenToWorld(e.GetPosition(Viewport));
+            BeginMultiSelectionDrag(world);
+            e.Handled = true;
+        }
+
+        private bool IsWorldPointInMultiSelection(Point world)
+        {
+            if (_multiSelectedElements.Count < 2)
+            {
+                return false;
+            }
+
+            if (_resizeBorder != null)
+            {
+                var left = Canvas.GetLeft(_resizeBorder);
+                var top = Canvas.GetTop(_resizeBorder);
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
+                return world.X >= left && world.X <= left + _resizeBorder.Width
+                       && world.Y >= top && world.Y <= top + _resizeBorder.Height;
+            }
+
+            var minLeft = double.MaxValue;
+            var minTop = double.MaxValue;
+            var maxRight = double.MinValue;
+            var maxBottom = double.MinValue;
+            var any = false;
+            foreach (var el in _multiSelectedElements)
+            {
+                if (!TryGetElementWorldBounds(el, out var l, out var t, out var w, out var h))
+                {
+                    continue;
+                }
+
+                any = true;
+                minLeft = Math.Min(minLeft, l);
+                minTop = Math.Min(minTop, t);
+                maxRight = Math.Max(maxRight, l + w);
+                maxBottom = Math.Max(maxBottom, t + h);
+            }
+
+            return any
+                   && world.X >= minLeft && world.X <= maxRight
+                   && world.Y >= minTop && world.Y <= maxBottom;
+        }
+
+        private void ClearMultiSelection()
+        {
+            _multiSelectedElements.Clear();
+            _multiDragSnapshots.Clear();
+        }
+
+        private void BeginMultiSelectionDrag(Point world)
+        {
+            CaptureBoardStateForUndo();
+            _isDraggingElement = true;
+            _dragElement = _multiSelectedElements[0];
+            _multiDragStartWorld = world;
+            _multiDragSnapshots.Clear();
+
+            foreach (var el in _multiSelectedElements)
+            {
+                if (el is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid))
+                {
+                    continue;
+                }
+
+                if (!int.TryParse(fe.Uid, out var id))
+                {
+                    continue;
+                }
+
+                var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == id);
+                if (shape == null)
+                {
+                    continue;
+                }
+
+                List<Point>? polylinePoints = null;
+                if (shape.Type is "line" or "marker" or "connector")
+                {
+                    if (el is Polyline directPl && directPl.Points.Count > 0)
+                    {
+                        polylinePoints = directPl.Points.Select(p => new Point(p.X, p.Y)).ToList();
+                    }
+                    else if (ConnectorVisualHelper.GetLine(el) is Polyline pl && pl.Points.Count > 0)
+                    {
+                        polylinePoints = pl.Points.Select(p => new Point(p.X, p.Y)).ToList();
+                    }
+                    else
+                    {
+                        polylinePoints = shape.DeserializedPoints is { Count: > 0 } dp
+                            ? dp.Select(p => new Point(p.X, p.Y)).ToList()
+                            : JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                    }
+                }
+
+                _multiDragSnapshots[id] = new MultiDragSnapshot
+                {
+                    Anchor = GetShapeWorldPosition(shape),
+                    PolylinePoints = polylinePoints,
+                    Element = el
+                };
+            }
+
+            Viewport.CaptureMouse();
+        }
+
+        private Point GetShapeWorldPosition(BoardShape shape)
+        {
+            if (shape.Type is "line" or "marker" or "connector")
+            {
+                if (!string.IsNullOrWhiteSpace(shape.Points))
+                {
+                    try
+                    {
+                        var pts = JsonConvert.DeserializeObject<List<Point>>(shape.Points);
+                        if (pts is { Count: > 0 })
+                        {
+                            return pts[0];
+                        }
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+                }
+            }
+
+            if (shape.Type is "text" or "comment")
+            {
+                return new Point(shape.X, shape.Y);
+            }
+
+            return new Point(shape.X - shape.Width / 2, shape.Y - shape.Height / 2);
+        }
+
+        private void MoveMultiSelectionTo(Point world)
+        {
+            var delta = new Point(world.X - _multiDragStartWorld.X, world.Y - _multiDragStartWorld.Y);
+            var affectedShapeIds = new HashSet<int>();
+
+            foreach (var (id, snapshot) in _multiDragSnapshots.ToList())
+            {
+                var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == id);
+                if (shape == null)
+                {
+                    continue;
+                }
+
+                ApplyShapeWorldPosition(shape, snapshot, delta);
+                affectedShapeIds.Add(id);
+            }
+
+            foreach (var id in affectedShapeIds)
+            {
+                RefreshConnectorVisualsReferencingShapeLocal(id);
+            }
+
+            if (_resizeBorder != null)
+            {
+                UpdateGroupSelectionBounds();
+            }
+
+            UpdateSelectionToolbarPosition();
+        }
+
+        private void ApplyShapeWorldPosition(BoardShape shape, MultiDragSnapshot snapshot, Point delta)
+        {
+            var element = snapshot.Element;
+            if (shape.Type is "line" or "marker" or "connector" && snapshot.PolylinePoints is { Count: > 0 } initialPts)
+            {
+                var moved = initialPts.Select(p => new Point(p.X + delta.X, p.Y + delta.Y)).ToList();
+                shape.DeserializedPoints = moved;
+                shape.Points = JsonConvert.SerializeObject(moved);
+
+                if (element is Polyline directLine)
+                {
+                    directLine.Points.Clear();
+                    foreach (var p in moved)
+                    {
+                        directLine.Points.Add(p);
+                    }
+                }
+                else if (ConnectorVisualHelper.GetLine(element) is Polyline pl)
+                {
+                    pl.Points.Clear();
+                    foreach (var p in moved)
+                    {
+                        pl.Points.Add(p);
+                    }
+                }
+
+                if (shape.Type == "connector")
+                {
+                    ConnectorVisualHelper.UpdatePoints(
+                        element, shape, moved, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+                }
+
+                return;
+            }
+
+            var topLeft = new Point(snapshot.Anchor.X + delta.X, snapshot.Anchor.Y + delta.Y);
+            if (shape.Type is "text" or "comment")
+            {
+                shape.X = topLeft.X;
+                shape.Y = topLeft.Y;
+                Canvas.SetLeft(element, topLeft.X);
+                Canvas.SetTop(element, topLeft.Y);
+                return;
+            }
+
+            shape.X = topLeft.X + shape.Width / 2;
+            shape.Y = topLeft.Y + shape.Height / 2;
+            Canvas.SetLeft(element, topLeft.X);
+            Canvas.SetTop(element, topLeft.Y);
+        }
+
+        private void UpdateGroupSelectionBounds()
+        {
+            if (_resizeBorder == null || _multiSelectedElements.Count == 0)
+            {
+                return;
+            }
+
+            var left = double.MaxValue;
+            var top = double.MaxValue;
+            var right = double.MinValue;
+            var bottom = double.MinValue;
+            foreach (var el in _multiSelectedElements)
+            {
+                if (!TryGetElementWorldBounds(el, out var l, out var t, out var w, out var h))
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, l);
+                top = Math.Min(top, t);
+                right = Math.Max(right, l + w);
+                bottom = Math.Max(bottom, t + h);
+            }
+
+            Canvas.SetLeft(_resizeBorder, left);
+            Canvas.SetTop(_resizeBorder, top);
+            _resizeBorder.Width = Math.Max(right - left, 1);
+            _resizeBorder.Height = Math.Max(bottom - top, 1);
+        }
+
+        private async Task SaveMultiSelectionPositionsAsync()
+        {
+            var tasks = new List<Task>();
+            foreach (var el in _multiSelectedElements.ToList())
+            {
+                if (el is FrameworkElement { Uid: { Length: > 0 } })
+                {
+                    tasks.Add(SaveElementPositionAsync(el));
+                }
+            }
+
+            await Task.WhenAll(tasks);
+
+            try
+            {
+                await _firebaseService.ReplaceBoardShapesAsync(_boardId.ToString(), _shapesOnBoard);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Firebase sync after multi-move: {ex.Message}");
+            }
+
+            MarkSaved();
+        }
+
+        private async Task DeleteMultiSelectedAsync()
+        {
+            var shapesToDelete = CollectMultiSelectedShapes();
+            if (shapesToDelete.Count == 0)
+            {
+                return;
+            }
+
+            CaptureBoardStateForUndo();
+
+            var deletedIds = new List<int>();
+            foreach (var shape in shapesToDelete)
+            {
+                if (await _supabaseService.DeleteShapeAsync(shape.Id))
+                {
+                    deletedIds.Add(shape.Id);
+                }
+            }
+
+            foreach (var shapeId in deletedIds)
+            {
+                RemoveShapeFromBoardLocal(shapeId);
+            }
+
+            try
+            {
+                await _firebaseService.ClearAndReplaceBoardShapesAsync(_boardId.ToString(), _shapesOnBoard);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Firebase sync after multi-delete: {ex.Message}");
+                foreach (var shapeId in deletedIds)
+                {
+                    await _firebaseService.DeleteShapeAsync(_boardId.ToString(), shapeId.ToString());
+                }
+            }
+
+            ClearMultiSelection();
+            RemoveResizeFrame();
+            MarkSaved();
+        }
+
+        private static bool IsPointNearPolyline(Point p, IReadOnlyList<Point> points, double radius)
+        {
+            if (points.Count < 2)
+            {
+                return points.Count == 1 && Distance(p, points[0]) <= radius;
+            }
+
+            for (var i = 0; i < points.Count - 1; i++)
+            {
+                if (DistancePointToSegment(p, points[i], points[i + 1]) <= radius)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static double Distance(Point a, Point b) =>
+            Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+
+        private static double DistancePointToSegment(Point p, Point a, Point b)
+        {
+            var dx = b.X - a.X;
+            var dy = b.Y - a.Y;
+            if (Math.Abs(dx) < 0.001 && Math.Abs(dy) < 0.001)
+            {
+                return Distance(p, a);
+            }
+
+            var t = ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / (dx * dx + dy * dy);
+            t = Math.Clamp(t, 0, 1);
+            var proj = new Point(a.X + t * dx, a.Y + t * dy);
+            return Distance(p, proj);
+        }
+
+        private void StartEraserTrail(Point world)
+        {
+            RemoveEraserTrail();
+            _eraserTrailLine = new Polyline
+            {
+                Stroke = new SolidColorBrush(Color.FromArgb(100, 255, 59, 48)),
+                StrokeThickness = EraserHitRadius * 1.6,
+                StrokeLineJoin = PenLineJoin.Round,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                IsHitTestVisible = false
+            };
+            _eraserTrailLine.Points.Add(world);
+            BoardCanvas.Children.Add(_eraserTrailLine);
+            Panel.SetZIndex(_eraserTrailLine, 20000);
+        }
+
+        private void AppendEraserTrail(Point world)
+        {
+            if (_eraserTrailLine == null)
+            {
+                StartEraserTrail(world);
+                return;
+            }
+
+            var pts = _eraserTrailLine.Points;
+            if (pts.Count == 0 || Distance(pts[^1], world) > 2)
+            {
+                pts.Add(world);
+            }
+        }
+
+        private void RemoveEraserTrail()
+        {
+            if (_eraserTrailLine == null)
+            {
+                return;
+            }
+
+            BoardCanvas.Children.Remove(_eraserTrailLine);
+            _eraserTrailLine = null;
+        }
+
+        private async Task EraseShapeAsync(BoardShape shape)
+        {
+            if (!await _supabaseService.DeleteShapeAsync(shape.Id))
+            {
+                return;
+            }
+
+            await _firebaseService.DeleteShapeAsync(_boardId.ToString(), shape.Id.ToString());
+            RemoveShapeFromBoardLocal(shape.Id);
+            MarkSaved();
+        }
+
+        private void RemoveConnectorEndpointHandles()
+        {
+            foreach (var el in _connectorEndpointElements)
+            {
+                el.MouseLeftButtonDown -= ConnectorEndpoint_MouseDown;
+                BoardCanvas.Children.Remove(el);
+            }
+
+            _connectorEndpointElements.Clear();
+        }
+
+        private void TryAddConnectorEndpointHandles(UIElement target)
+        {
+            RemoveConnectorEndpointHandles();
+
+            if (IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(target.Uid))
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == target.Uid);
+            if (shape?.Type != "connector")
+            {
+                return;
+            }
+
+            var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+            if (pts.Count < 2)
+            {
+                return;
+            }
+
+            AddConnectorEndpointHandle(shape.Id, "start", pts[0]);
+            AddConnectorEndpointHandle(shape.Id, "end", pts[^1]);
+        }
+
+        private void AddConnectorEndpointHandle(int connectorId, string which, Point world)
+        {
+            var el = new Ellipse
+            {
+                Width = 14,
+                Height = 14,
+                Fill = Brushes.White,
+                Stroke = new SolidColorBrush(Color.FromRgb(0x8B, 0x5C, 0xF6)),
+                StrokeThickness = 2,
+                Cursor = Cursors.SizeAll,
+                Tag = $"conn-end:{connectorId}:{which}"
+            };
+            el.MouseLeftButtonDown += ConnectorEndpoint_MouseDown;
+            Canvas.SetLeft(el, world.X - 7);
+            Canvas.SetTop(el, world.Y - 7);
+            BoardCanvas.Children.Add(el);
+            _connectorEndpointElements.Add(el);
+        }
+
+        private void ConnectorEndpoint_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is not Ellipse el || el.Tag is not string tag || !tag.StartsWith("conn-end:", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            e.Handled = true;
+            var parts = tag.Split(':');
+            if (parts.Length < 3 || !int.TryParse(parts[1], out var connectorId))
+            {
+                return;
+            }
+
+            _isDraggingConnectorEndpoint = true;
+            _connectorEndpointDragShapeId = connectorId;
+            _connectorEndpointDragWhich = parts[2];
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == connectorId);
+            if (shape != null && ConnectorAttachmentHelper.TryDeserialize(shape.Text, out var att))
+            {
+                ShowConnectorSnapHighlights(_connectorEndpointDragWhich == "start" ? att.EndShapeId : att.StartShapeId);
+            }
+
+            CaptureBoardStateForUndo();
+            Viewport.CaptureMouse();
+        }
+
+        private void UpdateConnectorEndpointDrag(Point world, Point viewportPos)
+        {
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == _connectorEndpointDragShapeId);
+            if (shape?.Type != "connector" || FindUIElementByUid(shape.Id.ToString()) is not { } ui)
+            {
+                return;
+            }
+
+            if (!ConnectorAttachmentHelper.TryDeserialize(shape.Text, out var att))
+            {
+                att = new ConnectorAttachment();
+            }
+
+            var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+            if (pts.Count < 2)
+            {
+                return;
+            }
+
+            if (_connectorEndpointDragWhich == "start")
+            {
+                pts[0] = world;
+                if (ConnectorAttachmentHelper.TryFindNearestPort(world, _shapesOnBoard, att.EndShapeId, out var sid, out var side))
+                {
+                    att.StartShapeId = sid;
+                    att.StartSide = side;
+                    var startShape = _shapesOnBoard.FirstOrDefault(s => s.Id == sid);
+                    if (startShape != null)
+                    {
+                        pts[0] = ConnectorAttachmentHelper.GetAnchorWorldPoint(startShape, side);
+                    }
+                }
+                else
+                {
+                    att.StartShapeId = null;
+                    att.StartSide = null;
+                }
+            }
+            else
+            {
+                pts[^1] = world;
+                if (ConnectorAttachmentHelper.TryFindNearestPort(world, _shapesOnBoard, att.StartShapeId, out var sid, out var side))
+                {
+                    att.EndShapeId = sid;
+                    att.EndSide = side;
+                    var endShape = _shapesOnBoard.FirstOrDefault(s => s.Id == sid);
+                    if (endShape != null)
+                    {
+                        pts[^1] = ConnectorAttachmentHelper.GetAnchorWorldPoint(endShape, side);
+                    }
+                }
+                else
+                {
+                    att.EndShapeId = null;
+                    att.EndSide = null;
+                }
+            }
+
+            shape.Text = ConnectorAttachmentHelper.SerializeForStorage(att);
+            ConnectorVisualHelper.UpdatePoints(ui, shape, pts, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+            UpdateConnectorEndpointHandlePositions(shape.Id, pts[0], pts[^1]);
+            ShowConnectorSnapHighlights(att.StartShapeId);
+        }
+
+        private void UpdateConnectorEndpointHandlePositions(int connectorId, Point start, Point end)
+        {
+            foreach (var el in _connectorEndpointElements)
+            {
+                if (el.Tag is not string tag || !tag.StartsWith($"conn-end:{connectorId}:", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var which = tag.Split(':')[^1];
+                var pt = which == "start" ? start : end;
+                Canvas.SetLeft(el, pt.X - 7);
+                Canvas.SetTop(el, pt.Y - 7);
+            }
+        }
+
+        private async Task FinalizeConnectorEndpointDragAsync(Point endWorld, Point viewportPos)
+        {
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id == _connectorEndpointDragShapeId);
+            if (shape?.Type != "connector")
+            {
+                return;
+            }
+
+            if (!ConnectorAttachmentHelper.TryParse(shape.Text, out var att))
+            {
+                att = new ConnectorAttachment();
+            }
+
+            if (_connectorEndpointDragWhich == "start")
+            {
+                if (TryGetConnectorPortAtViewport(viewportPos, out var sid, out var side))
+                {
+                    att.StartShapeId = sid;
+                    att.StartSide = side;
+                }
+                else if (ConnectorAttachmentHelper.TryFindNearestPort(endWorld, _shapesOnBoard, att.EndShapeId, out sid, out side))
+                {
+                    att.StartShapeId = sid;
+                    att.StartSide = side;
+                }
+                else
+                {
+                    att.StartShapeId = null;
+                    att.StartSide = null;
+                }
+            }
+            else if (_connectorEndpointDragWhich == "end")
+            {
+                if (TryGetConnectorPortAtViewport(viewportPos, out var sid, out var side))
+                {
+                    att.EndShapeId = sid;
+                    att.EndSide = side;
+                }
+                else if (ConnectorAttachmentHelper.TryFindNearestPort(endWorld, _shapesOnBoard, att.StartShapeId, out sid, out side))
+                {
+                    att.EndShapeId = sid;
+                    att.EndSide = side;
+                }
+                else
+                {
+                    att.EndShapeId = null;
+                    att.EndSide = null;
+                }
+            }
+
+            shape.Text = ConnectorAttachmentHelper.SerializeForStorage(att);
+            ApplyConnectorGeometryToBoardShape(shape);
+            ClearConnectorSnapHighlights();
+
+            if (FindUIElementByUid(shape.Id.ToString()) is { } ui)
+            {
+                var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+                ConnectorVisualHelper.UpdatePoints(ui, shape, pts, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+                ShowResizeFrame(ui);
+            }
+
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
         }
     }
 

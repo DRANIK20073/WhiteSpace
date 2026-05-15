@@ -8,6 +8,58 @@ public static class BoardShapeOutlineGeometry
 {
     private const double U = 100;
 
+    /// <summary>Точка порта на контуре в координатах 0–100 (для привязки стрелок снаружи фигуры).</summary>
+    public static Point GetConnectionPortNormalized(string kind, string? side)
+    {
+        var s = (side ?? "n").ToLowerInvariant();
+        return (kind, s) switch
+        {
+            ("triangle", "n") => new Point(50, 6),
+            ("triangle", "s") => new Point(50, 90),
+            ("triangle", "w") => new Point(22, 62),
+            ("triangle", "e") => new Point(78, 62),
+            ("triangleInv", "n") => new Point(50, 10),
+            ("triangleInv", "s") => new Point(50, 90),
+            ("triangleInv", "w") => new Point(22, 38),
+            ("triangleInv", "e") => new Point(78, 38),
+            ("diamond", "n") => new Point(50, 4),
+            ("diamond", "s") => new Point(50, 96),
+            ("diamond", "w") => new Point(8, 50),
+            ("diamond", "e") => new Point(92, 50),
+            ("star", "n") => new Point(50, 4),
+            ("star", "s") => new Point(50, 92),
+            ("star", "w") => new Point(8, 50),
+            ("star", "e") => new Point(92, 50),
+            ("parallelogram", "n") => new Point(50, 18),
+            ("parallelogram", "s") => new Point(50, 82),
+            ("parallelogram", "w") => new Point(18, 50),
+            ("parallelogram", "e") => new Point(82, 50),
+            ("parallelogramAlt", "n") => new Point(50, 18),
+            ("parallelogramAlt", "s") => new Point(50, 82),
+            ("parallelogramAlt", "w") => new Point(14, 50),
+            ("parallelogramAlt", "e") => new Point(86, 50),
+            ("trapezoid", "n") => new Point(50, 22),
+            ("trapezoid", "s") => new Point(50, 78),
+            ("trapezoid", "w") => new Point(12, 50),
+            ("trapezoid", "e") => new Point(88, 50),
+            ("manualInput", "n") => new Point(58, 18),
+            ("manualInput", "s") => new Point(42, 82),
+            ("manualInput", "w") => new Point(12, 50),
+            ("manualInput", "e") => new Point(88, 50),
+            ("callout", "n") => new Point(46, 12),
+            ("callout", "s") => new Point(30, 82),
+            ("callout", "w") => new Point(10, 40),
+            ("callout", "e") => new Point(82, 40),
+            _ => s switch
+            {
+                "e" => new Point(92, 50),
+                "s" => new Point(50, 92),
+                "w" => new Point(8, 50),
+                _ => new Point(50, 8),
+            }
+        };
+    }
+
     public static Geometry Get(string kind)
     {
         return kind switch

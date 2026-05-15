@@ -106,6 +106,7 @@ namespace WhiteSpace.Pages
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             LoadPreferences();
+            _currentSection = DashboardSection.MyBoards;
             WhiteSpaceThemeManager.Apply(_preferences);
             UiAnimationHelper.ApplyFadeIn(RootPageGrid, _preferences.EnableAnimations);
             ApplySidebarSelection();

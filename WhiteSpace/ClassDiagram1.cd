@@ -95,6 +95,7 @@
     <Position X="11" Y="0.5" Width="1.5" />
     <Compartments>
       <Compartment Name="Methods" Collapsed="true" />
+      <Compartment Name="Nested Types" Collapsed="false" />
     </Compartments>
     <NestedTypes>
       <Class Name="SupabaseService.PasswordResetPayload" Collapsed="true">

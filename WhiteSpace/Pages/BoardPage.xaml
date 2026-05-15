@@ -328,12 +328,6 @@
                         <TextBlock Text="Поделиться"/>
                     </Button>
 
-                    <Button Style="{StaticResource DarkActionButtonStyle}"
-                            Margin="8,0,0,0"
-                            Click="SaveBoard_Click">
-                        <TextBlock Text="Сохранить"/>
-                    </Button>
-
                     <Button x:Name="BoardMenuButton"
                             Style="{StaticResource ToolbarButtonStyle}"
                             Margin="8,0,0,0"
@@ -346,9 +340,11 @@
                                 <MenuItem x:Name="PresentationMenuItem"
                                           Header="Включить режим презентации"
                                           Click="PresentationMode_Click"/>
-                                <MenuItem Header="Сохранить версию"
+                                <MenuItem x:Name="SaveVersionMenuItem"
+                                          Header="Сохранить версию"
                                           Click="SaveVersion_Click"/>
-                                <MenuItem Header="История версий"
+                                <MenuItem x:Name="VersionHistoryMenuItem"
+                                          Header="История версий"
                                           Click="VersionHistory_Click"/>
                                 <Separator/>
                                 <MenuItem Header="Удалить доску"
@@ -368,8 +364,19 @@
                 Padding="18,10">
             <DockPanel LastChildFill="True">
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-                    <Button x:Name="HandButton" Style="{StaticResource ToolbarButtonStyle}" Content="Рука" Click="Hand_Click"/>
+                    <Button x:Name="HandButton" Style="{StaticResource ToolbarButtonStyle}" Content="Рука" Click="Hand_Click"
+                            ToolTip="Перемещение по доске"/>
+                    <Button x:Name="SelectButton" Style="{StaticResource ToolbarButtonStyle}" Content="Выделение" Click="Select_Click"
+                            ToolTip="Выделение и перемещение объектов"/>
+                    <Button x:Name="ArrowToolButton" Style="{StaticResource ToolbarButtonStyle}" Content="↗" Click="ArrowTool_Click"
+                            ToolTip="Стрелка"/>
                     <Button x:Name="PenButton" Style="{StaticResource ToolbarButtonStyle}" Content="Перо" Click="Pen_Click"/>
+                    <Button x:Name="MarkerButton" Style="{StaticResource ToolbarButtonStyle}" Content="Маркер" Click="Marker_Click"
+                            ToolTip="Маркер для рисования"/>
+                    <Button x:Name="EraserButton" Style="{StaticResource ToolbarButtonStyle}" Content="Стерка" Click="Eraser_Click"
+                            ToolTip="Стереть штрихи"/>
+                    <Button x:Name="CommentButton" Style="{StaticResource ToolbarButtonStyle}" Content="💬" Click="Comment_Click"
+                            ToolTip="Комментарий на доске"/>
                     <StackPanel Orientation="Horizontal">
                         <Button x:Name="ShapesToolButton" Style="{StaticResource ToolbarButtonStyle}" Click="ShapesToolButton_Click"
                                 ToolTip="Фигуры">
@@ -478,6 +485,7 @@
                     ClipToBounds="True">
                 <Grid>
                     <Grid x:Name="Viewport"
+                          Focusable="True"
                           MouseDown="Viewport_MouseDown"
                           MouseMove="Viewport_MouseMove"
                           MouseUp="Viewport_MouseUp"
@@ -741,6 +749,44 @@
                                                         Cursor="Hand"
                                                         Click="StrokeStyleButton_Click"
                                                         Content="Штрих-пунктир"/>
+                                            </StackPanel>
+                                            <StackPanel x:Name="ConnectorArrowSection"
+                                                        Visibility="Collapsed"
+                                                        Margin="0,12,0,0">
+                                                <TextBlock Text="Наконечник (конец)"
+                                                           Foreground="#CCCCCC"
+                                                           Margin="0,0,0,6"
+                                                           FontSize="12"/>
+                                                <WrapPanel x:Name="ConnectorArrowEndRow"
+                                                           HorizontalAlignment="Center">
+                                                    <Button Tag="none" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowEnd_Click" Content="—"/>
+                                                    <Button Tag="block" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowEnd_Click" Content="▶"/>
+                                                    <Button Tag="open" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowEnd_Click" Content="›"/>
+                                                    <Button Tag="diamond" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowEnd_Click" Content="◇"/>
+                                                    <Button Tag="oval" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowEnd_Click" Content="○"/>
+                                                </WrapPanel>
+                                                <TextBlock Text="Наконечник (начало)"
+                                                           Foreground="#CCCCCC"
+                                                           Margin="0,10,0,6"
+                                                           FontSize="12"/>
+                                                <WrapPanel x:Name="ConnectorArrowStartRow"
+                                                           HorizontalAlignment="Center">
+                                                    <Button Tag="none" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowStart_Click" Content="—"/>
+                                                    <Button Tag="block" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowStart_Click" Content="▶"/>
+                                                    <Button Tag="open" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowStart_Click" Content="›"/>
+                                                    <Button Tag="diamond" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowStart_Click" Content="◇"/>
+                                                    <Button Tag="oval" Margin="3" Padding="8,5" Cursor="Hand"
+                                                            Click="ConnectorArrowStart_Click" Content="○"/>
+                                                </WrapPanel>
                                             </StackPanel>
                                             <Button x:Name="StrokePaletteCustomColorBtn"
                                                     Margin="0,12,0,0"

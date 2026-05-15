@@ -29,7 +29,7 @@ namespace WhiteSpace
 
         #region Shapes
 
-        public IObservable<BoardShape> GetShapesObservable(string boardId)
+        public IObservable<BoardShapeChange> GetShapesObservable(string boardId)
         {
             return _client
                 .Child(SHAPES_PATH)
@@ -37,23 +37,31 @@ namespace WhiteSpace
                 .AsObservable<BoardShape>()
                 .Select(dbevent =>
                 {
-                    if (dbevent.Object != null)
+                    if (!int.TryParse(dbevent.Key, out var id))
                     {
-                        if (int.TryParse(dbevent.Key, out int id))
-                        {
-                            dbevent.Object.Id = id;
-                        }
-                        else
-                        {
-                            dbevent.Object.Id = 0;
-                        }
-
-                        if (Guid.TryParse(boardId, out Guid guid))
-                        {
-                            dbevent.Object.BoardId = guid;
-                        }
+                        id = 0;
                     }
-                    return dbevent.Object;
+
+                    if (dbevent.Object == null)
+                    {
+                        return new BoardShapeChange { ShapeId = id };
+                    }
+
+                    if (int.TryParse(dbevent.Key, out int shapeId))
+                    {
+                        dbevent.Object.Id = shapeId;
+                    }
+                    else
+                    {
+                        dbevent.Object.Id = 0;
+                    }
+
+                    if (Guid.TryParse(boardId, out Guid guid))
+                    {
+                        dbevent.Object.BoardId = guid;
+                    }
+
+                    return new BoardShapeChange { ShapeId = dbevent.Object.Id, Shape = dbevent.Object };
                 });
         }
 
@@ -168,6 +176,17 @@ namespace WhiteSpace
                 .Child(SHAPES_PATH)
                 .Child(boardId)
                 .PutAsync(payload);
+        }
+
+        /// <summary>Полностью заменяет фигуры доски (удаляет лишние у всех клиентов).</summary>
+        public async Task ClearAndReplaceBoardShapesAsync(string boardId, IEnumerable<BoardShape> shapes)
+        {
+            await _client
+                .Child(SHAPES_PATH)
+                .Child(boardId)
+                .DeleteAsync();
+
+            await ReplaceBoardShapesAsync(boardId, shapes);
         }
 
         public async Task DeleteShapeAsync(string boardId, string shapeId)
