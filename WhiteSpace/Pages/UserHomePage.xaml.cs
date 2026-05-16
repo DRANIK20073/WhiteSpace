@@ -163,7 +163,7 @@ namespace WhiteSpace.Pages
                     ? profile.Username
                     : "Пользователь";
 
-                GreetingTextBlock.Text = $"Здравствуйте, {_userName} 👋";
+                GreetingTextBlock.Text = $"Здравствуйте, {_userName}";
                 SidebarUserNameTextBlock.Text = _userName;
                 var initials = GetInitials(_userName);
                 UserInitialsTextBlock.Text = initials;
