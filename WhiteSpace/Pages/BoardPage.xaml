@@ -27,6 +27,100 @@
             <Setter Property="FontWeight" Value="Bold"/>
         </Style>
 
+        <!-- ListView по умолчанию рисует светлую рамку вокруг ScrollViewer — в тёмной теме даёт «просвет». -->
+        <Style x:Key="BoardParticipantsListViewStyle" TargetType="ListView">
+            <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListView">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent"
+                                BorderThickness="0"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer Padding="{TemplateBinding Padding}"
+                                          Focusable="False"
+                                          Background="{TemplateBinding Background}"
+                                          BorderBrush="Transparent"
+                                          BorderThickness="0">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SelectionToolbarDeleteButtonStyle" TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Background" Value="#3A3A3C"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent"
+                                BorderThickness="0"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#4A4A4E"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#353538"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SelectionToolbarColorChipStyle" TargetType="Button">
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Tag" Value="active">
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#8B5CF6"/>
+                                <Setter TargetName="Root" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#F4F4F5"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#EAEAEC"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="ToolbarButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
@@ -61,7 +155,50 @@
                                 <Setter TargetName="Root" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ToolbarScale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1.14"
+                                                             Duration="0:0:0.15">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="ToolbarScale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1.14"
+                                                             Duration="0:0:0.15">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ToolbarScale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1"
+                                                             Duration="0:0:0.15">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="ToolbarScale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1"
+                                                             Duration="0:0:0.15">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Root" Property="Opacity" Value="0.45"/>
@@ -127,6 +264,10 @@
                             </Border.RenderTransform>
                         </Border>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="Tag" Value="active">
+                                <Setter TargetName="SwatchRoot" Property="BorderBrush" Value="#8B5CF6"/>
+                                <Setter TargetName="SwatchRoot" Property="BorderThickness" Value="2"/>
+                            </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Trigger.EnterActions>
                                     <BeginStoryboard>
@@ -720,13 +861,9 @@
                                         VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
                                     <Button x:Name="SelectionToolbarFillButton"
+                                            Style="{StaticResource SelectionToolbarColorChipStyle}"
                                             Width="36"
                                             Height="30"
-                                            Padding="4,2"
-                                            Cursor="Hand"
-                                            Background="#FFFFFF"
-                                            BorderBrush="#555555"
-                                            BorderThickness="1"
                                             VerticalAlignment="Center"
                                             Click="SelectionToolbarFillButton_Click"
                                             ToolTip="Заливка">
@@ -745,14 +882,10 @@
                                         </Grid>
                                     </Button>
                                     <Button x:Name="SelectionToolbarStrokeButton"
+                                            Style="{StaticResource SelectionToolbarColorChipStyle}"
                                             Width="36"
                                             Height="30"
                                             Margin="4,0,0,0"
-                                            Padding="4,2"
-                                            Cursor="Hand"
-                                            Background="#FFFFFF"
-                                            BorderBrush="#555555"
-                                            BorderThickness="1"
                                             VerticalAlignment="Center"
                                             Click="SelectionToolbarStrokeButton_Click"
                                             ToolTip="Цвет обводки">
@@ -932,13 +1065,10 @@
                                 </Popup>
                             </StackPanel>
                             <Button x:Name="SelectionToolbarDeleteButton"
+                                    Style="{StaticResource SelectionToolbarDeleteButtonStyle}"
                                     Width="36"
                                     Height="36"
-                                    Padding="0"
                                     Cursor="Hand"
-                                    Background="#3A3A3C"
-                                    BorderBrush="#555555"
-                                    BorderThickness="1"
                                     VerticalAlignment="Center"
                                     HorizontalAlignment="Center"
                                     ToolTip="Удалить (Del)"
@@ -1006,13 +1136,12 @@
                     <ListView x:Name="UsersListView"
                               Grid.Row="1"
                               Margin="10,0,10,12"
-                              BorderThickness="0"
-                              Background="{DynamicResource WsSurfaceBrush}"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                              Style="{StaticResource BoardParticipantsListViewStyle}">
                         <ListView.Resources>
-                            <!-- Шаблон ListView по умолчанию красит область прокрутки в белый — в тёмой теме оставался «просвет». -->
                             <Style TargetType="ScrollViewer">
                                 <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
                             </Style>
                         </ListView.Resources>
                         <ListView.ItemContainerStyle>

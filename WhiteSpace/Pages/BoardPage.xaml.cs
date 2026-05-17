@@ -196,6 +196,9 @@ namespace WhiteSpace.Pages
         private readonly Dictionary<Guid, FirebaseCursorState> _cursorByUserId = new();
         private readonly Dictionary<Guid, FrameworkElement> _cursorVisuals = new();
         private readonly Dictionary<Guid, Brush> _cursorAccentByUserId = new();
+        private readonly Dictionary<Guid, (Brush Fill, Brush Stroke)> _participantAvatarByUserId = new();
+        private Point _connectorDragStartWorld;
+        private bool _connectorDetachedForDrag;
         private DateTime _lastCursorPublishUtc = DateTime.MinValue;
         private const int CursorPublishThrottleMs = 50;
         private static readonly TimeSpan CursorOfflineTimeout = TimeSpan.FromSeconds(8);
@@ -1226,6 +1229,30 @@ namespace WhiteSpace.Pages
             return stroke;
         }
 
+        private (Brush Fill, Brush Stroke) ResolveParticipantAvatarBrushes(Guid? userId)
+        {
+            if (userId.HasValue && _participantAvatarByUserId.TryGetValue(userId.Value, out var known))
+            {
+                return (CloneBrushForFill(known.Fill), CloneBrushForFill(known.Stroke));
+            }
+
+            var index = Math.Abs((userId ?? Guid.Empty).GetHashCode());
+            var (fill, stroke) = GetParticipantPalette(index);
+            return (CloneBrushForFill(fill), CloneBrushForFill(stroke));
+        }
+
+        private (Brush Fill, Brush Stroke) ResolveCommentAuthorAvatarBrushes(BoardCommentMetadata meta)
+        {
+            if (Guid.TryParse(meta.AuthorId, out var authorId))
+            {
+                return ResolveParticipantAvatarBrushes(authorId);
+            }
+
+            var index = Math.Abs(meta.DisplayAuthor().GetHashCode(StringComparison.OrdinalIgnoreCase));
+            var (fill, stroke) = GetParticipantPalette(index);
+            return (CloneBrushForFill(fill), CloneBrushForFill(stroke));
+        }
+
         private static Brush CloneBrushForFill(Brush brush)
         {
             if (brush is SolidColorBrush scb)
@@ -1595,6 +1622,7 @@ namespace WhiteSpace.Pages
             var cards = new List<BoardParticipantCard>();
             int colorIndex = 0;
             _cursorAccentByUserId.Clear();
+            _participantAvatarByUserId.Clear();
 
             foreach (var member in members)
             {
@@ -1607,6 +1635,7 @@ namespace WhiteSpace.Pages
                     var accountInitials = GetInitials(accountDisplayName);
 
                     var (accountFill, accountStroke) = GetParticipantPalette(colorIndex++);
+                    _participantAvatarByUserId[member.UserId] = (accountFill, accountStroke);
                     _cursorAccentByUserId[member.UserId] = accountStroke;
                     var accountIsCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
 
@@ -1680,6 +1709,7 @@ namespace WhiteSpace.Pages
                 string initials = cachedProfile.Initials;
 
                 var (fill, stroke) = GetParticipantPalette(colorIndex++);
+                _participantAvatarByUserId[member.UserId] = (fill, stroke);
                 _cursorAccentByUserId[member.UserId] = stroke;
                 var isCurrentUser = currentUserId.HasValue && member.UserId == currentUserId.Value;
                 var isOnline = false;
@@ -3006,10 +3036,13 @@ namespace WhiteSpace.Pages
             _isPlacingSticky = false;
             HideCommentComposer();
 
-            if (tool != ToolMode.Select && tool != ToolMode.Arrow)
+            if (tool != ToolMode.Select)
             {
                 RemoveResizeFrame();
             }
+
+            SyncMainToolbarToolHighlight(tool);
+            SyncMainToolbarColorHighlight();
 
             RemovePreviewShape();
             RemovePreviewSticky();
@@ -3644,6 +3677,80 @@ namespace WhiteSpace.Pages
             HighlightPaletteGrid(FillPaletteGridStroke, strokeHex);
         }
 
+        private void SyncMainToolbarToolHighlight(ToolMode activeTool)
+        {
+            void SetActive(Button? btn, bool on)
+            {
+                if (btn == null)
+                {
+                    return;
+                }
+
+                btn.Tag = on ? "active" : null;
+            }
+
+            SetActive(SelectButton, activeTool == ToolMode.Select);
+            SetActive(HandButton, activeTool == ToolMode.Hand);
+            SetActive(PenButton, activeTool == ToolMode.Pen);
+            SetActive(MarkerButton, activeTool == ToolMode.Marker);
+            SetActive(EraserButton, activeTool == ToolMode.Eraser);
+            SetActive(ShapesToolButton, activeTool == ToolMode.Shape);
+            SetActive(TextButton, activeTool == ToolMode.Text);
+            SetActive(StickyNoteButton, activeTool == ToolMode.StickyNote);
+            SetActive(ArrowToolButton, activeTool == ToolMode.Arrow);
+            SetActive(CommentButton, activeTool == ToolMode.Comment);
+        }
+
+        private static bool IsDrawingColorTool(ToolMode tool) =>
+            tool is ToolMode.Pen or ToolMode.Marker or ToolMode.Arrow or ToolMode.Shape
+                or ToolMode.Text or ToolMode.StickyNote;
+
+        private void SyncMainToolbarColorHighlight()
+        {
+            if (ColorPanel == null)
+            {
+                return;
+            }
+
+            var showColorRing = IsDrawingColorTool(_tool);
+            var activeKey = showColorRing ? NormalizeColorKey(_currentStrokeHex) : string.Empty;
+            foreach (var child in ColorPanel.Children)
+            {
+                if (child is not Button btn || ReferenceEquals(btn, MainToolbarColorPickerButton))
+                {
+                    continue;
+                }
+
+                if (!showColorRing)
+                {
+                    btn.Tag = null;
+                    continue;
+                }
+
+                var btnKey = NormalizeColorKey(btn.Background?.ToString());
+                btn.Tag = !string.IsNullOrEmpty(activeKey)
+                            && string.Equals(btnKey, activeKey, StringComparison.OrdinalIgnoreCase)
+                    ? "active"
+                    : null;
+            }
+        }
+
+        private void SyncSelectionToolbarChipHighlights(string? fillHex, string? strokeHex)
+        {
+            void SetChip(Button? btn, string? hex)
+            {
+                if (btn == null)
+                {
+                    return;
+                }
+
+                btn.Tag = string.IsNullOrWhiteSpace(hex) ? null : "active";
+            }
+
+            SetChip(SelectionToolbarFillButton, fillHex);
+            SetChip(SelectionToolbarStrokeButton, strokeHex);
+        }
+
         private void SelectionToolbarFillButton_Click(object sender, RoutedEventArgs e)
         {
             if (SelectionToolbarFillPopup == null || SelectionToolbarFillButton == null)
@@ -3750,6 +3857,27 @@ namespace WhiteSpace.Pages
                     SelectionToolbarStrokeSwatch.Fill = b;
                 }
             }
+
+            string? fillRing;
+            string? strokeRing;
+            if (shape.Type is "rectangle" or "ellipse")
+            {
+                var app = RectEllipseAppearance.Parse(shape);
+                fillRing = app.FillHex ?? shape.Color;
+                strokeRing = shape.Color;
+            }
+            else if (shape.Type == "stickyNote")
+            {
+                fillRing = StickyNoteAppearance.Parse(shape).EffectivePaperHex();
+                strokeRing = shape.Color;
+            }
+            else
+            {
+                fillRing = shape.Color;
+                strokeRing = shape.Color;
+            }
+
+            SyncSelectionToolbarChipHighlights(fillRing, strokeRing);
         }
 
         private void FillModeButton_Click(object sender, RoutedEventArgs e)
@@ -3846,6 +3974,7 @@ namespace WhiteSpace.Pages
                     }
 
                     SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
+                    SyncMainToolbarColorHighlight();
                     if (SelectionToolbarFillPopup != null)
                     {
                         SelectionToolbarFillPopup.IsOpen = false;
@@ -4846,6 +4975,78 @@ namespace WhiteSpace.Pages
             return s.ToUpperInvariant();
         }
 
+        private static readonly SolidColorBrush SelectionToolbarDefaultBg =
+            new(Color.FromRgb(0x2C, 0x2C, 0x2E));
+
+        private static readonly SolidColorBrush SelectionToolbarDefaultBorder =
+            new(Color.FromRgb(0x55, 0x55, 0x55));
+
+        private void ApplySelectionToolbarChrome(bool deleteOnlySquare)
+        {
+            if (SelectionToolbarPanel == null)
+            {
+                return;
+            }
+
+            if (SelectionToolbarDeleteButton != null)
+            {
+                SelectionToolbarDeleteButton.Style =
+                    (Style)FindResource("SelectionToolbarDeleteButtonStyle");
+                SelectionToolbarDeleteButton.Width = 36;
+                SelectionToolbarDeleteButton.Height = 36;
+            }
+
+            if (deleteOnlySquare)
+            {
+                SelectionToolbarPanel.CornerRadius = new CornerRadius(0);
+                SelectionToolbarPanel.Padding = new Thickness(0);
+                SelectionToolbarPanel.BorderThickness = new Thickness(0);
+                SelectionToolbarPanel.BorderBrush = Brushes.Transparent;
+                SelectionToolbarPanel.Background = Brushes.Transparent;
+                SelectionToolbarPanel.Effect = null;
+
+                if (SelectionToolbarShapeHost != null)
+                {
+                    SelectionToolbarShapeHost.Visibility = Visibility.Collapsed;
+                }
+
+                if (SelectionToolbarStyleHost != null)
+                {
+                    SelectionToolbarStyleHost.Visibility = Visibility.Collapsed;
+                }
+
+                if (SelectionToolbarDeleteButton != null)
+                {
+                    SelectionToolbarDeleteButton.Margin = new Thickness(0);
+                }
+            }
+            else
+            {
+                SelectionToolbarPanel.CornerRadius = new CornerRadius(10);
+                SelectionToolbarPanel.Padding = new Thickness(8, 6, 8, 6);
+                SelectionToolbarPanel.BorderThickness = new Thickness(1);
+                SelectionToolbarPanel.BorderBrush = SelectionToolbarDefaultBorder;
+                SelectionToolbarPanel.Background = SelectionToolbarDefaultBg;
+                SelectionToolbarPanel.Effect = new DropShadowEffect
+                {
+                    BlurRadius = 14,
+                    ShadowDepth = 2,
+                    Opacity = 0.35,
+                    Color = Colors.Black
+                };
+
+                if (SelectionToolbarStyleHost != null)
+                {
+                    SelectionToolbarStyleHost.Visibility = Visibility.Visible;
+                }
+
+                if (SelectionToolbarDeleteButton != null)
+                {
+                    SelectionToolbarDeleteButton.Margin = new Thickness(0);
+                }
+            }
+        }
+
         private void SyncSelectionToolbar(UIElement element)
         {
             if (SelectionToolbarPanel == null || SelectionToolbarDeleteButton == null ||
@@ -4865,6 +5066,7 @@ namespace WhiteSpace.Pages
 
             var isComment = shape?.Type == "comment";
             var isConnector = shape?.Type == "connector";
+            ApplySelectionToolbarChrome(isComment || isMultiSelect);
 
             if (isMultiSelect)
             {
@@ -4972,6 +5174,7 @@ namespace WhiteSpace.Pages
                 }
 
                 SyncPaletteGridRingHighlights(fillRing, strokeRing);
+                SyncSelectionToolbarChipHighlights(fillRing, strokeRing);
             }
             finally
             {
@@ -5344,17 +5547,6 @@ namespace WhiteSpace.Pages
                     if (IsBoardDraggableElement(uiElement))
                     {
                         var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == uiElement.Uid);
-                        if (shape?.Type == "connector")
-                        {
-                            DetachConnectorForFreeDrag(shape);
-                            if (FindUIElementByUid(shape.Id.ToString()) is { } connUi)
-                            {
-                                var pts = JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
-                                ConnectorVisualHelper.UpdatePoints(
-                                    connUi, shape, pts, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
-                            }
-                        }
-
                         CaptureBoardStateForUndo();
                         _isDraggingElement = true;
                         _dragElement = uiElement;
@@ -5362,6 +5554,8 @@ namespace WhiteSpace.Pages
 
                         if (shape?.Type == "connector")
                         {
+                            _connectorDragStartWorld = world;
+                            _connectorDetachedForDrag = false;
                             Viewport.CaptureMouse();
                         }
                         else
@@ -5831,6 +6025,15 @@ namespace WhiteSpace.Pages
 
             if (shape?.Type == "connector" && _dragElement is Canvas)
             {
+                if (!_connectorDetachedForDrag
+                    && ConnectorAttachmentHelper.TryParse(shape.Text, out _)
+                    && (Math.Abs(world.X - _connectorDragStartWorld.X) > 3
+                        || Math.Abs(world.Y - _connectorDragStartWorld.Y) > 3))
+                {
+                    DetachConnectorForFreeDrag(shape);
+                    _connectorDetachedForDrag = true;
+                }
+
                 var delta = new Point(world.X - _dragLastWorld.X, world.Y - _dragLastWorld.Y);
                 _dragLastWorld = world;
                 if (ConnectorVisualHelper.GetLine(_dragElement) is Polyline line)
@@ -6775,11 +6978,41 @@ namespace WhiteSpace.Pages
             UpdateSelectionToolbarPosition();
         }
 
-        private void RemoveResizeFrame()
+        private void PurgeOrphanConnectorChromeFromCanvas()
         {
             RemoveAnchorPorts();
             RemoveConnectorEndpointHandles();
             ClearConnectorSnapHighlights();
+
+            foreach (var child in BoardCanvas.Children.OfType<FrameworkElement>().ToList())
+            {
+                if (child.Tag is not string tag)
+                {
+                    continue;
+                }
+
+                if (!tag.StartsWith("port:", StringComparison.Ordinal)
+                    && !tag.StartsWith("conn-end:", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (child is Ellipse portEl && tag.StartsWith("port:", StringComparison.Ordinal))
+                {
+                    portEl.MouseLeftButtonDown -= ConnectorPort_MouseDown;
+                }
+                else if (child is Ellipse endEl && tag.StartsWith("conn-end:", StringComparison.Ordinal))
+                {
+                    endEl.MouseLeftButtonDown -= ConnectorEndpoint_MouseDown;
+                }
+
+                BoardCanvas.Children.Remove(child);
+            }
+        }
+
+        private void RemoveResizeFrame()
+        {
+            PurgeOrphanConnectorChromeFromCanvas();
 
             if (_resizeBorder != null)
             {
@@ -6808,6 +7041,11 @@ namespace WhiteSpace.Pages
         private void TryAddConnectorAnchorPorts(UIElement target, double left, double top, double w, double h)
         {
             RemoveAnchorPorts();
+
+            if (_tool != ToolMode.Select || HasMultiSelection())
+            {
+                return;
+            }
 
             if (string.IsNullOrEmpty(target.Uid))
             {
@@ -7370,11 +7608,6 @@ namespace WhiteSpace.Pages
 
             if (_resizeTarget is Polyline polyline)
             {
-                if (shape.Type == "connector")
-                {
-                    shape.Text = "";
-                }
-
                 // Для линии сохраняем все точки
                 shape.DeserializedPoints = new List<Point>(polyline.Points);
                 shape.Points = JsonConvert.SerializeObject(polyline.Points);
@@ -7448,6 +7681,7 @@ namespace WhiteSpace.Pages
                     }
 
                     SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
+                    SyncMainToolbarColorHighlight();
                 }
             }
         }
@@ -7474,6 +7708,7 @@ namespace WhiteSpace.Pages
                 _currentStrokeHex = string.IsNullOrEmpty(norm) ? hex : norm;
                 _currentBrush = brush;
                 SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
+                SyncMainToolbarColorHighlight();
             }
         }
 
@@ -7525,6 +7760,20 @@ namespace WhiteSpace.Pages
             else if (element is Polyline polyline)
             {
                 polyline.Stroke = brush;
+            }
+            else if (element is Canvas canvas && shape.Type == "connector")
+            {
+                if (ConnectorAttachmentHelper.TryParse(shape.Text, out _))
+                {
+                    ApplyConnectorGeometryToBoardShape(shape);
+                    var pts = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+                    ConnectorVisualHelper.UpdatePoints(
+                        canvas, shape, pts, brush, ConnectorStrokeThickness);
+                }
+                else
+                {
+                    ConnectorVisualHelper.ApplyStyle(canvas, shape, brush, ConnectorStrokeThickness);
+                }
             }
             else if (element is TextBox tb)
             {
@@ -7682,12 +7931,25 @@ namespace WhiteSpace.Pages
         private const string CommentAuthorTag = "commentAuthor";
         private const string CommentMessageTag = "commentMessage";
         private const string CommentTimeTag = "commentTime";
+        private const string CommentAvatarTag = "commentAvatar";
+
+        private static readonly SolidColorBrush CommentPinBgBrush =
+            new(Color.FromRgb(0x1F, 0x29, 0x37));
+
+        private static readonly SolidColorBrush CommentCardBgBrush =
+            new(Color.FromRgb(0x1F, 0x29, 0x37));
+
+        private static readonly SolidColorBrush CommentPrimaryTextBrush =
+            new(Color.FromRgb(0xF9, 0xFA, 0xFB));
+
+        private static readonly SolidColorBrush CommentSecondaryTextBrush =
+            new(Color.FromRgb(0x9C, 0xA3, 0xAF));
 
         private Grid CreateCommentBoardContainer(BoardShape shape)
         {
             BoardCommentMetadataHelper.TryParse(shape.Text, out var meta);
             var initials = GetInitials(meta.DisplayAuthor());
-            var accent = GetCommentAccentBrush(meta.DisplayAuthor());
+            var (avatarFill, avatarStroke) = ResolveCommentAuthorAvatarBrushes(meta);
 
             var root = new Grid
             {
@@ -7703,7 +7965,7 @@ namespace WhiteSpace.Pages
                 Height = 44,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
-                Background = Brushes.White,
+                Background = CommentPinBgBrush,
                 CornerRadius = new CornerRadius(20, 20, 4, 20),
                 Padding = new Thickness(4),
                 Cursor = Cursors.Hand
@@ -7712,22 +7974,25 @@ namespace WhiteSpace.Pages
             {
                 BlurRadius = 10,
                 ShadowDepth = 1,
-                Opacity = 0.25,
+                Opacity = 0.45,
                 Color = Colors.Black
             };
 
             var avatar = new Border
             {
+                Tag = CommentAvatarTag,
                 Width = 30,
                 Height = 30,
                 CornerRadius = new CornerRadius(15),
-                Background = accent,
+                Background = avatarFill,
+                BorderBrush = avatarStroke,
+                BorderThickness = new Thickness(2),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 Child = new TextBlock
                 {
                     Text = initials,
-                    Foreground = Brushes.White,
+                    Foreground = avatarStroke,
                     FontWeight = FontWeights.Bold,
                     FontSize = 14,
                     HorizontalAlignment = HorizontalAlignment.Center,
@@ -7745,7 +8010,9 @@ namespace WhiteSpace.Pages
                 Margin = new Thickness(48, 0, 0, 0),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
-                Background = Brushes.White,
+                Background = CommentCardBgBrush,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x37, 0x41, 0x51)),
+                BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(12, 10, 14, 10),
                 Cursor = Cursors.Arrow
@@ -7754,7 +8021,7 @@ namespace WhiteSpace.Pages
             {
                 BlurRadius = 14,
                 ShadowDepth = 2,
-                Opacity = 0.28,
+                Opacity = 0.5,
                 Color = Colors.Black
             };
 
@@ -7765,14 +8032,14 @@ namespace WhiteSpace.Pages
                 Text = meta.DisplayAuthor(),
                 FontWeight = FontWeights.Bold,
                 FontSize = 13,
-                Foreground = Brushes.Black
+                Foreground = CommentPrimaryTextBrush
             });
             header.Children.Add(new TextBlock
             {
                 Tag = CommentTimeTag,
                 Text = " " + BoardCommentMetadataHelper.FormatRelativeTime(meta.CreatedAtUtc),
                 FontSize = 12,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+                Foreground = CommentSecondaryTextBrush,
                 Margin = new Thickness(6, 1, 0, 0)
             });
 
@@ -7782,7 +8049,7 @@ namespace WhiteSpace.Pages
                 Text = meta.Message,
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13,
-                Foreground = Brushes.Black
+                Foreground = CommentPrimaryTextBrush
             };
 
             var body = new StackPanel();
@@ -7802,6 +8069,23 @@ namespace WhiteSpace.Pages
         private void SyncCommentVisual(Grid grid, BoardShape shape)
         {
             BoardCommentMetadataHelper.TryParse(shape.Text, out var meta);
+            var (avatarFill, avatarStroke) = ResolveCommentAuthorAvatarBrushes(meta);
+            foreach (var child in FindVisualChildren<Border>(grid))
+            {
+                if (child.Tag as string != CommentAvatarTag)
+                {
+                    continue;
+                }
+
+                child.Background = avatarFill;
+                child.BorderBrush = avatarStroke;
+                if (child.Child is TextBlock avatarText)
+                {
+                    avatarText.Text = GetInitials(meta.DisplayAuthor());
+                    avatarText.Foreground = avatarStroke;
+                }
+            }
+
             foreach (var child in FindVisualChildren<TextBlock>(grid))
             {
                 if (child.Tag as string == CommentAuthorTag)
@@ -7817,19 +8101,6 @@ namespace WhiteSpace.Pages
                     child.Text = meta.Message;
                 }
             }
-        }
-
-        private static Brush GetCommentAccentBrush(string displayName)
-        {
-            var hash = displayName.GetHashCode(StringComparison.OrdinalIgnoreCase);
-            var colors = new[]
-            {
-                Color.FromRgb(0x22, 0xC5, 0x5E),
-                Color.FromRgb(0x8B, 0x5C, 0xF6),
-                Color.FromRgb(0x3B, 0x82, 0xF6),
-                Color.FromRgb(0xF5, 0x9E, 0x0B)
-            };
-            return new SolidColorBrush(colors[Math.Abs(hash) % colors.Length]);
         }
 
         private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
@@ -7889,7 +8160,8 @@ namespace WhiteSpace.Pages
                 Height = 28,
                 Content = "↑",
                 FontWeight = FontWeights.Bold,
-                Background = new SolidColorBrush(Color.FromRgb(0xE5, 0xE5, 0xEA)),
+                Foreground = CommentPrimaryTextBrush,
+                Background = new SolidColorBrush(Color.FromRgb(0x37, 0x41, 0x51)),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Right,
@@ -7902,13 +8174,13 @@ namespace WhiteSpace.Pages
             inner.Children.Add(input);
             inner.Children.Add(sendBtn);
 
-            var accent = GetCommentAccentBrush(_cursorDisplayName);
+            var (avatarFill, avatarStroke) = ResolveParticipantAvatarBrushes(_myUserId);
             var avatar = new Border
             {
                 Width = 36,
                 Height = 36,
                 CornerRadius = new CornerRadius(18, 18, 4, 18),
-                Background = Brushes.White,
+                Background = CommentPinBgBrush,
                 Padding = new Thickness(3),
                 VerticalAlignment = VerticalAlignment.Center,
                 Child = new Border
@@ -7916,11 +8188,13 @@ namespace WhiteSpace.Pages
                     Width = 28,
                     Height = 28,
                     CornerRadius = new CornerRadius(14),
-                    Background = accent,
+                    Background = avatarFill,
+                    BorderBrush = avatarStroke,
+                    BorderThickness = new Thickness(2),
                     Child = new TextBlock
                     {
                         Text = GetInitials(_cursorDisplayName),
-                        Foreground = Brushes.White,
+                        Foreground = avatarStroke,
                         FontWeight = FontWeights.Bold,
                         HorizontalAlignment = HorizontalAlignment.Center,
                         VerticalAlignment = VerticalAlignment.Center
@@ -7930,7 +8204,8 @@ namespace WhiteSpace.Pages
 
             input.MinWidth = 220;
             input.Background = Brushes.Transparent;
-            input.Foreground = Brushes.Black;
+            input.Foreground = CommentPrimaryTextBrush;
+            input.CaretBrush = CommentPrimaryTextBrush;
 
             var row = new Grid { MinWidth = 300 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -7942,19 +8217,19 @@ namespace WhiteSpace.Pages
 
             _commentComposer = new Border
             {
-                Background = Brushes.White,
+                Background = CommentCardBgBrush,
                 CornerRadius = new CornerRadius(24),
                 Padding = new Thickness(8, 6, 8, 8),
                 Child = row,
                 MinWidth = 320,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x6B, 0xE8)),
-                BorderThickness = new Thickness(0, 0, 0, 2)
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x37, 0x41, 0x51)),
+                BorderThickness = new Thickness(1)
             };
             _commentComposer.Effect = new DropShadowEffect
             {
                 BlurRadius = 16,
                 ShadowDepth = 2,
-                Opacity = 0.22,
+                Opacity = 0.5,
                 Color = Colors.Black
             };
 
@@ -8265,6 +8540,7 @@ namespace WhiteSpace.Pages
             _resizeBorder.MouseLeftButtonDown += GroupSelectionFrame_MouseLeftButtonDown;
             BoardCanvas.Children.Add(_resizeBorder);
             Panel.SetZIndex(_resizeBorder, 15000);
+            PurgeOrphanConnectorChromeFromCanvas();
             SyncSelectionToolbar(elements[0]);
             UpdateSelectionToolbarPosition();
         }
@@ -8326,6 +8602,7 @@ namespace WhiteSpace.Pages
         {
             _multiSelectedElements.Clear();
             _multiDragSnapshots.Clear();
+            PurgeOrphanConnectorChromeFromCanvas();
         }
 
         private void BeginMultiSelectionDrag(Point world)
@@ -8696,6 +8973,11 @@ namespace WhiteSpace.Pages
         private void TryAddConnectorEndpointHandles(UIElement target)
         {
             RemoveConnectorEndpointHandles();
+
+            if (_tool != ToolMode.Select || HasMultiSelection())
+            {
+                return;
+            }
 
             if (IsBoardEditLockedForCurrentUser())
             {
