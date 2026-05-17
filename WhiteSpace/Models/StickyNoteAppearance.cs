@@ -6,7 +6,7 @@ namespace WhiteSpace.Models;
 public sealed class StickyNoteAppearance
 {
     /// <summary>Светло-синий цвет «бумаги» для новых стикеров.</summary>
-    private const string DefaultPaper = "#A8D8FF";
+    public const string DefaultPaper = "#A8D8FF";
 
     /// <summary>Цвет бумаги нового стикера по умолчанию (#RRGGBB).</summary>
     public static string DefaultPaperHex => DefaultPaper;

@@ -62,7 +62,13 @@ namespace WhiteSpace.Pages
 
         private bool _isPlacingSticky;
         private Point _stickyPlacementStartWorld;
-        private Rectangle? _previewStickyShape;
+        private UIElement? _previewStickyElement;
+        private UIElement? _previewCommentElement;
+        private const double PreviewElementOpacity = 0.55;
+        private const string BoardSelectionChromeTag = "board-selection-chrome";
+        private const string SelectionFrameTag = "selection-frame";
+        private static readonly string[] ResizeHandleTags = { "nw", "ne", "se", "sw" };
+        private static readonly Color SelectionPortStrokeColor = Color.FromRgb(0x2E, 0x90, 0xFF);
         private TextBox? _focusedBoardTextEdit;
         private const double DefaultStickyW = 240;
         private const double DefaultStickyH = 220;
@@ -97,8 +103,8 @@ namespace WhiteSpace.Pages
         private string _currentStrokeHex = "#111111";
         private string _currentFillHex = "#FFFFFF";
 
-        // Призрак фигуры
-        private Shape _previewShape;
+        // Силуэты при размещении (фигура, стикер, комментарий, стрелка)
+        private UIElement? _previewShapeElement;
         private const double DefaultRectW = 140;
         private const double DefaultRectH = 90;
         private const double DefaultEllipse = 100;
@@ -165,6 +171,7 @@ namespace WhiteSpace.Pages
         // Словарь для хранения ручек изменения размера
         private Dictionary<string, Rectangle> _resizeHandles = new Dictionary<string, Rectangle>();
 
+        private readonly List<UIElement> _selectionChromeElements = new();
         private readonly List<FrameworkElement> _anchorPortElements = new();
         private readonly List<Ellipse> _connectorEndpointElements = new();
         private readonly List<Ellipse> _snapHighlightPortElements = new();
@@ -3046,6 +3053,7 @@ namespace WhiteSpace.Pages
 
             RemovePreviewShape();
             RemovePreviewSticky();
+            RemovePreviewComment();
 
             if (_tool == ToolMode.Shape)
             {
@@ -3055,6 +3063,11 @@ namespace WhiteSpace.Pages
             if (_tool == ToolMode.StickyNote)
             {
                 EnsurePreviewSticky();
+            }
+
+            if (_tool == ToolMode.Comment)
+            {
+                EnsurePreviewComment();
             }
 
             Viewport.Cursor = _tool switch
@@ -3538,7 +3551,11 @@ namespace WhiteSpace.Pages
                 X = 0,
                 Y = 0
             };
-            var app = new RectEllipseAppearance { Mode = "stroke" };
+            var app = new RectEllipseAppearance
+            {
+                Mode = _nextRectFillMode,
+                FillHex = _currentFillHex
+            };
             if (kindForJson != null)
             {
                 app.ShapeKind = kindForJson;
@@ -3546,6 +3563,65 @@ namespace WhiteSpace.Pages
 
             app.SaveTo(bs);
             return bs;
+        }
+
+        private BoardShape BuildTransientPreviewSticky()
+        {
+            var meta = new StickyNoteAppearance();
+            var bs = new BoardShape
+            {
+                BoardId = _boardId,
+                Type = "stickyNote",
+                Width = DefaultStickyW,
+                Height = DefaultStickyH,
+                Color = meta.EffectivePaperHex(),
+                Text = "",
+                Id = 0,
+                X = 0,
+                Y = 0
+            };
+            meta.SaveTo(bs);
+            return bs;
+        }
+
+        private bool IsPlacementPreview(UIElement? u) =>
+            u == _previewShapeElement || u == _previewStickyElement || u == _previewCommentElement;
+
+        private static (Brush body, Brush author) StickyNoteTextBrushes(string? paperHex = null)
+        {
+            if (WhiteSpaceThemeManager.IsDarkApplied)
+            {
+                return (Brushes.White, new SolidColorBrush(Color.FromRgb(0xE2, 0xE8, 0xF0)));
+            }
+
+            return (
+                new SolidColorBrush(Color.FromRgb(0x1E, 0x29, 0x3B)),
+                new SolidColorBrush(Color.FromRgb(0x47, 0x55, 0x69)));
+        }
+
+        private static void ApplyStickyNoteTextBoxColors(TextBox tb, string? paperHex = null)
+        {
+            if (WhiteSpaceThemeManager.IsDarkApplied)
+            {
+                tb.Foreground = Brushes.White;
+                tb.CaretBrush = Brushes.White;
+                return;
+            }
+
+            var (body, _) = StickyNoteTextBrushes(paperHex);
+            tb.Foreground = body;
+            tb.CaretBrush = body;
+        }
+
+        private void RefreshPreviewShapeIfNeeded()
+        {
+            if (_tool != ToolMode.Shape)
+            {
+                return;
+            }
+
+            RemovePreviewShape();
+            EnsurePreviewShape();
         }
 
         private Button CreatePaletteSwatchButton(string hex, bool isFillColumn)
@@ -3906,6 +3982,7 @@ namespace WhiteSpace.Pages
             {
                 _nextRectFillMode = mode;
                 UpdateFillModeButtonStyles(mode);
+                RefreshPreviewShapeIfNeeded();
                 return;
             }
 
@@ -3943,6 +4020,7 @@ namespace WhiteSpace.Pages
             await _supabaseService.SaveShapeAsync(shape);
             MarkSaved();
             PushShapeToFirebase(shape);
+            RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
         }
 
         /// <param name="isStrokeContour">true — цвет контура (поле Color), false — цвет заливки (FillHex в JSON).</param>
@@ -3968,10 +4046,7 @@ namespace WhiteSpace.Pages
                         _currentFillHex = string.IsNullOrEmpty(norm) ? hex : norm;
                     }
 
-                    if (!isStrokeContour)
-                    {
-                        ApplyPreviewFillBrush();
-                    }
+                    RefreshPreviewShapeIfNeeded();
 
                     SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
                     SyncMainToolbarColorHighlight();
@@ -4063,6 +4138,7 @@ namespace WhiteSpace.Pages
                     await _supabaseService.SaveShapeAsync(shape);
                     MarkSaved();
                     PushShapeToFirebase(shape);
+                    RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
                 }
                 else
                 {
@@ -4120,7 +4196,7 @@ namespace WhiteSpace.Pages
 
         private bool IsBoardSelectableElement(UIElement? u)
         {
-            if (u is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid) || u == _previewShape)
+            if (u is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid) || IsPlacementPreview(u))
             {
                 return false;
             }
@@ -4324,7 +4400,9 @@ namespace WhiteSpace.Pages
         private Grid CreateStickyNoteBoardContainer(BoardShape shape, bool forPreview = false)
         {
             var meta = StickyNoteAppearance.Parse(shape);
-            var paper = GetBrushFromColor(meta.EffectivePaperHex());
+            var paperHex = meta.EffectivePaperHex();
+            var paper = GetBrushFromColor(paperHex);
+            var (bodyBrush, authorBrush) = StickyNoteTextBrushes(paperHex);
 
             var bg = new Rectangle
             {
@@ -4361,8 +4439,8 @@ namespace WhiteSpace.Pages
                 Background = Brushes.Transparent,
                 Padding = new Thickness(12, 12, 12, 8),
                 FontSize = 13,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0x55, 0x66)),
-                CaretBrush = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)),
+                Foreground = bodyBrush,
+                CaretBrush = bodyBrush,
                 SelectionBrush = new SolidColorBrush(Color.FromArgb(90, 0x2E, 0x90, 0xFF)),
                 IsReadOnly = true,
                 Focusable = false,
@@ -4376,7 +4454,7 @@ namespace WhiteSpace.Pages
                 Margin = new Thickness(12, 0, 12, 10),
                 FontSize = 11,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x72, 0x80)),
+                Foreground = authorBrush,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 IsHitTestVisible = false,
@@ -4402,6 +4480,9 @@ namespace WhiteSpace.Pages
                     noteTb.Focusable = true;
                     noteTb.IsHitTestVisible = true;
                     noteTb.IsReadOnly = false;
+                    ApplyStickyNoteTextBoxColors(noteTb, paperHex);
+                    noteTb.GotFocus -= StickyNoteBody_GotFocus;
+                    noteTb.GotFocus += StickyNoteBody_GotFocus;
                     noteTb.Focus();
                     if (string.IsNullOrWhiteSpace(noteTb.Text))
                     {
@@ -4431,6 +4512,7 @@ namespace WhiteSpace.Pages
                         _focusedBoardTextEdit = null;
                     }
 
+                    noteTb.GotFocus -= StickyNoteBody_GotFocus;
                     noteTb.Focusable = false;
                     noteTb.IsHitTestVisible = false;
                     noteTb.IsReadOnly = true;
@@ -4471,9 +4553,63 @@ namespace WhiteSpace.Pages
             }
 
             var meta = StickyNoteAppearance.Parse(shape);
-            bg.Fill = GetBrushFromColor(meta.EffectivePaperHex());
+            var paperHex = meta.EffectivePaperHex();
+            bg.Fill = GetBrushFromColor(paperHex);
+            var (bodyBrush, authorBrush) = StickyNoteTextBrushes(paperHex);
+            if (grid.Children.Count >= 2 && grid.Children[1] is Grid innerGrid)
+            {
+                foreach (var ch in innerGrid.Children)
+                {
+                    if (ch is TextBox tb)
+                    {
+                        tb.Foreground = bodyBrush;
+                        tb.CaretBrush = bodyBrush;
+                    }
+                    else if (ch is TextBlock blk && StickyAuthorTag.Equals(blk.Tag as string))
+                    {
+                        blk.Foreground = authorBrush;
+                    }
+                }
+            }
             bg.Stroke = Brushes.Transparent;
             bg.StrokeThickness = 0;
+        }
+
+        private void StickyNoteBody_GotFocus(object sender, RoutedEventArgs e)
+        {
+            if (sender is not TextBox tb)
+            {
+                return;
+            }
+
+            var grid = FindParentStickyGrid(tb);
+            if (grid == null || string.IsNullOrEmpty(grid.Uid))
+            {
+                return;
+            }
+
+            var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == grid.Uid);
+            if (shape == null)
+            {
+                return;
+            }
+
+            ApplyStickyNoteTextBoxColors(tb, StickyNoteAppearance.Parse(shape).EffectivePaperHex());
+        }
+
+        private static Grid? FindParentStickyGrid(DependencyObject? child)
+        {
+            while (child != null)
+            {
+                if (child is Grid g && g.Tag is Rectangle)
+                {
+                    return g;
+                }
+
+                child = VisualTreeHelper.GetParent(child);
+            }
+
+            return null;
         }
 
         private void SyncStickyNoteAuthorAndText(Grid grid, BoardShape shape)
@@ -4498,14 +4634,22 @@ namespace WhiteSpace.Pages
             }
 
             var meta = StickyNoteAppearance.Parse(shape);
+            var paperHex = meta.EffectivePaperHex();
+            var (bodyBrush, authorBrush) = StickyNoteTextBrushes(paperHex);
             if (authorBlk != null)
             {
                 authorBlk.Text = meta.DisplayAuthor();
+                authorBlk.Foreground = authorBrush;
             }
 
-            if (noteTb != null && !noteTb.IsKeyboardFocused)
+            if (noteTb != null)
             {
-                noteTb.Text = shape.Text ?? "";
+                if (!noteTb.IsKeyboardFocused)
+                {
+                    noteTb.Text = shape.Text ?? "";
+                }
+
+                ApplyStickyNoteTextBoxColors(noteTb, paperHex);
             }
         }
 
@@ -4856,6 +5000,10 @@ namespace WhiteSpace.Pages
             await _supabaseService.SaveShapeAsync(shape);
             MarkSaved();
             PushShapeToFirebase(shape);
+            if (shape.Type is "rectangle" or "ellipse")
+            {
+                RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
+            }
         }
 
         private void ConnectorArrowEnd_Click(object sender, RoutedEventArgs e)
@@ -4914,7 +5062,10 @@ namespace WhiteSpace.Pages
 
             CaptureBoardStateForUndo();
             shape.Text = ConnectorAttachmentHelper.SerializeForStorage(att);
-            ConnectorVisualHelper.ApplyStyle(_resizeTarget, shape, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
+            ApplyConnectorGeometryToBoardShape(shape);
+            var arrowPts = ConnectorAttachmentHelper.ResolveConnectorPoints(shape, _shapesOnBoard);
+            ConnectorVisualHelper.UpdatePoints(
+                _resizeTarget, shape, arrowPts, GetBrushFromColor(shape.Color), ConnectorStrokeThickness);
             UpdateConnectorArrowButtonStyles(att);
             await _supabaseService.SaveShapeAsync(shape);
             MarkSaved();
@@ -5243,6 +5394,7 @@ namespace WhiteSpace.Pages
             PushShapeToFirebase(shape);
 
             ShowResizeFrame(visual);
+            await RefreshConnectorsReferencingShapeAsync(shape.Id);
         }
 
         private async Task DeleteSelectedShapeAsync()
@@ -5534,7 +5686,7 @@ namespace WhiteSpace.Pages
                     : null;
 
                 if (uiElement != null && uiElement != BoardCanvas && uiElement != Viewport &&
-                    !(uiElement is TextBox) && uiElement != _previewShape && IsBoardSelectableElement(uiElement))
+                    !(uiElement is TextBox) && !IsPlacementPreview(uiElement) && IsBoardSelectableElement(uiElement))
                 {
                     if (_multiSelectedElements.Count > 1 && _multiSelectedElements.Contains(uiElement))
                     {
@@ -5624,6 +5776,7 @@ namespace WhiteSpace.Pages
 
             if ((_tool == ToolMode.StickyNote) && e.LeftButton == MouseButtonState.Pressed)
             {
+                RemoveResizeFrame();
                 _isPlacingSticky = true;
                 _stickyPlacementStartWorld = world;
                 EnsurePreviewSticky();
@@ -5634,6 +5787,7 @@ namespace WhiteSpace.Pages
 
             if ((_tool == ToolMode.Shape) && e.LeftButton == MouseButtonState.Pressed)
             {
+                RemoveResizeFrame();
                 _isPlacingRectEllipse = true;
                 _rectPlacementStartWorld = world;
                 EnsurePreviewShape();
@@ -6382,52 +6536,38 @@ namespace WhiteSpace.Pages
 
         private void EnsurePreviewShape()
         {
-            if (_previewShape != null) return;
-            if (_tool != ToolMode.Shape) return;
-
-            _previewShape = BuildInnerShapeVisual(BuildTransientPreviewShape());
-
-            // При создании перетаскиванием — только заливка без контура (как в Figma)
-            _previewShape.Stroke = Brushes.Transparent;
-            _previewShape.StrokeThickness = 0;
-            _previewShape.StrokeDashArray = null;
-            _previewShape.Opacity = 1;
-            ApplyPreviewFillBrush();
-
-            _previewShape.IsHitTestVisible = false;
-
-            BoardCanvas.Children.Add(_previewShape);
-        }
-
-        private void ApplyPreviewFillBrush()
-        {
-            if (_previewShape == null)
+            if (_previewShapeElement != null)
             {
                 return;
             }
 
-            const byte alpha = 120;
-            if (GetBrushFromColor(_currentFillHex) is SolidColorBrush scb)
+            if (_tool != ToolMode.Shape)
             {
-                var c = scb.Color;
-                _previewShape.Fill = new SolidColorBrush(Color.FromArgb(alpha, c.R, c.G, c.B));
+                return;
             }
-            else
-            {
-                _previewShape.Fill = new SolidColorBrush(Color.FromArgb(alpha, 0, 122, 255));
-            }
+
+            var bs = BuildTransientPreviewShape();
+            _previewShapeElement = CreateShapeBoardContainer(bs, forPreview: true);
+            _previewShapeElement.Opacity = PreviewElementOpacity;
+            _previewShapeElement.IsHitTestVisible = false;
+            BoardCanvas.Children.Add(_previewShapeElement);
+            Panel.SetZIndex(_previewShapeElement, 900);
         }
 
         private void RemovePreviewShape()
         {
-            if (_previewShape == null) return;
-            BoardCanvas.Children.Remove(_previewShape);
-            _previewShape = null;
+            if (_previewShapeElement == null)
+            {
+                return;
+            }
+
+            BoardCanvas.Children.Remove(_previewShapeElement);
+            _previewShapeElement = null;
         }
 
         private void EnsurePreviewSticky()
         {
-            if (_previewStickyShape != null)
+            if (_previewStickyElement != null)
             {
                 return;
             }
@@ -6437,37 +6577,102 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            var stickyPaper = StickyNoteAppearance.DefaultPaperHex;
-            _previewStickyShape = new Rectangle
-            {
-                Width = DefaultStickyW,
-                Height = DefaultStickyH,
-                RadiusX = 14,
-                RadiusY = 14,
-                Fill = GetBrushFromColor(stickyPaper) is SolidColorBrush b
-                    ? new SolidColorBrush(Color.FromArgb(200, b.Color.R, b.Color.G, b.Color.B))
-                    : new SolidColorBrush(Color.FromArgb(200, 0xA8, 0xD8, 0xFF)),
-                Stroke = Brushes.Transparent,
-                StrokeThickness = 0,
-                IsHitTestVisible = false
-            };
-            BoardCanvas.Children.Add(_previewStickyShape);
+            var bs = BuildTransientPreviewSticky();
+            _previewStickyElement = CreateStickyNoteBoardContainer(bs, forPreview: true);
+            _previewStickyElement.Opacity = PreviewElementOpacity;
+            _previewStickyElement.IsHitTestVisible = false;
+            BoardCanvas.Children.Add(_previewStickyElement);
+            Panel.SetZIndex(_previewStickyElement, 900);
         }
 
         private void RemovePreviewSticky()
         {
-            if (_previewStickyShape == null)
+            if (_previewStickyElement == null)
             {
                 return;
             }
 
-            BoardCanvas.Children.Remove(_previewStickyShape);
-            _previewStickyShape = null;
+            BoardCanvas.Children.Remove(_previewStickyElement);
+            _previewStickyElement = null;
+        }
+
+        private void EnsurePreviewComment()
+        {
+            if (_previewCommentElement != null || _tool != ToolMode.Comment || _commentComposer != null)
+            {
+                return;
+            }
+
+            var (avatarFill, avatarStroke) = ResolveParticipantAvatarBrushes(_myUserId);
+            var pin = new Border
+            {
+                Width = CommentPinWidth,
+                Height = CommentPinHeight,
+                Background = CommentSurfaceBrush(),
+                CornerRadius = new CornerRadius(20, 20, 4, 20),
+                Padding = new Thickness(4),
+                IsHitTestVisible = false,
+                Opacity = PreviewElementOpacity,
+                Child = new Border
+                {
+                    Width = 30,
+                    Height = 30,
+                    CornerRadius = new CornerRadius(15),
+                    Background = avatarFill,
+                    BorderBrush = avatarStroke,
+                    BorderThickness = new Thickness(2),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = new TextBlock
+                    {
+                        Text = GetInitials(_cursorDisplayName),
+                        Foreground = avatarStroke,
+                        FontWeight = FontWeights.Bold,
+                        FontSize = 14,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                }
+            };
+            pin.Effect = new DropShadowEffect
+            {
+                BlurRadius = 10,
+                ShadowDepth = 1,
+                Opacity = WhiteSpaceThemeManager.IsDarkApplied ? 0.45 : 0.2,
+                Color = Colors.Black
+            };
+
+            _previewCommentElement = pin;
+            BoardCanvas.Children.Add(_previewCommentElement);
+            Panel.SetZIndex(_previewCommentElement, 900);
+        }
+
+        private void RemovePreviewComment()
+        {
+            if (_previewCommentElement == null)
+            {
+                return;
+            }
+
+            BoardCanvas.Children.Remove(_previewCommentElement);
+            _previewCommentElement = null;
+        }
+
+        private static void SetPreviewElementBounds(UIElement element, double left, double top, double width, double height)
+        {
+            if (element is FrameworkElement fe)
+            {
+                fe.Width = width;
+                fe.Height = height;
+            }
+
+            Canvas.SetLeft(element, left);
+            Canvas.SetTop(element, top);
         }
 
         private void UpdatePreview(Point world, bool leftButtonPressed)
         {
-            if (_isPlacingSticky && _tool == ToolMode.StickyNote && _previewStickyShape != null)
+            if (_isPlacingSticky && _tool == ToolMode.StickyNote && _previewStickyElement != null)
             {
                 if (!leftButtonPressed)
                 {
@@ -6478,16 +6683,32 @@ namespace WhiteSpace.Pages
                 var y = Math.Min(_stickyPlacementStartWorld.Y, world.Y);
                 var w = Math.Max(Math.Abs(world.X - _stickyPlacementStartWorld.X), 1);
                 var h = Math.Max(Math.Abs(world.Y - _stickyPlacementStartWorld.Y), 1);
-                _previewStickyShape.Width = w;
-                _previewStickyShape.Height = h;
-                Canvas.SetLeft(_previewStickyShape, x);
-                Canvas.SetTop(_previewStickyShape, y);
+                SetPreviewElementBounds(_previewStickyElement, x, y, w, h);
                 return;
             }
 
-            if (_previewShape == null) return;
+            if (_tool == ToolMode.StickyNote && !_isPlacingSticky && _previewStickyElement != null)
+            {
+                SetPreviewElementBounds(
+                    _previewStickyElement,
+                    world.X - DefaultStickyW / 2,
+                    world.Y - DefaultStickyH / 2,
+                    DefaultStickyW,
+                    DefaultStickyH);
+            }
 
-            if (_isPlacingRectEllipse && (_tool == ToolMode.Shape))
+            if (_tool == ToolMode.Comment && _previewCommentElement != null && _commentComposer == null)
+            {
+                Canvas.SetLeft(_previewCommentElement, world.X);
+                Canvas.SetTop(_previewCommentElement, world.Y);
+            }
+
+            if (_previewShapeElement == null)
+            {
+                return;
+            }
+
+            if (_isPlacingRectEllipse && _tool == ToolMode.Shape)
             {
                 if (!leftButtonPressed)
                 {
@@ -6498,10 +6719,7 @@ namespace WhiteSpace.Pages
                 var y = Math.Min(_rectPlacementStartWorld.Y, world.Y);
                 var w = Math.Max(Math.Abs(world.X - _rectPlacementStartWorld.X), 1);
                 var h = Math.Max(Math.Abs(world.Y - _rectPlacementStartWorld.Y), 1);
-                _previewShape.Width = w;
-                _previewShape.Height = h;
-                Canvas.SetLeft(_previewShape, x);
-                Canvas.SetTop(_previewShape, y);
+                SetPreviewElementBounds(_previewShapeElement, x, y, w, h);
                 return;
             }
 
@@ -6510,10 +6728,12 @@ namespace WhiteSpace.Pages
                 var circleLike = _shapeKind == "circle";
                 var pw = circleLike ? DefaultEllipse : DefaultRectW;
                 var ph = circleLike ? DefaultEllipse : DefaultRectH;
-                _previewShape.Width = pw;
-                _previewShape.Height = ph;
-                Canvas.SetLeft(_previewShape, world.X - pw / 2);
-                Canvas.SetTop(_previewShape, world.Y - ph / 2);
+                SetPreviewElementBounds(
+                    _previewShapeElement,
+                    world.X - pw / 2,
+                    world.Y - ph / 2,
+                    pw,
+                    ph);
             }
         }
 
@@ -6882,6 +7102,108 @@ namespace WhiteSpace.Pages
             _isCreatingShape = false;
         }
 
+        private void RegisterSelectionChrome(UIElement element, int zIndex = 15000)
+        {
+            if (element is FrameworkElement fe && fe.Tag == null)
+            {
+                fe.Tag = BoardSelectionChromeTag;
+            }
+
+            if (!_selectionChromeElements.Contains(element))
+            {
+                _selectionChromeElements.Add(element);
+            }
+
+            if (!BoardCanvas.Children.Contains(element))
+            {
+                BoardCanvas.Children.Add(element);
+            }
+
+            Panel.SetZIndex(element, zIndex);
+        }
+
+        private void DetachSelectionChromeEvents(UIElement element)
+        {
+            if (element is Ellipse ell)
+            {
+                var tag = ell.Tag as string;
+                if (tag != null && tag.StartsWith("port:", StringComparison.Ordinal))
+                {
+                    ell.MouseLeftButtonDown -= ConnectorPort_MouseDown;
+                }
+                else if (tag != null && tag.StartsWith("conn-end:", StringComparison.Ordinal))
+                {
+                    ell.MouseLeftButtonDown -= ConnectorEndpoint_MouseDown;
+                }
+            }
+            else if (element is Rectangle rect)
+            {
+                rect.MouseDown -= ResizeHandle_MouseDown;
+                rect.MouseLeftButtonDown -= GroupSelectionFrame_MouseLeftButtonDown;
+            }
+        }
+
+        private static bool IsSelectionPortEllipse(Ellipse ell) =>
+            Math.Abs(ell.Width - 12) < 0.5
+            && Math.Abs(ell.Height - 12) < 0.5
+            && ell.Stroke is SolidColorBrush scb
+            && scb.Color == SelectionPortStrokeColor;
+
+        private void ClearAllSelectionChrome()
+        {
+            foreach (var element in _selectionChromeElements.ToList())
+            {
+                DetachSelectionChromeEvents(element);
+                if (BoardCanvas.Children.Contains(element))
+                {
+                    BoardCanvas.Children.Remove(element);
+                }
+            }
+
+            _selectionChromeElements.Clear();
+            _anchorPortElements.Clear();
+            _resizeHandles.Clear();
+
+            foreach (var endpoint in _connectorEndpointElements.ToList())
+            {
+                endpoint.MouseLeftButtonDown -= ConnectorEndpoint_MouseDown;
+                if (BoardCanvas.Children.Contains(endpoint))
+                {
+                    BoardCanvas.Children.Remove(endpoint);
+                }
+            }
+
+            _connectorEndpointElements.Clear();
+            ClearConnectorSnapHighlights();
+            _resizeBorder = null;
+        }
+
+        private void PurgeOrphanSelectionChromeFromCanvas()
+        {
+            ClearAllSelectionChrome();
+
+            foreach (var child in BoardCanvas.Children.OfType<FrameworkElement>().ToList())
+            {
+                if (child.Tag is string tag
+                    && (tag == BoardSelectionChromeTag
+                        || tag == SelectionFrameTag
+                        || tag.StartsWith("port:", StringComparison.Ordinal)
+                        || tag.StartsWith("conn-end:", StringComparison.Ordinal)
+                        || ResizeHandleTags.Contains(tag, StringComparer.Ordinal)))
+                {
+                    DetachSelectionChromeEvents(child);
+                    BoardCanvas.Children.Remove(child);
+                    continue;
+                }
+
+                if (child is Ellipse ell && IsSelectionPortEllipse(ell))
+                {
+                    ell.MouseLeftButtonDown -= ConnectorPort_MouseDown;
+                    BoardCanvas.Children.Remove(ell);
+                }
+            }
+        }
+
         // РУЧКИ ИЗМЕНЕНИЯ РАЗМЕРА
         private void ShowResizeFrame(UIElement element)
         {
@@ -6987,13 +7309,14 @@ namespace WhiteSpace.Pages
                 Stroke = Brushes.DodgerBlue,
                 StrokeThickness = 1,
                 StrokeDashArray = new DoubleCollection { 3, 2 },
-                IsHitTestVisible = false
+                IsHitTestVisible = false,
+                Tag = SelectionFrameTag
             };
 
             Canvas.SetLeft(_resizeBorder, left);
             Canvas.SetTop(_resizeBorder, top);
 
-            BoardCanvas.Children.Add(_resizeBorder);
+            RegisterSelectionChrome(_resizeBorder);
 
             if (!isConnector)
             {
@@ -7006,50 +7329,14 @@ namespace WhiteSpace.Pages
             UpdateSelectionToolbarPosition();
         }
 
-        private void PurgeOrphanConnectorChromeFromCanvas()
-        {
-            RemoveAnchorPorts();
-            RemoveConnectorEndpointHandles();
-            ClearConnectorSnapHighlights();
-
-            foreach (var child in BoardCanvas.Children.OfType<FrameworkElement>().ToList())
-            {
-                if (child.Tag is not string tag)
-                {
-                    continue;
-                }
-
-                if (!tag.StartsWith("port:", StringComparison.Ordinal)
-                    && !tag.StartsWith("conn-end:", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (child is Ellipse portEl && tag.StartsWith("port:", StringComparison.Ordinal))
-                {
-                    portEl.MouseLeftButtonDown -= ConnectorPort_MouseDown;
-                }
-                else if (child is Ellipse endEl && tag.StartsWith("conn-end:", StringComparison.Ordinal))
-                {
-                    endEl.MouseLeftButtonDown -= ConnectorEndpoint_MouseDown;
-                }
-
-                BoardCanvas.Children.Remove(child);
-            }
-        }
-
         private void RemoveResizeFrame()
         {
-            PurgeOrphanConnectorChromeFromCanvas();
-
             if (_resizeBorder != null)
             {
                 _resizeBorder.MouseLeftButtonDown -= GroupSelectionFrame_MouseLeftButtonDown;
-                BoardCanvas.Children.Remove(_resizeBorder);
-                _resizeBorder = null;
             }
 
-            RemoveAllHandles();
+            PurgeOrphanSelectionChromeFromCanvas();
             _resizeTarget = null;
             ColorPanel.Visibility = Visibility.Visible;
             HideSelectionToolbar();
@@ -7057,9 +7344,10 @@ namespace WhiteSpace.Pages
 
         private void RemoveAnchorPorts()
         {
-            foreach (var p in _anchorPortElements)
+            foreach (var p in _anchorPortElements.ToList())
             {
                 p.MouseLeftButtonDown -= ConnectorPort_MouseDown;
+                _selectionChromeElements.Remove(p);
                 BoardCanvas.Children.Remove(p);
             }
 
@@ -7117,7 +7405,7 @@ namespace WhiteSpace.Pages
                 el.MouseLeftButtonDown += ConnectorPort_MouseDown;
                 Canvas.SetLeft(el, positions[i].X - 6);
                 Canvas.SetTop(el, positions[i].Y - 6);
-                BoardCanvas.Children.Add(el);
+                RegisterSelectionChrome(el);
                 _anchorPortElements.Add(el);
             }
         }
@@ -7241,12 +7529,16 @@ namespace WhiteSpace.Pages
         {
             foreach (var handle in _resizeHandles.Values.ToList())
             {
-                if (handle != null)
+                if (handle == null)
                 {
-                    handle.MouseDown -= ResizeHandle_MouseDown;
-                    BoardCanvas.Children.Remove(handle);
+                    continue;
                 }
+
+                handle.MouseDown -= ResizeHandle_MouseDown;
+                _selectionChromeElements.Remove(handle);
+                BoardCanvas.Children.Remove(handle);
             }
+
             _resizeHandles.Clear();
         }
 
@@ -7266,7 +7558,7 @@ namespace WhiteSpace.Pages
             {
                 var handle = CreateHandle(kvp.Key, kvp.Value.X, kvp.Value.Y);
                 _resizeHandles[kvp.Key] = handle;
-                BoardCanvas.Children.Add(handle);
+                RegisterSelectionChrome(handle);
             }
         }
 
@@ -7522,6 +7814,30 @@ namespace WhiteSpace.Pages
                 {
                     SyncStickyNoteAuthorAndText(stickyGrid, st);
                 }
+
+                if (!string.IsNullOrEmpty(fe.Uid)
+                    && _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == fe.Uid) is { } resizedShape)
+                {
+                    if (resizedShape.Type == "comment")
+                    {
+                        resizedShape.Width = newW;
+                        resizedShape.Height = newH;
+                        resizedShape.X = newX;
+                        resizedShape.Y = newY;
+                    }
+                    else
+                    {
+                        resizedShape.Width = newW;
+                        resizedShape.Height = newH;
+                        resizedShape.X = newX + newW / 2;
+                        resizedShape.Y = newY + newH / 2;
+                    }
+
+                    if (resizedShape.Type is "rectangle" or "ellipse" or "stickyNote")
+                    {
+                        RefreshConnectorVisualsReferencingShapeLocal(resizedShape.Id);
+                    }
+                }
             }
 
             UpdateResizeFrame(newX, newY, newW, newH);
@@ -7710,6 +8026,7 @@ namespace WhiteSpace.Pages
 
                     SyncPaletteGridRingHighlights(_currentFillHex, _currentStrokeHex);
                     SyncMainToolbarColorHighlight();
+                    RefreshPreviewShapeIfNeeded();
                 }
             }
         }
@@ -7816,6 +8133,11 @@ namespace WhiteSpace.Pages
 
             // Отправляем в Firebase для реалтайм обновлений
             PushShapeToFirebase(shape);
+
+            if (shape.Type is "rectangle" or "ellipse" or "stickyNote")
+            {
+                RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
+            }
         }
 
         private async Task AddImageToBoardAsync(string imagePath)
@@ -8004,8 +8326,7 @@ namespace WhiteSpace.Pages
 
             Canvas.SetLeft(_resizeBorder, left - pad);
             Canvas.SetTop(_resizeBorder, top - pad);
-            BoardCanvas.Children.Add(_resizeBorder);
-            Panel.SetZIndex(_resizeBorder, 15000);
+            RegisterSelectionChrome(_resizeBorder);
         }
 
         private static void ApplyCommentTheme(Grid grid)
@@ -8266,6 +8587,7 @@ namespace WhiteSpace.Pages
             }
 
             HideCommentComposer();
+            RemovePreviewComment();
             _pendingCommentWorld = world;
 
             var input = new TextBox
@@ -8383,6 +8705,11 @@ namespace WhiteSpace.Pages
 
             BoardCanvas.Children.Remove(_commentComposer);
             _commentComposer = null;
+
+            if (_tool == ToolMode.Comment)
+            {
+                EnsurePreviewComment();
+            }
         }
 
         private async Task FinalizeCommentFromComposerAsync(string text)
@@ -8539,10 +8866,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            Canvas.SetLeft(_resizeBorder, left);
-            Canvas.SetTop(_resizeBorder, top);
-            _resizeBorder.Width = w;
-            _resizeBorder.Height = h;
+            UpdateResizeFrame(left, top, w, h);
         }
 
         private static bool TryGetElementWorldBounds(UIElement element, out double left, out double top, out double w, out double h)
@@ -8668,14 +8992,13 @@ namespace WhiteSpace.Pages
                 StrokeDashArray = new DoubleCollection { 3, 2 },
                 Fill = Brushes.Transparent,
                 IsHitTestVisible = true,
-                Cursor = Cursors.SizeAll
+                Cursor = Cursors.SizeAll,
+                Tag = SelectionFrameTag
             };
             Canvas.SetLeft(_resizeBorder, left);
             Canvas.SetTop(_resizeBorder, top);
             _resizeBorder.MouseLeftButtonDown += GroupSelectionFrame_MouseLeftButtonDown;
-            BoardCanvas.Children.Add(_resizeBorder);
-            Panel.SetZIndex(_resizeBorder, 15000);
-            PurgeOrphanConnectorChromeFromCanvas();
+            RegisterSelectionChrome(_resizeBorder);
             SyncSelectionToolbar(elements[0]);
             UpdateSelectionToolbarPosition();
         }
@@ -8737,7 +9060,14 @@ namespace WhiteSpace.Pages
         {
             _multiSelectedElements.Clear();
             _multiDragSnapshots.Clear();
-            PurgeOrphanConnectorChromeFromCanvas();
+            if (_resizeTarget != null || _resizeBorder != null)
+            {
+                RemoveResizeFrame();
+            }
+            else
+            {
+                PurgeOrphanSelectionChromeFromCanvas();
+            }
         }
 
         private void BeginMultiSelectionDrag(Point world)
@@ -9096,9 +9426,10 @@ namespace WhiteSpace.Pages
 
         private void RemoveConnectorEndpointHandles()
         {
-            foreach (var el in _connectorEndpointElements)
+            foreach (var el in _connectorEndpointElements.ToList())
             {
                 el.MouseLeftButtonDown -= ConnectorEndpoint_MouseDown;
+                _selectionChromeElements.Remove(el);
                 BoardCanvas.Children.Remove(el);
             }
 
@@ -9155,7 +9486,7 @@ namespace WhiteSpace.Pages
             el.MouseLeftButtonDown += ConnectorEndpoint_MouseDown;
             Canvas.SetLeft(el, world.X - 7);
             Canvas.SetTop(el, world.Y - 7);
-            BoardCanvas.Children.Add(el);
+            RegisterSelectionChrome(el);
             _connectorEndpointElements.Add(el);
         }
 
