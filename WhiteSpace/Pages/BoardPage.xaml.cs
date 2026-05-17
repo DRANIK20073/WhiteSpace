@@ -5018,6 +5018,7 @@ namespace WhiteSpace.Pages
                 if (SelectionToolbarDeleteButton != null)
                 {
                     SelectionToolbarDeleteButton.Margin = new Thickness(0);
+                    SelectionToolbarDeleteButton.Tag = "active";
                 }
             }
             else
@@ -5043,6 +5044,7 @@ namespace WhiteSpace.Pages
                 if (SelectionToolbarDeleteButton != null)
                 {
                     SelectionToolbarDeleteButton.Margin = new Thickness(0);
+                    SelectionToolbarDeleteButton.Tag = null;
                 }
             }
         }
@@ -6120,36 +6122,48 @@ namespace WhiteSpace.Pages
 
             if (_resizeTarget == _dragElement && _resizeBorder != null)
             {
-                Canvas.SetLeft(_resizeBorder, offsetX);
-                Canvas.SetTop(_resizeBorder, offsetY);
-
-                double width, height;
-
-                if (_dragElement is Polyline polyline)
+                var dragShape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == (_dragElement as FrameworkElement)?.Uid);
+                if (dragShape?.Type == "comment")
                 {
-                    if (polyline.Points.Count > 0)
-                    {
-                        double minX = polyline.Points.Min(p => p.X);
-                        double maxX = polyline.Points.Max(p => p.X);
-                        double minY = polyline.Points.Min(p => p.Y);
-                        double maxY = polyline.Points.Max(p => p.Y);
-
-                        width = maxX - minX;
-                        height = maxY - minY;
-                    }
-                    else
-                    {
-                        width = 0;
-                        height = 0;
-                    }
+                    var pad = CommentSelectionOutlinePad;
+                    Canvas.SetLeft(_resizeBorder, offsetX - pad);
+                    Canvas.SetTop(_resizeBorder, offsetY - pad);
+                    _resizeBorder.Width = CommentPinWidth + pad * 2;
+                    _resizeBorder.Height = CommentPinHeight + pad * 2;
                 }
                 else
                 {
-                    width = ((FrameworkElement)_dragElement).ActualWidth;
-                    height = ((FrameworkElement)_dragElement).ActualHeight;
-                }
+                    Canvas.SetLeft(_resizeBorder, offsetX);
+                    Canvas.SetTop(_resizeBorder, offsetY);
 
-                UpdateResizeHandles(offsetX, offsetY, width, height);
+                    double width, height;
+
+                    if (_dragElement is Polyline polyline)
+                    {
+                        if (polyline.Points.Count > 0)
+                        {
+                            double minX = polyline.Points.Min(p => p.X);
+                            double maxX = polyline.Points.Max(p => p.X);
+                            double minY = polyline.Points.Min(p => p.Y);
+                            double maxY = polyline.Points.Max(p => p.Y);
+
+                            width = maxX - minX;
+                            height = maxY - minY;
+                        }
+                        else
+                        {
+                            width = 0;
+                            height = 0;
+                        }
+                    }
+                    else
+                    {
+                        width = ((FrameworkElement)_dragElement).ActualWidth;
+                        height = ((FrameworkElement)_dragElement).ActualHeight;
+                    }
+
+                    UpdateResizeHandles(offsetX, offsetY, width, height);
+                }
             }
 
             if (_resizeTarget == _dragElement)
@@ -6878,14 +6892,28 @@ namespace WhiteSpace.Pages
 
             var selectedShape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == (element as FrameworkElement)?.Uid);
             var isConnector = selectedShape?.Type == "connector";
+
+            double left, top, width, height;
+
             if (selectedShape?.Type == "comment")
             {
+                left = Canvas.GetLeft(element);
+                top = Canvas.GetTop(element);
+                if (double.IsNaN(left))
+                {
+                    left = selectedShape.X;
+                }
+
+                if (double.IsNaN(top))
+                {
+                    top = selectedShape.Y;
+                }
+
+                ShowCommentSelectionOutline(left, top, CommentPinWidth, CommentPinHeight);
                 SyncSelectionToolbar(element);
                 UpdateSelectionToolbarPosition();
                 return;
             }
-
-            double left, top, width, height;
 
             if (ConnectorVisualHelper.GetLine(element) is Polyline connectorLine && connectorLine.Points.Count > 0)
             {
@@ -7928,22 +7956,122 @@ namespace WhiteSpace.Pages
         }
 
         private const string CommentExpandedTag = "commentExpanded";
+        private const string CommentPinTag = "commentPin";
         private const string CommentAuthorTag = "commentAuthor";
         private const string CommentMessageTag = "commentMessage";
         private const string CommentTimeTag = "commentTime";
         private const string CommentAvatarTag = "commentAvatar";
 
-        private static readonly SolidColorBrush CommentPinBgBrush =
-            new(Color.FromRgb(0x1F, 0x29, 0x37));
+        private const double CommentPinWidth = 40;
+        private const double CommentPinHeight = 44;
+        private const double CommentSelectionOutlinePad = 4;
 
-        private static readonly SolidColorBrush CommentCardBgBrush =
-            new(Color.FromRgb(0x1F, 0x29, 0x37));
+        private static Brush ResolveThemeBrush(string key, Color fallback) =>
+            Application.Current?.TryFindResource(key) as Brush ?? new SolidColorBrush(fallback);
 
-        private static readonly SolidColorBrush CommentPrimaryTextBrush =
-            new(Color.FromRgb(0xF9, 0xFA, 0xFB));
+        private static Brush CommentSurfaceBrush() =>
+            ResolveThemeBrush("WsSurfaceBrush", Color.FromRgb(0x1F, 0x29, 0x37));
 
-        private static readonly SolidColorBrush CommentSecondaryTextBrush =
-            new(Color.FromRgb(0x9C, 0xA3, 0xAF));
+        private static Brush CommentBorderBrush() =>
+            ResolveThemeBrush("WsBorderBrush", Color.FromRgb(0x37, 0x41, 0x51));
+
+        private static Brush CommentPrimaryTextBrush() =>
+            ResolveThemeBrush("WsTextPrimaryBrush", Color.FromRgb(0xF9, 0xFA, 0xFB));
+
+        private static Brush CommentSecondaryTextBrush() =>
+            ResolveThemeBrush("WsTextSecondaryBrush", Color.FromRgb(0x9C, 0xA3, 0xAF));
+
+        private static Brush CommentMutedSurfaceBrush() =>
+            ResolveThemeBrush("WsSurfaceMutedBrush", Color.FromRgb(0x37, 0x41, 0x51));
+
+        private static Brush SelectionAccentBrush() =>
+            ResolveThemeBrush("WsPurpleBrush", Color.FromRgb(0x8B, 0x5C, 0xF6));
+
+        private void ShowCommentSelectionOutline(double left, double top, double width, double height)
+        {
+            var pad = CommentSelectionOutlinePad;
+            _resizeBorder = new Rectangle
+            {
+                Width = width + pad * 2,
+                Height = height + pad * 2,
+                RadiusX = 14,
+                RadiusY = 14,
+                Stroke = SelectionAccentBrush(),
+                StrokeThickness = 2,
+                Fill = Brushes.Transparent,
+                IsHitTestVisible = false
+            };
+
+            Canvas.SetLeft(_resizeBorder, left - pad);
+            Canvas.SetTop(_resizeBorder, top - pad);
+            BoardCanvas.Children.Add(_resizeBorder);
+            Panel.SetZIndex(_resizeBorder, 15000);
+        }
+
+        private static void ApplyCommentTheme(Grid grid)
+        {
+            var surface = CommentSurfaceBrush();
+            var border = CommentBorderBrush();
+            var primary = CommentPrimaryTextBrush();
+            var secondary = CommentSecondaryTextBrush();
+
+            foreach (var child in FindVisualChildren<Border>(grid))
+            {
+                var tag = child.Tag as string;
+                if (tag == CommentPinTag || tag == CommentExpandedTag)
+                {
+                    child.Background = surface;
+                    if (tag == CommentExpandedTag)
+                    {
+                        child.BorderBrush = border;
+                    }
+                }
+            }
+
+            foreach (var child in FindVisualChildren<TextBlock>(grid))
+            {
+                var tag = child.Tag as string;
+                if (tag == CommentAuthorTag || tag == CommentMessageTag)
+                {
+                    child.Foreground = primary;
+                }
+                else if (tag == CommentTimeTag)
+                {
+                    child.Foreground = secondary;
+                }
+            }
+        }
+
+        private void ApplyCommentComposerTheme()
+        {
+            if (_commentComposer == null)
+            {
+                return;
+            }
+
+            _commentComposer.Background = CommentSurfaceBrush();
+            _commentComposer.BorderBrush = CommentBorderBrush();
+
+            foreach (var border in FindVisualChildren<Border>(_commentComposer))
+            {
+                if (border.Tag as string == CommentPinTag)
+                {
+                    border.Background = CommentSurfaceBrush();
+                }
+            }
+
+            foreach (var input in FindVisualChildren<TextBox>(_commentComposer))
+            {
+                input.Foreground = CommentPrimaryTextBrush();
+                input.CaretBrush = CommentPrimaryTextBrush();
+            }
+
+            foreach (var button in FindVisualChildren<Button>(_commentComposer))
+            {
+                button.Foreground = CommentPrimaryTextBrush();
+                button.Background = CommentMutedSurfaceBrush();
+            }
+        }
 
         private Grid CreateCommentBoardContainer(BoardShape shape)
         {
@@ -7961,11 +8089,12 @@ namespace WhiteSpace.Pages
 
             var pin = new Border
             {
-                Width = 40,
-                Height = 44,
+                Tag = CommentPinTag,
+                Width = CommentPinWidth,
+                Height = CommentPinHeight,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
-                Background = CommentPinBgBrush,
+                Background = CommentSurfaceBrush(),
                 CornerRadius = new CornerRadius(20, 20, 4, 20),
                 Padding = new Thickness(4),
                 Cursor = Cursors.Hand
@@ -7974,7 +8103,7 @@ namespace WhiteSpace.Pages
             {
                 BlurRadius = 10,
                 ShadowDepth = 1,
-                Opacity = 0.45,
+                Opacity = WhiteSpaceThemeManager.IsDarkApplied ? 0.45 : 0.2,
                 Color = Colors.Black
             };
 
@@ -8010,8 +8139,8 @@ namespace WhiteSpace.Pages
                 Margin = new Thickness(48, 0, 0, 0),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
-                Background = CommentCardBgBrush,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x37, 0x41, 0x51)),
+                Background = CommentSurfaceBrush(),
+                BorderBrush = CommentBorderBrush(),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(12, 10, 14, 10),
@@ -8021,7 +8150,7 @@ namespace WhiteSpace.Pages
             {
                 BlurRadius = 14,
                 ShadowDepth = 2,
-                Opacity = 0.5,
+                Opacity = WhiteSpaceThemeManager.IsDarkApplied ? 0.5 : 0.22,
                 Color = Colors.Black
             };
 
@@ -8032,14 +8161,14 @@ namespace WhiteSpace.Pages
                 Text = meta.DisplayAuthor(),
                 FontWeight = FontWeights.Bold,
                 FontSize = 13,
-                Foreground = CommentPrimaryTextBrush
+                Foreground = CommentPrimaryTextBrush()
             });
             header.Children.Add(new TextBlock
             {
                 Tag = CommentTimeTag,
                 Text = " " + BoardCommentMetadataHelper.FormatRelativeTime(meta.CreatedAtUtc),
                 FontSize = 12,
-                Foreground = CommentSecondaryTextBrush,
+                Foreground = CommentSecondaryTextBrush(),
                 Margin = new Thickness(6, 1, 0, 0)
             });
 
@@ -8049,7 +8178,7 @@ namespace WhiteSpace.Pages
                 Text = meta.Message,
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13,
-                Foreground = CommentPrimaryTextBrush
+                Foreground = CommentPrimaryTextBrush()
             };
 
             var body = new StackPanel();
@@ -8063,6 +8192,7 @@ namespace WhiteSpace.Pages
             root.MouseEnter += (_, _) => expanded.Visibility = Visibility.Visible;
             root.MouseLeave += (_, _) => expanded.Visibility = Visibility.Collapsed;
 
+            ApplyCommentTheme(root);
             return root;
         }
 
@@ -8101,6 +8231,8 @@ namespace WhiteSpace.Pages
                     child.Text = meta.Message;
                 }
             }
+
+            ApplyCommentTheme(grid);
         }
 
         private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
@@ -8160,8 +8292,8 @@ namespace WhiteSpace.Pages
                 Height = 28,
                 Content = "↑",
                 FontWeight = FontWeights.Bold,
-                Foreground = CommentPrimaryTextBrush,
-                Background = new SolidColorBrush(Color.FromRgb(0x37, 0x41, 0x51)),
+                Foreground = CommentPrimaryTextBrush(),
+                Background = CommentMutedSurfaceBrush(),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Right,
@@ -8177,10 +8309,11 @@ namespace WhiteSpace.Pages
             var (avatarFill, avatarStroke) = ResolveParticipantAvatarBrushes(_myUserId);
             var avatar = new Border
             {
+                Tag = CommentPinTag,
                 Width = 36,
                 Height = 36,
                 CornerRadius = new CornerRadius(18, 18, 4, 18),
-                Background = CommentPinBgBrush,
+                Background = CommentSurfaceBrush(),
                 Padding = new Thickness(3),
                 VerticalAlignment = VerticalAlignment.Center,
                 Child = new Border
@@ -8204,8 +8337,8 @@ namespace WhiteSpace.Pages
 
             input.MinWidth = 220;
             input.Background = Brushes.Transparent;
-            input.Foreground = CommentPrimaryTextBrush;
-            input.CaretBrush = CommentPrimaryTextBrush;
+            input.Foreground = CommentPrimaryTextBrush();
+            input.CaretBrush = CommentPrimaryTextBrush();
 
             var row = new Grid { MinWidth = 300 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -8217,21 +8350,23 @@ namespace WhiteSpace.Pages
 
             _commentComposer = new Border
             {
-                Background = CommentCardBgBrush,
+                Background = CommentSurfaceBrush(),
                 CornerRadius = new CornerRadius(24),
                 Padding = new Thickness(8, 6, 8, 8),
                 Child = row,
                 MinWidth = 320,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(0x37, 0x41, 0x51)),
+                BorderBrush = CommentBorderBrush(),
                 BorderThickness = new Thickness(1)
             };
             _commentComposer.Effect = new DropShadowEffect
             {
                 BlurRadius = 16,
                 ShadowDepth = 2,
-                Opacity = 0.5,
+                Opacity = WhiteSpaceThemeManager.IsDarkApplied ? 0.5 : 0.22,
                 Color = Colors.Black
             };
+
+            ApplyCommentComposerTheme();
 
             Canvas.SetLeft(_commentComposer, world.X);
             Canvas.SetTop(_commentComposer, world.Y);

@@ -168,10 +168,16 @@ public static class ConnectorAttachmentHelper
 
         if (att.StartShapeId.HasValue || att.EndShapeId.HasValue)
         {
-            var attachedSide = att.StartShapeId.HasValue ? startSide : endSide;
-            var attachedPoint = att.StartShapeId.HasValue ? start : end;
-            var freePoint = att.StartShapeId.HasValue ? end : start;
-            return ComputeOrthogonalRouteToFreePoint(attachedPoint, freePoint, attachedSide);
+            if (att.StartShapeId.HasValue)
+            {
+                return ComputeOrthogonalRouteToFreePoint(start, end, startSide);
+            }
+
+            // Только конец привязан: маршрут строится от якоря конца, но точки
+            // должны идти от начала (свободного) к концу (привязанному).
+            var route = ComputeOrthogonalRouteToFreePoint(end, start, endSide);
+            route.Reverse();
+            return route;
         }
 
         return new List<Point> { start, end };
