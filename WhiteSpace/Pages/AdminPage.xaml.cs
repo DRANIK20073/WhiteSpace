@@ -1,11 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using WhiteSpace;
+using WhiteSpace.Rendering;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
@@ -92,11 +97,12 @@ public partial class AdminPage : Page
             if (!isBackgroundRefresh)
             {
                 IsEnabled = false;
-                StatusTextBlock.Text = "Загрузка данных админки...";
+                StatusTextBlock.Text = "Загрузка панели администратора...";
             }
 
             _dashboard = await _service.GetAdminDashboardDataAsync();
             RefreshRows();
+            _ = PopulateBoardThumbnailsAsync();
             UpdateStats();
 
             UpdatedAtTextBlock.Text = $"Обновлено: {FormatDateTime(_dashboard.LoadedAtUtc)}";
@@ -256,7 +262,7 @@ public partial class AdminPage : Page
                     MembersCount = membersByBoard[board.Id].Count(),
                     ShapesCount = shapesByBoard[board.Id].Count(),
                     CanDeleteBoard = _isConfiguredAdmin,
-                    CanClearContent = _isConfiguredAdmin
+                    BoardShapes = shapesByBoard[board.Id].ToList()
                 };
 
                 if (MatchesSearch(normalizedSearch, row.Title, row.OwnerLabel, row.AccessCode, row.Id.ToString()))
@@ -312,16 +318,6 @@ public partial class AdminPage : Page
         BoardsCountTextBlock.Text = _dashboard.Boards.Count.ToString();
         ShapesCountTextBlock.Text = _dashboard.Shapes.Count.ToString();
         ActiveUsersTextBlock.Text = activeUsers.ToString();
-    }
-
-    private void CopyUserId_Click(object sender, RoutedEventArgs e)
-    {
-        if (GetRow<AdminUserRow>(sender) is not { } row)
-        {
-            return;
-        }
-
-        CopyToClipboard(row.Id.ToString(), "ID пользователя скопирован.");
     }
 
     private async void DeleteUser_Click(object sender, RoutedEventArgs e)
@@ -387,16 +383,6 @@ public partial class AdminPage : Page
         }
     }
 
-    private void CopyBoardCode_Click(object sender, RoutedEventArgs e)
-    {
-        if (GetRow<AdminBoardRow>(sender) is not { } row)
-        {
-            return;
-        }
-
-        CopyToClipboard(row.AccessCode, "Код доступа скопирован.");
-    }
-
     private void OpenBoard_Click(object sender, RoutedEventArgs e)
     {
         if (GetRow<AdminBoardRow>(sender) is not { } row)
@@ -405,28 +391,6 @@ public partial class AdminPage : Page
         }
 
         NavigationService?.Navigate(new BoardPage(row.Id, true));
-    }
-
-    private async void ClearBoardContent_Click(object sender, RoutedEventArgs e)
-    {
-        if (GetRow<AdminBoardRow>(sender) is not { } row)
-        {
-            return;
-        }
-
-        if (!AppDialogService.ShowConfirmation(
-                $"Удалить все элементы с доски \"{row.Title}\"?",
-                "Удаление контента",
-                "Удалить контент",
-                "Отмена"))
-        {
-            return;
-        }
-
-        if (await _service.ClearBoardShapesAsync(row.Id))
-        {
-            await LoadAdminDataAsync();
-        }
     }
 
     private async void DeleteBoard_Click(object sender, RoutedEventArgs e)
@@ -481,9 +445,9 @@ public partial class AdminPage : Page
         }
 
         if (!AppDialogService.ShowConfirmation(
-                $"Убрать доступ пользователя {row.UserLabel} к доске \"{row.BoardTitle}\"?",
+                $"Удалить доступ пользователя {row.UserLabel} к доске \"{row.BoardTitle}\"?",
                 "Удаление доступа",
-                "Убрать",
+                "Удалить",
                 "Отмена"))
         {
             return;
@@ -575,16 +539,35 @@ public partial class AdminPage : Page
             && currentUserId == userId;
     }
 
-    private void CopyToClipboard(string value, string successMessage)
+    private async Task PopulateBoardThumbnailsAsync()
     {
-        try
+        var rows = Boards.ToList();
+        foreach (var row in rows)
         {
-            Clipboard.SetText(value);
-            StatusTextBlock.Text = successMessage;
-        }
-        catch (Exception ex)
-        {
-            AppDialogService.ShowError($"Не удалось скопировать в буфер обмена: {ex.Message}", "Админка");
+            try
+            {
+                var shapes = row.BoardShapes;
+                if (shapes.Count == 0)
+                {
+                    shapes = await _service.LoadBoardShapesForPreviewAsync(row.Id);
+                }
+
+                var thumbnail = await BoardThumbnailRenderer.EnsureThumbnailAsync(row.Id, shapes);
+                if (thumbnail == null)
+                {
+                    continue;
+                }
+
+                var existing = Boards.FirstOrDefault(board => board.Id == row.Id);
+                if (existing != null)
+                {
+                    await Dispatcher.InvokeAsync(() => existing.Thumbnail = thumbnail);
+                }
+            }
+            catch
+            {
+                // thumbnails are best-effort in admin list
+            }
         }
     }
 }
@@ -616,8 +599,10 @@ public sealed class AdminUserRow
     public bool CanDeleteProfile { get; set; }
 }
 
-public sealed class AdminBoardRow
+public sealed class AdminBoardRow : INotifyPropertyChanged
 {
+    public event PropertyChangedEventHandler? PropertyChanged;
+
     public Guid Id { get; set; }
 
     public string Title { get; set; } = string.Empty;
@@ -634,7 +619,30 @@ public sealed class AdminBoardRow
 
     public bool CanDeleteBoard { get; set; }
 
-    public bool CanClearContent { get; set; }
+    public List<BoardShape> BoardShapes { get; set; } = new();
+
+    private ImageSource? _thumbnail;
+
+    public ImageSource? Thumbnail
+    {
+        get => _thumbnail;
+        set
+        {
+            if (ReferenceEquals(_thumbnail, value))
+            {
+                return;
+            }
+
+            _thumbnail = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasThumbnail));
+        }
+    }
+
+    public bool HasThumbnail => Thumbnail != null;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 public sealed class AdminMemberRow

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,6 +16,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using System.Windows.Navigation;
 using WhiteSpace;
+using WhiteSpace.Rendering;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
@@ -25,7 +27,8 @@ namespace WhiteSpace.Pages
         {
             MyBoards,
             SharedBoards,
-            RecentBoards
+            RecentBoards,
+            FavoriteBoards
         }
 
         private static readonly string RecentBoardsPath = Path.Combine(
@@ -59,7 +62,7 @@ namespace WhiteSpace.Pages
 
         public double BoardCardWidth => _isCompactView ? 250 : 360;
 
-        public double BoardCardHeight => _isCompactView ? 214 : 248;
+        public double BoardCardHeight => _isCompactView ? 228 : 262;
 
         private bool _boardsLoadedOnce;
         private bool _homeNavHooked;
@@ -114,7 +117,6 @@ namespace WhiteSpace.Pages
             AccountBanGuard.Start();
 
             LoadPreferences();
-            _currentSection = DashboardSection.MyBoards;
             WhiteSpaceThemeManager.Apply(_preferences);
             UiAnimationHelper.ApplyFadeIn(RootPageGrid, _preferences.EnableAnimations);
             ApplySidebarSelection();
@@ -234,13 +236,15 @@ namespace WhiteSpace.Pages
                         RoleBadgeForeground = role == "viewer"
                             ? new SolidColorBrush(Color.FromRgb(100, 116, 139))
                             : Brushes.White,
-                        DeleteVisibility = role == "owner" ? Visibility.Visible : Visibility.Collapsed
+                        DeleteVisibility = role == "owner" ? Visibility.Visible : Visibility.Collapsed,
+                        IsFavorite = FavoriteBoardsStorage.IsFavorite(board.Id)
                     });
                 }
 
                 _allBoards = cards;
                 RefreshVisibleBoards();
                 ApplyAnimationPreference();
+                _ = PopulateBoardThumbnailsAsync(cards);
                 await BoardChatNotificationHub.SyncSubscriptionsAsync(_service);
             }
             catch (Exception ex)
@@ -256,6 +260,7 @@ namespace WhiteSpace.Pages
                 DashboardSection.MyBoards => _allBoards.Where(board => board.Role == "owner"),
                 DashboardSection.SharedBoards => _allBoards.Where(board => board.Role != "owner"),
                 DashboardSection.RecentBoards => GetRecentBoards(),
+                DashboardSection.FavoriteBoards => GetFavoriteBoards(),
                 _ => _allBoards
             };
 
@@ -284,6 +289,15 @@ namespace WhiteSpace.Pages
                 return boards.OrderBy(board => positions.TryGetValue(board.Id, out var position) ? position : int.MaxValue);
             }
 
+            if (_currentSection == DashboardSection.FavoriteBoards && selectedSort == "Новые сначала")
+            {
+                var positions = FavoriteBoardsStorage.Load()
+                    .Select((id, index) => new { id, index })
+                    .ToDictionary(item => item.id, item => item.index);
+
+                return boards.OrderBy(board => positions.TryGetValue(board.Id, out var position) ? position : int.MaxValue);
+            }
+
             return selectedSort switch
             {
                 "Старые сначала" => boards.OrderBy(board => board.CreatedAt),
@@ -291,6 +305,53 @@ namespace WhiteSpace.Pages
                 "Название Я-А" => boards.OrderByDescending(board => board.Title),
                 _ => boards.OrderByDescending(board => board.CreatedAt)
             };
+        }
+
+        private async Task PopulateBoardThumbnailsAsync(IReadOnlyList<HomeBoardCard> cards)
+        {
+            using var gate = new SemaphoreSlim(4);
+            var tasks = cards.Select(async card =>
+            {
+                await gate.WaitAsync();
+                try
+                {
+                    var shapes = await _service.LoadBoardShapesForPreviewAsync(card.Id);
+                    var thumbnail = await BoardThumbnailRenderer.EnsureThumbnailAsync(card.Id, shapes);
+                    if (thumbnail == null)
+                    {
+                        return;
+                    }
+
+                    await Dispatcher.InvokeAsync(() =>
+                    {
+                        var target = _allBoards.FirstOrDefault(board => board.Id == card.Id) ?? card;
+                        target.Thumbnail = thumbnail;
+                    });
+                }
+                catch
+                {
+                    // thumbnails are best-effort on the home page
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+
+        private IEnumerable<HomeBoardCard> GetFavoriteBoards()
+        {
+            var boardsById = _allBoards.ToDictionary(board => board.Id, board => board);
+
+            foreach (var boardId in FavoriteBoardsStorage.Load())
+            {
+                if (boardsById.TryGetValue(boardId, out var board))
+                {
+                    yield return board;
+                }
+            }
         }
 
         private IEnumerable<HomeBoardCard> GetRecentBoards()
@@ -322,6 +383,7 @@ namespace WhiteSpace.Pages
             var myBoardsCount = _allBoards.Count(board => board.Role == "owner");
             var sharedBoardsCount = _allBoards.Count(board => board.Role != "owner");
             var recentCount = GetRecentBoards().Count();
+            var favoriteCount = GetFavoriteBoards().Count();
 
             if (EmptyStateActionButton != null)
             {
@@ -346,6 +408,16 @@ namespace WhiteSpace.Pages
                         EmptyStateActionButton.Visibility = Visibility.Collapsed;
                     }
                     break;
+                case DashboardSection.FavoriteBoards:
+                    SectionTitleTextBlock.Text = "Избранные";
+                    SectionSubtitleTextBlock.Text = $"{favoriteCount} досок";
+                    EmptyStateTitleTextBlock.Text = "В избранном пока пусто";
+                    EmptyStateSubtitleTextBlock.Text = "Наведите на доску и нажмите ★, чтобы добавить её сюда.";
+                    if (EmptyStateActionButton != null)
+                    {
+                        EmptyStateActionButton.Visibility = Visibility.Collapsed;
+                    }
+                    break;
                 default:
                     SectionTitleTextBlock.Text = "Недавние";
                     SectionSubtitleTextBlock.Text = $"{recentCount} досок";
@@ -364,6 +436,7 @@ namespace WhiteSpace.Pages
             MyBoardsButton.Background = transparent;
             SharedBoardsButton.Background = transparent;
             RecentBoardsButton.Background = transparent;
+            FavoriteBoardsButton.Background = transparent;
         }
 
         private void ApplyViewModeSelection()
@@ -491,6 +564,24 @@ namespace WhiteSpace.Pages
         private void SharedBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.SharedBoards);
 
         private void RecentBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.RecentBoards);
+
+        private void FavoriteBoardsButton_Click(object sender, RoutedEventArgs e) => SetSection(DashboardSection.FavoriteBoards);
+
+        private void ToggleFavorite_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            if (sender is not Button { DataContext: HomeBoardCard card })
+            {
+                return;
+            }
+
+            card.IsFavorite = FavoriteBoardsStorage.Toggle(card.Id);
+
+            if (_currentSection == DashboardSection.FavoriteBoards)
+            {
+                RefreshVisibleBoards();
+            }
+        }
 
         private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e)
         {
@@ -659,22 +750,39 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            RememberBoard(boardId);
-            NavigationService?.Navigate(new BoardPage(boardId));
+            OpenBoard(boardId);
         }
 
-        private async void DeleteBoard_Click(object sender, RoutedEventArgs e)
+        private void OpenBoardFromContextMenu_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not Button button || button.CommandParameter is not Guid boardId)
+            if (sender is not MenuItem { DataContext: HomeBoardCard card })
             {
                 return;
             }
 
-            var success = await _service.DeleteBoardAsync(boardId);
+            OpenBoard(card.Id);
+        }
+
+        private async void DeleteBoardFromContextMenu_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem { DataContext: HomeBoardCard card })
+            {
+                return;
+            }
+
+            FavoriteBoardsStorage.Remove(card.Id);
+
+            var success = await _service.DeleteBoardAsync(card.Id);
             if (success)
             {
                 await LoadBoardsAsync();
             }
+        }
+
+        private void OpenBoard(Guid boardId)
+        {
+            RememberBoard(boardId);
+            NavigationService?.Navigate(new BoardPage(boardId));
         }
 
         private void Logout_Click(object sender, RoutedEventArgs e)
@@ -943,8 +1051,10 @@ namespace WhiteSpace.Pages
         }
     }
 
-    public sealed class HomeBoardCard
+    public sealed class HomeBoardCard : INotifyPropertyChanged
     {
+        public event PropertyChangedEventHandler? PropertyChanged;
+
         public Guid Id { get; set; }
 
         public string Title { get; set; } = string.Empty;
@@ -968,5 +1078,45 @@ namespace WhiteSpace.Pages
         public Brush RoleBadgeForeground { get; set; } = Brushes.Black;
 
         public Visibility DeleteVisibility { get; set; } = Visibility.Collapsed;
+
+        private ImageSource? _thumbnail;
+
+        public ImageSource? Thumbnail
+        {
+            get => _thumbnail;
+            set
+            {
+                if (ReferenceEquals(_thumbnail, value))
+                {
+                    return;
+                }
+
+                _thumbnail = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasThumbnail));
+            }
+        }
+
+        public bool HasThumbnail => Thumbnail != null;
+
+        private bool _isFavorite;
+
+        public bool IsFavorite
+        {
+            get => _isFavorite;
+            set
+            {
+                if (_isFavorite == value)
+                {
+                    return;
+                }
+
+                _isFavorite = value;
+                OnPropertyChanged();
+            }
+        }
+
+        private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 }

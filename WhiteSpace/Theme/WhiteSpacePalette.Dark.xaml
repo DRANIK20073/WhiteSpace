@@ -61,6 +61,13 @@
 
     <SolidColorBrush x:Key="WsTopButtonPressBrush" Color="#FF4B5563"/>
 
+    <Color x:Key="WsDangerForegroundColor">#FFF87171</Color>
+    <Color x:Key="WsDangerBackgroundColor">#FF450A0A</Color>
+    <Color x:Key="WsDangerBorderColor">#FF7F1D1D</Color>
+    <SolidColorBrush x:Key="WsDangerForegroundBrush" Color="{StaticResource WsDangerForegroundColor}"/>
+    <SolidColorBrush x:Key="WsDangerBackgroundBrush" Color="{StaticResource WsDangerBackgroundColor}"/>
+    <SolidColorBrush x:Key="WsDangerBorderBrush" Color="{StaticResource WsDangerBorderColor}"/>
+
     <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource WsSurfaceColor}"/>
     <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource WsSurfaceMutedColor}"/>
     <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="{StaticResource WsSurfaceColor}"/>

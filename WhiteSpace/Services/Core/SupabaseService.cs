@@ -1186,6 +1186,7 @@ public class SupabaseService
                     model.DeserializedPoints ??= new List<Point>();
                     if (!string.IsNullOrEmpty(model.Points) &&
                         (string.Equals(model.Type, "line", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(model.Type, "marker", StringComparison.OrdinalIgnoreCase) ||
                          string.Equals(model.Type, "connector", StringComparison.OrdinalIgnoreCase)))
                     {
                         try
@@ -1209,6 +1210,27 @@ public class SupabaseService
         {
             Console.WriteLine($"Ошибка при загрузке фигур: {ex.Message}");
             return new List<BoardShape>();
+        }
+    }
+
+    /// <summary>Фигуры для превью: Supabase, при пустом ответе — Firebase (резерв).</summary>
+    public async Task<List<BoardShape>> LoadBoardShapesForPreviewAsync(Guid boardId)
+    {
+        var shapes = await LoadBoardShapesAsync(boardId);
+        if (shapes.Count > 0)
+        {
+            return shapes;
+        }
+
+        try
+        {
+            var firebase = new FirebaseService();
+            return await firebase.GetAllShapesAsync(boardId.ToString());
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"LoadBoardShapesForPreviewAsync Firebase: {ex.Message}");
+            return shapes;
         }
     }
 
@@ -1695,8 +1717,8 @@ public class SupabaseService
         catch (Exception ex)
         {
             AppDialogService.ShowError(
-                $"Не удалось загрузить данные админки: {ex.Message}\n\nПроверьте, что политики RLS в Supabase разрешают администратору читать таблицы profiles, boards, board_members и boardshape.",
-                "Админка");
+                $"Не удалось загрузить данные панели администратора: {ex.Message}\n\nПроверьте, что политики RLS в Supabase разрешают администратору читать таблицы profiles, boards, board_members и boardshape.",
+                "Панель администратора");
 
             return new AdminDashboardData
             {
@@ -1755,7 +1777,7 @@ public class SupabaseService
 
             if (board == null)
             {
-                AppDialogService.ShowWarning("Доска не найдена.", "Админка");
+                AppDialogService.ShowWarning("Доска не найдена.", "Панель администратора");
                 return false;
             }
 
@@ -1771,12 +1793,12 @@ public class SupabaseService
                 .Where(b => b.Id == boardId)
                 .Delete();
 
-            AppDialogService.ShowSuccess($"Доска \"{board.Title}\" удалена.", "Админка");
+            AppDialogService.ShowSuccess($"Доска \"{board.Title}\" удалена.", "Панель администратора");
             return true;
         }
         catch (Exception ex)
         {
-            AppDialogService.ShowError($"Ошибка удаления доски администратором: {ex.Message}", "Админка");
+            AppDialogService.ShowError($"Ошибка удаления доски администратором: {ex.Message}", "Панель администратора");
             return false;
         }
     }
@@ -1969,7 +1991,7 @@ public class SupabaseService
     {
         if (!await IsCurrentUserAdminAsync())
         {
-            AppDialogService.ShowWarning("Недостаточно прав для блокировки пользователей.", "Админка");
+            AppDialogService.ShowWarning("Недостаточно прав для блокировки пользователей.", "Панель администратора");
             return false;
         }
 
@@ -1979,7 +2001,7 @@ public class SupabaseService
             && Guid.TryParse(currentUser.Id, out var currentUserId)
             && currentUserId == userId)
         {
-            AppDialogService.ShowWarning("Нельзя заблокировать текущий аккаунт.", "Админка");
+            AppDialogService.ShowWarning("Нельзя заблокировать текущий аккаунт.", "Панель администратора");
             return false;
         }
 
@@ -1996,14 +2018,14 @@ public class SupabaseService
                 banned
                     ? "Аккаунт заблокирован. Пользователь удалён со всех досок и будет отключён при следующей проверке."
                     : "Блокировка снята.",
-                "Админка");
+                "Панель администратора");
             return true;
         }
         catch (Exception ex)
         {
             AppDialogService.ShowError(
                 $"Не удалось изменить статус блокировки: {ex.Message}\n\nВыполните SQL из файла supabase/migrations/20260517_add_profile_ban.sql в Supabase → SQL Editor.",
-                "Админка");
+                "Панель администратора");
             return false;
         }
     }
@@ -2015,7 +2037,7 @@ public class SupabaseService
             var currentUser = _client.Auth.CurrentUser;
             if (currentUser != null && Guid.TryParse(currentUser.Id, out var currentUserId) && currentUserId == userId)
             {
-                AppDialogService.ShowWarning("Нельзя удалить текущий профиль администратора из админки.", "Админка");
+                AppDialogService.ShowWarning("Нельзя удалить текущий профиль администратора из панели администратора.", "Панель администратора");
                 return false;
             }
 
@@ -2027,7 +2049,7 @@ public class SupabaseService
             {
                 AppDialogService.ShowWarning(
                     "У пользователя есть собственные доски. Сначала удалите эти доски или переназначьте владельца в базе данных.",
-                    "Админка");
+                    "Панель администратора");
                 return false;
             }
 
@@ -2039,12 +2061,12 @@ public class SupabaseService
                 .Where(p => p.Id == userId)
                 .Delete();
 
-            AppDialogService.ShowSuccess("Профиль и его доступы к доскам удалены.", "Админка");
+            AppDialogService.ShowSuccess("Профиль и его доступы к доскам удалены.", "Панель администратора");
             return true;
         }
         catch (Exception ex)
         {
-            AppDialogService.ShowError($"Ошибка удаления профиля: {ex.Message}", "Админка");
+            AppDialogService.ShowError($"Ошибка удаления профиля: {ex.Message}", "Панель администратора");
             return false;
         }
     }

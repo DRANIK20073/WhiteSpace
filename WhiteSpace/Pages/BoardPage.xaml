@@ -1069,6 +1069,142 @@
                                     </Border>
                                 </Popup>
                             </StackPanel>
+                            <StackPanel x:Name="SelectionToolbarTextHost"
+                                        Orientation="Horizontal"
+                                        Margin="0,0,10,0"
+                                        Visibility="Collapsed"
+                                        VerticalAlignment="Center">
+                                <ComboBox x:Name="SelectionToolbarTextFontSizeCombo"
+                                          Width="58"
+                                          Height="30"
+                                          Margin="0,0,6,0"
+                                          VerticalContentAlignment="Center"
+                                          ToolTip="Размер шрифта"
+                                          SelectionChanged="SelectionToolbarTextFontSizeCombo_SelectionChanged"/>
+                                <ToggleButton x:Name="SelectionToolbarTextBoldToggle"
+                                              Width="30"
+                                              Height="30"
+                                              Margin="0,0,6,0"
+                                              FontWeight="Bold"
+                                              Content="B"
+                                              ToolTip="Жирный"
+                                              Click="SelectionToolbarTextBoldToggle_Click">
+                                    <ToggleButton.Style>
+                                        <Style TargetType="ToggleButton">
+                                            <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+                                            <Setter Property="BorderThickness" Value="1"/>
+                                            <Setter Property="Cursor" Value="Hand"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource WsPurpleBrush}"/>
+                                                    <Setter Property="Foreground" Value="White"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource WsPurpleBrush}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ToggleButton.Style>
+                                </ToggleButton>
+                                <Button x:Name="SelectionToolbarTextColorButton"
+                                        Style="{StaticResource SelectionToolbarColorChipStyle}"
+                                        Width="36"
+                                        Height="30"
+                                        Margin="0,0,6,0"
+                                        VerticalAlignment="Center"
+                                        ToolTip="Цвет текста"
+                                        Click="SelectionToolbarTextColorButton_Click">
+                                    <Grid Width="22" Height="22">
+                                        <Ellipse x:Name="SelectionToolbarTextColorSwatch"
+                                                 Width="18"
+                                                 Height="18"
+                                                 VerticalAlignment="Center"
+                                                 HorizontalAlignment="Center"
+                                                 Fill="#111111"/>
+                                        <TextBlock Text="▼"
+                                                   FontSize="7"
+                                                   Foreground="{DynamicResource WsTextSecondaryBrush}"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Bottom"/>
+                                    </Grid>
+                                </Button>
+                                <StackPanel Orientation="Horizontal">
+                                    <ToggleButton x:Name="SelectionToolbarTextAlignLeftToggle"
+                                                  Tag="left"
+                                                  Width="30"
+                                                  Height="30"
+                                                  Margin="0,0,4,0"
+                                                  Content="L"
+                                                  ToolTip="По левому краю"
+                                                  Click="SelectionToolbarTextAlign_Click">
+                                        <ToggleButton.Style>
+                                            <Style TargetType="ToggleButton">
+                                                <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+                                                <Setter Property="BorderThickness" Value="1"/>
+                                                <Setter Property="Cursor" Value="Hand"/>
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource WsPurpleBrush}"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource WsPurpleBrush}"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ToggleButton.Style>
+                                    </ToggleButton>
+                                    <ToggleButton x:Name="SelectionToolbarTextAlignCenterToggle"
+                                                  Tag="center"
+                                                  Width="30"
+                                                  Height="30"
+                                                  Margin="0,0,4,0"
+                                                  Content="C"
+                                                  ToolTip="По центру"
+                                                  Click="SelectionToolbarTextAlign_Click">
+                                        <ToggleButton.Style>
+                                            <Style TargetType="ToggleButton">
+                                                <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+                                                <Setter Property="BorderThickness" Value="1"/>
+                                                <Setter Property="Cursor" Value="Hand"/>
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource WsPurpleBrush}"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource WsPurpleBrush}"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ToggleButton.Style>
+                                    </ToggleButton>
+                                    <ToggleButton x:Name="SelectionToolbarTextAlignRightToggle"
+                                                  Tag="right"
+                                                  Width="30"
+                                                  Height="30"
+                                                  Content="R"
+                                                  ToolTip="По правому краю"
+                                                  Click="SelectionToolbarTextAlign_Click">
+                                        <ToggleButton.Style>
+                                            <Style TargetType="ToggleButton">
+                                                <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+                                                <Setter Property="BorderThickness" Value="1"/>
+                                                <Setter Property="Cursor" Value="Hand"/>
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource WsPurpleBrush}"/>
+                                                        <Setter Property="Foreground" Value="White"/>
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource WsPurpleBrush}"/>
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ToggleButton.Style>
+                                    </ToggleButton>
+                                </StackPanel>
+                            </StackPanel>
                             <Button x:Name="SelectionToolbarDeleteButton"
                                     Style="{StaticResource SelectionToolbarDeleteButtonStyle}"
                                     Width="36"

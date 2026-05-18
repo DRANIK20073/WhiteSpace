@@ -63,6 +63,13 @@
     <!-- Подсветка «призрачных» кнопок (тулбар, превью наведения на обычные кнопки) -->
     <SolidColorBrush x:Key="WsTopButtonPressBrush" Color="#FFEDE9FE"/>
 
+    <Color x:Key="WsDangerForegroundColor">#FFB42318</Color>
+    <Color x:Key="WsDangerBackgroundColor">#FFFFF7F7</Color>
+    <Color x:Key="WsDangerBorderColor">#FFF2B8B5</Color>
+    <SolidColorBrush x:Key="WsDangerForegroundBrush" Color="{StaticResource WsDangerForegroundColor}"/>
+    <SolidColorBrush x:Key="WsDangerBackgroundBrush" Color="{StaticResource WsDangerBackgroundColor}"/>
+    <SolidColorBrush x:Key="WsDangerBorderBrush" Color="{StaticResource WsDangerBorderColor}"/>
+
     <!-- Ключи WPF UI (Fluent ComboBox) → палитра: сохраняется ControlTemplate, меняются только кисти -->
     <SolidColorBrush x:Key="ComboBoxBackground" Color="{StaticResource WsSurfaceColor}"/>
     <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="{StaticResource WsSurfaceMutedColor}"/>

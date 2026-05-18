@@ -1,7 +1,7 @@
 <Page x:Class="WhiteSpace.Pages.AdminPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-      Title="Админка"
+      Title="Панель администратора"
       Background="{DynamicResource WsPageBgBrush}"
       Loaded="Page_Loaded">
 
@@ -18,7 +18,7 @@
             <Setter Property="Height" Value="38"/>
             <Setter Property="Padding" Value="14,0"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
-            <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
@@ -35,21 +35,76 @@
                                               HorizontalAlignment="Center"
                                               VerticalAlignment="Center"/>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource WsTopButtonPressBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
         <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource AdminButtonStyle}">
-            <Setter Property="Foreground" Value="#B42318"/>
-            <Setter Property="BorderBrush" Value="#F2B8B5"/>
-            <Setter Property="Background" Value="#FFF7F7"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsDangerForegroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WsDangerBorderBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource WsDangerBackgroundBrush}"/>
         </Style>
 
         <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource AdminButtonStyle}">
             <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#8B5CF6"/>
-            <Setter Property="Background" Value="#8B5CF6"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WsPurpleBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource WsPurpleBrush}"/>
+        </Style>
+
+        <Style x:Key="AdminSearchBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource WsTextPrimaryBrush}"/>
+        </Style>
+
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextSecondaryBrush}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="Height" Value="38"/>
+        </Style>
+
+        <Style TargetType="DataGridRow">
+            <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource WsSurfaceMutedBrush}"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource WsTopButtonPressBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="DataGridCell">
+            <Setter Property="BorderBrush" Value="{DynamicResource WsBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+                    <Setter Property="Background" Value="Transparent"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <Style TargetType="DataGrid">
@@ -63,6 +118,7 @@
             <Setter Property="RowHeight" Value="56"/>
             <Setter Property="ColumnHeaderHeight" Value="38"/>
             <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
             <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource WsBorderBrush}"/>
             <Setter Property="VerticalGridLinesBrush" Value="{DynamicResource WsBorderBrush}"/>
         </Style>
@@ -90,7 +146,7 @@
                     Click="Back_Click"/>
 
             <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                <TextBlock Text="Панель Администратора"
+                <TextBlock Text="Панель администратора"
                            FontSize="28"
                            FontWeight="Bold"
                            Foreground="{DynamicResource WsTextPrimaryBrush}"/>
@@ -164,6 +220,7 @@
                            FontWeight="SemiBold"/>
                 <TextBox x:Name="SearchBox"
                          Grid.Column="1"
+                         Style="{StaticResource AdminSearchBoxStyle}"
                          Height="38"
                          Margin="12,0"
                          Padding="12,0"
@@ -211,14 +268,10 @@
                             <DataGridTextColumn Header="Доступы" Binding="{Binding MembershipsCount}" Width="0.8*"/>
                             <DataGridTextColumn Header="Статус" Binding="{Binding PresenceLabel}" Width="0.9*"/>
                             <DataGridTextColumn Header="Активность" Binding="{Binding LastActivityText}" Width="1.2*"/>
-                            <DataGridTemplateColumn Header="Действия" Width="340">
+                            <DataGridTemplateColumn Header="Действия" Width="260">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
-                                            <Button Style="{StaticResource AdminButtonStyle}"
-                                                    Content="ID"
-                                                    CommandParameter="{Binding}"
-                                                    Click="CopyUserId_Click"/>
                                             <Button Style="{StaticResource AdminButtonStyle}"
                                                     Content="{Binding BanButtonLabel}"
                                                     IsEnabled="{Binding CanToggleBan}"
@@ -243,13 +296,59 @@
                     <DataGrid x:Name="BoardsGrid"
                               ItemsSource="{Binding Boards}">
                         <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="Превью" Width="110">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border Width="88"
+                                                Height="48"
+                                                CornerRadius="8"
+                                                BorderBrush="{DynamicResource WsBorderBrush}"
+                                                BorderThickness="1"
+                                                ClipToBounds="True"
+                                                Background="{DynamicResource WsSurfaceMutedBrush}">
+                                            <Grid>
+                                                <Border CornerRadius="8">
+                                                    <Border.Background>
+                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                            <GradientStop Color="#8B5CF6" Offset="0"/>
+                                                            <GradientStop Color="#3B82F6" Offset="1"/>
+                                                        </LinearGradientBrush>
+                                                    </Border.Background>
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasThumbnail}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                </Border>
+                                                <Image Source="{Binding Thumbnail}"
+                                                       Stretch="UniformToFill">
+                                                    <Image.Style>
+                                                        <Style TargetType="Image">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasThumbnail}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Image.Style>
+                                                </Image>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Название" Binding="{Binding Title}" Width="2*"/>
                             <DataGridTextColumn Header="Владелец" Binding="{Binding OwnerLabel}" Width="1.6*"/>
                             <DataGridTextColumn Header="Код" Binding="{Binding AccessCode}" Width="0.8*"/>
                             <DataGridTextColumn Header="Создана" Binding="{Binding CreatedText}" Width="1.1*"/>
                             <DataGridTextColumn Header="Участники" Binding="{Binding MembersCount}" Width="0.8*"/>
                             <DataGridTextColumn Header="Элементы" Binding="{Binding ShapesCount}" Width="0.8*"/>
-                            <DataGridTemplateColumn Header="Действия" Width="360">
+                            <DataGridTemplateColumn Header="Действия" Width="200">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
@@ -257,15 +356,6 @@
                                                     Content="Открыть"
                                                     CommandParameter="{Binding}"
                                                     Click="OpenBoard_Click"/>
-                                            <Button Style="{StaticResource AdminButtonStyle}"
-                                                    Content="Код"
-                                                    CommandParameter="{Binding}"
-                                                    Click="CopyBoardCode_Click"/>
-                                            <Button Style="{StaticResource DangerButtonStyle}"
-                                                    Content="Контент"
-                                                    IsEnabled="{Binding CanClearContent}"
-                                                    CommandParameter="{Binding}"
-                                                    Click="ClearBoardContent_Click"/>
                                             <Button Style="{StaticResource DangerButtonStyle}"
                                                     Content="Удалить"
                                                     IsEnabled="{Binding CanDeleteBoard}"
@@ -299,7 +389,7 @@
                                                     CommandParameter="{Binding}"
                                                     Click="ToggleRole_Click"/>
                                             <Button Style="{StaticResource DangerButtonStyle}"
-                                                    Content="Убрать"
+                                                    Content="Удалить"
                                                     IsEnabled="{Binding CanManageAccess}"
                                                     CommandParameter="{Binding}"
                                                     Click="RemoveAccess_Click"/>

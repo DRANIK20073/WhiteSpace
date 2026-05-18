@@ -30,7 +30,7 @@ namespace WhiteSpace.Pages
         {
             if (await _supabaseService.TryAdminLoginAsync(EmailBox.Text, PasswordBox.Password))
             {
-                AppDialogService.ShowSuccess("Вход администратора выполнен.", "Админка");
+                AppDialogService.ShowSuccess("Вход администратора выполнен.", "Панель администратора");
                 NavigateAndClear(new AdminPage());
                 return;
             }

@@ -136,6 +136,7 @@ namespace WhiteSpace.Pages
         private Point _rectPlacementStartWorld;
 
         private bool _suppressSelectionToolbarSync;
+        private bool _suppressTextToolbarSync;
 
         // Изменение размеров фигуры
         private bool _isResizing;
@@ -284,6 +285,7 @@ namespace WhiteSpace.Pages
 
             EnsureFillPaletteBuilt();
             EnsureShapesPaletteBuilt();
+            EnsureTextToolbarFontSizesBuilt();
             UpdateShapesToolLabel();
 
             await LoadBoardMetadataAsync();
@@ -988,7 +990,7 @@ namespace WhiteSpace.Pages
             {
                 textBox.Foreground = brush;
                 textBox.Text = shape.Text ?? string.Empty;
-                textBox.FontSize = ParseTextShapeFontSize(shape.Points, shape.Height, 16);
+                ApplyTextShapeStyleToTextBox(textBox, shape);
                 ApplyTextBoxChrome(textBox, brush);
             }
             else if (element is Image image)
@@ -2700,13 +2702,11 @@ namespace WhiteSpace.Pages
             }
             else if (shape.Type == "text")
             {
-                var fontSize = ParseTextShapeFontSize(shape.Points, shape.Height, 16);
                 var textBox = new TextBox
                 {
                     Text = shape.Text ?? string.Empty,
                     MinWidth = 48,
                     MinHeight = 28,
-                    FontSize = fontSize,
                     Foreground = brush,
                     Uid = shape.Id.ToString(),
                     IsReadOnly = false,
@@ -2718,6 +2718,7 @@ namespace WhiteSpace.Pages
                     Padding = new Thickness(1, 2, 1, 2)
                 };
 
+                ApplyTextShapeStyleToTextBox(textBox, shape);
                 ApplyTextBoxChrome(textBox, brush);
 
                 if (shape.Width > 0)
@@ -5230,7 +5231,37 @@ namespace WhiteSpace.Pages
 
             var isComment = shape?.Type == "comment";
             var isConnector = shape?.Type == "connector";
+            var isText = shape?.Type == "text";
             ApplySelectionToolbarChrome(isComment || isMultiSelect);
+
+            if (SelectionToolbarTextHost != null)
+            {
+                SelectionToolbarTextHost.Visibility = isText ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            if (isText && shape != null && element is TextBox textElement)
+            {
+                SelectionToolbarShapeButton.Visibility = Visibility.Collapsed;
+                if (SelectionToolbarFillButton != null)
+                {
+                    SelectionToolbarFillButton.Visibility = Visibility.Collapsed;
+                }
+
+                if (SelectionToolbarStrokeButton != null)
+                {
+                    SelectionToolbarStrokeButton.Visibility = Visibility.Collapsed;
+                }
+
+                if (ConnectorArrowSection != null)
+                {
+                    ConnectorArrowSection.Visibility = Visibility.Collapsed;
+                }
+
+                SyncTextSelectionToolbar(shape, textElement);
+                SelectionToolbarPanel.Visibility = Visibility.Visible;
+                Dispatcher.BeginInvoke(new Action(UpdateSelectionToolbarPosition), DispatcherPriority.Loaded);
+                return;
+            }
 
             if (isMultiSelect)
             {
@@ -6437,7 +6468,7 @@ namespace WhiteSpace.Pages
                 shape.Text = textBox.Text;
                 shape.Width = textBox.ActualWidth > 0 ? textBox.ActualWidth : textBox.Width;
                 shape.Height = textBox.ActualHeight > 0 ? textBox.ActualHeight : textBox.Height;
-                shape.Points = SerializeTextShapeStyle(textBox.FontSize);
+                shape.Points = SerializeTextShapeStyle(ReadTextShapeStyleFromTextBoxValues(textBox));
                 await _supabaseService.SaveShapeAsync(shape);
                 MarkSaved();
 
@@ -7897,7 +7928,7 @@ namespace WhiteSpace.Pages
                 shape.Height = tbRt.Height > 0 ? tbRt.Height : tbRt.ActualHeight;
                 shape.X = Canvas.GetLeft(target);
                 shape.Y = Canvas.GetTop(target);
-                shape.Points = SerializeTextShapeStyle(tbRt.FontSize);
+                shape.Points = SerializeTextShapeStyle(ReadTextShapeStyleFromTextBoxValues(tbRt));
             }
             else if (target is FrameworkElement fe)
             {
@@ -7987,7 +8018,7 @@ namespace WhiteSpace.Pages
                 shape.Height = tbSave.Height > 0 ? tbSave.Height : tbSave.ActualHeight;
                 shape.X = Canvas.GetLeft(_resizeTarget);
                 shape.Y = Canvas.GetTop(_resizeTarget);
-                shape.Points = SerializeTextShapeStyle(tbSave.FontSize);
+                shape.Points = SerializeTextShapeStyle(ReadTextShapeStyleFromTextBoxValues(tbSave));
             }
             else
             {
@@ -8249,12 +8280,17 @@ namespace WhiteSpace.Pages
         {
             [JsonProperty("fs")]
             public double FontSize { get; set; }
+
+            [JsonProperty("b")]
+            public bool Bold { get; set; }
+
+            [JsonProperty("a")]
+            public string Align { get; set; } = "left";
         }
 
-        private static string SerializeTextShapeStyle(double fontSize) =>
-            JsonConvert.SerializeObject(new TextShapeStyleJson { FontSize = fontSize });
+        private readonly record struct TextShapeStyle(double FontSize, bool Bold, string Align);
 
-        private static double ParseTextShapeFontSize(string? points, double boxHeight, double fallback)
+        private static TextShapeStyle ParseTextShapeStyle(string? points, double boxHeight, double fallbackFontSize)
         {
             if (!string.IsNullOrWhiteSpace(points) && points.TrimStart().StartsWith('{'))
             {
@@ -8263,7 +8299,10 @@ namespace WhiteSpace.Pages
                     var dto = JsonConvert.DeserializeObject<TextShapeStyleJson>(points);
                     if (dto != null && dto.FontSize > 0)
                     {
-                        return Math.Clamp(dto.FontSize, 6, 320);
+                        return new TextShapeStyle(
+                            Math.Clamp(dto.FontSize, 6, 320),
+                            dto.Bold,
+                            NormalizeTextAlignment(dto.Align));
                     }
                 }
                 catch
@@ -8274,10 +8313,300 @@ namespace WhiteSpace.Pages
 
             if (boxHeight > 1)
             {
-                return Math.Clamp(boxHeight * 0.62, 10, 200);
+                return new TextShapeStyle(Math.Clamp(boxHeight * 0.62, 10, 200), false, "left");
             }
 
-            return fallback;
+            return new TextShapeStyle(fallbackFontSize, false, "left");
+        }
+
+        private static double ParseTextShapeFontSize(string? points, double boxHeight, double fallback) =>
+            ParseTextShapeStyle(points, boxHeight, fallback).FontSize;
+
+        private static string SerializeTextShapeStyle(TextShapeStyle style) =>
+            JsonConvert.SerializeObject(new TextShapeStyleJson
+            {
+                FontSize = style.FontSize,
+                Bold = style.Bold,
+                Align = NormalizeTextAlignment(style.Align)
+            });
+
+        private static string SerializeTextShapeStyle(double fontSize, bool bold = false, string align = "left") =>
+            SerializeTextShapeStyle(new TextShapeStyle(fontSize, bold, align));
+
+        private static TextShapeStyle ReadTextShapeStyleFromTextBoxValues(TextBox textBox)
+        {
+            var align = textBox.TextAlignment switch
+            {
+                TextAlignment.Center => "center",
+                TextAlignment.Right => "right",
+                _ => "left"
+            };
+
+            return new TextShapeStyle(
+                textBox.FontSize > 0 ? textBox.FontSize : 16,
+                textBox.FontWeight == FontWeights.Bold,
+                align);
+        }
+
+        private static string NormalizeTextAlignment(string? align) =>
+            align?.ToLowerInvariant() switch
+            {
+                "center" => "center",
+                "right" => "right",
+                _ => "left"
+            };
+
+        private static TextAlignment ToTextAlignment(string align) =>
+            NormalizeTextAlignment(align) switch
+            {
+                "center" => TextAlignment.Center,
+                "right" => TextAlignment.Right,
+                _ => TextAlignment.Left
+            };
+
+        private static HorizontalAlignment ToHorizontalAlignment(string align) =>
+            NormalizeTextAlignment(align) switch
+            {
+                "center" => HorizontalAlignment.Center,
+                "right" => HorizontalAlignment.Right,
+                _ => HorizontalAlignment.Left
+            };
+
+        private static void ApplyTextShapeStyleToTextBox(TextBox textBox, BoardShape shape)
+        {
+            var style = ParseTextShapeStyle(shape.Points, shape.Height, textBox.FontSize > 0 ? textBox.FontSize : 16);
+            textBox.FontSize = style.FontSize;
+            textBox.FontWeight = style.Bold ? FontWeights.Bold : FontWeights.Normal;
+            textBox.TextAlignment = ToTextAlignment(style.Align);
+            textBox.HorizontalContentAlignment = ToHorizontalAlignment(style.Align);
+        }
+
+        private TextShapeStyle ReadTextShapeStyleFromTextBox(TextBox textBox)
+        {
+            var align = SelectionToolbarTextAlignCenterToggle?.IsChecked == true
+                ? "center"
+                : SelectionToolbarTextAlignRightToggle?.IsChecked == true
+                    ? "right"
+                    : "left";
+
+            if (!_suppressTextToolbarSync)
+            {
+                if (SelectionToolbarTextAlignLeftToggle?.IsChecked == true)
+                {
+                    align = "left";
+                }
+            }
+            else if (textBox.TextAlignment == TextAlignment.Center)
+            {
+                align = "center";
+            }
+            else if (textBox.TextAlignment == TextAlignment.Right)
+            {
+                align = "right";
+            }
+
+            return new TextShapeStyle(
+                textBox.FontSize > 0 ? textBox.FontSize : 16,
+                textBox.FontWeight == FontWeights.Bold,
+                align);
+        }
+
+        private void EnsureTextToolbarFontSizesBuilt()
+        {
+            if (SelectionToolbarTextFontSizeCombo == null || SelectionToolbarTextFontSizeCombo.Items.Count > 0)
+            {
+                return;
+            }
+
+            foreach (var size in new[] { 12, 14, 16, 18, 20, 24, 28, 32, 40, 48 })
+            {
+                SelectionToolbarTextFontSizeCombo.Items.Add(size);
+            }
+        }
+
+        private void SyncTextSelectionToolbar(BoardShape shape, TextBox textBox)
+        {
+            if (SelectionToolbarTextFontSizeCombo == null)
+            {
+                return;
+            }
+
+            var style = ParseTextShapeStyle(shape.Points, shape.Height, textBox.FontSize > 0 ? textBox.FontSize : 16);
+            _suppressTextToolbarSync = true;
+            try
+            {
+                var nearestSize = SelectionToolbarTextFontSizeCombo.Items
+                    .Cast<object>()
+                    .Select(item => Convert.ToDouble(item))
+                    .OrderBy(size => Math.Abs(size - style.FontSize))
+                    .FirstOrDefault();
+                if (nearestSize > 0)
+                {
+                    SelectionToolbarTextFontSizeCombo.SelectedItem = (int)nearestSize;
+                }
+
+                if (SelectionToolbarTextBoldToggle != null)
+                {
+                    SelectionToolbarTextBoldToggle.IsChecked = style.Bold;
+                }
+
+                UpdateTextAlignToggleButtons(style.Align);
+
+                if (SelectionToolbarTextColorSwatch != null
+                    && TryParseHexBrush(shape.Color, out var textBrush))
+                {
+                    SelectionToolbarTextColorSwatch.Fill = textBrush;
+                }
+            }
+            finally
+            {
+                _suppressTextToolbarSync = false;
+            }
+        }
+
+        private void UpdateTextAlignToggleButtons(string align)
+        {
+            var normalized = NormalizeTextAlignment(align);
+            if (SelectionToolbarTextAlignLeftToggle != null)
+            {
+                SelectionToolbarTextAlignLeftToggle.IsChecked = normalized == "left";
+            }
+
+            if (SelectionToolbarTextAlignCenterToggle != null)
+            {
+                SelectionToolbarTextAlignCenterToggle.IsChecked = normalized == "center";
+            }
+
+            if (SelectionToolbarTextAlignRightToggle != null)
+            {
+                SelectionToolbarTextAlignRightToggle.IsChecked = normalized == "right";
+            }
+        }
+
+        private static bool TryParseHexBrush(string? color, out SolidColorBrush brush)
+        {
+            brush = new SolidColorBrush(Colors.Black);
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(color)
+                    && new BrushConverter().ConvertFromString(color.Trim()) is SolidColorBrush parsed)
+                {
+                    brush = parsed;
+                    return true;
+                }
+            }
+            catch
+            {
+                // ignore invalid color
+            }
+
+            return false;
+        }
+
+        private TextBox? GetSelectedBoardTextBox() =>
+            _resizeTarget as TextBox;
+
+        private BoardShape? GetSelectedTextShape()
+        {
+            if (_resizeTarget is not FrameworkElement fe || string.IsNullOrEmpty(fe.Uid))
+            {
+                return null;
+            }
+
+            return _shapesOnBoard.FirstOrDefault(shape =>
+                shape.Id.ToString() == fe.Uid && shape.Type == "text");
+        }
+
+        private async Task ApplyTextShapeStyleToSelectionAsync(TextShapeStyle style, bool captureUndo = true)
+        {
+            if (GetSelectedBoardTextBox() is not TextBox textBox || GetSelectedTextShape() is not BoardShape shape)
+            {
+                return;
+            }
+
+            if (IsBoardEditLockedForCurrentUser())
+            {
+                return;
+            }
+
+            var current = ParseTextShapeStyle(shape.Points, shape.Height, textBox.FontSize > 0 ? textBox.FontSize : 16);
+            if (Math.Abs(current.FontSize - style.FontSize) < 0.1
+                && current.Bold == style.Bold
+                && string.Equals(current.Align, style.Align, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (captureUndo)
+            {
+                CaptureBoardStateForUndo();
+            }
+
+            textBox.FontSize = style.FontSize;
+            textBox.FontWeight = style.Bold ? FontWeights.Bold : FontWeights.Normal;
+            textBox.TextAlignment = ToTextAlignment(style.Align);
+            textBox.HorizontalContentAlignment = ToHorizontalAlignment(style.Align);
+            shape.Points = SerializeTextShapeStyle(style);
+
+            await _supabaseService.SaveShapeAsync(shape);
+            MarkSaved();
+            PushShapeToFirebase(shape);
+            SyncTextSelectionToolbar(shape, textBox);
+        }
+
+        private void SelectionToolbarTextFontSizeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressTextToolbarSync || SelectionToolbarTextFontSizeCombo?.SelectedItem == null)
+            {
+                return;
+            }
+
+            var fontSize = Convert.ToDouble(SelectionToolbarTextFontSizeCombo.SelectedItem);
+            if (GetSelectedBoardTextBox() is not TextBox textBox)
+            {
+                return;
+            }
+
+            var style = ReadTextShapeStyleFromTextBox(textBox) with { FontSize = fontSize };
+            _ = ApplyTextShapeStyleToSelectionAsync(style);
+        }
+
+        private void SelectionToolbarTextBoldToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressTextToolbarSync || GetSelectedBoardTextBox() is not TextBox textBox)
+            {
+                return;
+            }
+
+            var style = ReadTextShapeStyleFromTextBox(textBox) with
+            {
+                Bold = SelectionToolbarTextBoldToggle?.IsChecked == true
+            };
+            _ = ApplyTextShapeStyleToSelectionAsync(style);
+        }
+
+        private void SelectionToolbarTextAlign_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suppressTextToolbarSync || sender is not ToggleButton toggle || GetSelectedBoardTextBox() is not TextBox textBox)
+            {
+                return;
+            }
+
+            var align = toggle.Tag?.ToString() ?? "left";
+            UpdateTextAlignToggleButtons(align);
+            var style = ReadTextShapeStyleFromTextBox(textBox) with { Align = align };
+            _ = ApplyTextShapeStyleToSelectionAsync(style);
+        }
+
+        private void SelectionToolbarTextColorButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (SelectionToolbarStrokePopup == null || SelectionToolbarTextColorButton == null)
+            {
+                return;
+            }
+
+            SelectionToolbarStrokePopup.PlacementTarget = SelectionToolbarTextColorButton;
+            SelectionToolbarStrokePopup.IsOpen = !SelectionToolbarStrokePopup.IsOpen;
         }
 
         private static void ApplyTextBoxChrome(TextBox tb, Brush foreground)
