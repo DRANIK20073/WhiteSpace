@@ -17,7 +17,7 @@
   <Class Name="Profile">
     <Position X="4" Y="0.5" Width="1.5" />
     <TypeIdentifier>
-      <HashCode>AAACAAAAACAAAAAAASAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <HashCode>AAACAAAAACAAABAAASAAAACAEAAAAAAAAAAAAAAAAAA=</HashCode>
       <FileName>Models\Profile.cs</FileName>
     </TypeIdentifier>
   </Class>
@@ -38,7 +38,7 @@
   <Class Name="WhiteSpace.Models.BoardVersionSnapshot">
     <Position X="9.25" Y="0.5" Width="1.5" />
     <TypeIdentifier>
-      <HashCode>AAAEAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <HashCode>AAAEAAAAAAAAAAABACAAAAQAAAAAAAAAAAAAAAAAAAA=</HashCode>
       <FileName>Models\BoardVersionSnapshot.cs</FileName>
     </TypeIdentifier>
   </Class>
@@ -48,23 +48,20 @@
       <Compartment Name="Methods" Collapsed="true" />
     </Compartments>
     <TypeIdentifier>
-      <HashCode>AAAA0AAoQiCAAEAEAADAEAAAEKAIAQBgQADAAACYQgg=</HashCode>
+      <HashCode>AAAA0AAoQiCAAEAEAADAEAAAELAIAQBgQADAAACYQgg=</HashCode>
       <FileName>Services\FirebaseService.cs</FileName>
     </TypeIdentifier>
-    <Lollipop Position="0.2" />
+    <Lollipop Position="0.2" Collapsed="true" />
   </Class>
   <Class Name="WhiteSpace.FirebaseShapesSnapshot">
     <Position X="2.25" Y="3.75" Width="1.5" />
-    <Compartments>
-      <Compartment Name="Methods" Collapsed="true" />
-    </Compartments>
     <TypeIdentifier>
       <HashCode>AAAEBAAAAAAAAAAAAAAAAAAAAgAAAAAAABAAAAAAAAA=</HashCode>
       <FileName>Services\FirebaseService.cs</FileName>
     </TypeIdentifier>
   </Class>
   <Class Name="WhiteSpace.FirebaseBoardMember">
-    <Position X="4" Y="2.5" Width="1.5" />
+    <Position X="4" Y="3" Width="1.5" />
     <TypeIdentifier>
       <HashCode>AEAAAAAAAAIAAAAAEAAAAAgAAACAAAAAAAAAAAAAAAA=</HashCode>
       <FileName>Services\FirebaseService.cs</FileName>
@@ -85,7 +82,7 @@
     </TypeIdentifier>
   </Class>
   <Class Name="WhiteSpace.FirebaseChatMessage">
-    <Position X="9.25" Y="2" Width="1.5" />
+    <Position X="9.25" Y="2.75" Width="1.5" />
     <TypeIdentifier>
       <HashCode>AQACAAAAAAAAAAAAAAAAAAgAAAABAAAAAQAACAAAAAA=</HashCode>
       <FileName>Services\FirebaseService.cs</FileName>
@@ -98,14 +95,14 @@
       <Compartment Name="Nested Types" Collapsed="false" />
     </Compartments>
     <NestedTypes>
-      <Class Name="SupabaseService.PasswordResetPayload" Collapsed="true">
+      <Class Name="SupabaseService.PasswordResetPayload">
         <TypeIdentifier>
           <NewMemberFileName>Services\Core\SupabaseService.cs</NewMemberFileName>
         </TypeIdentifier>
       </Class>
     </NestedTypes>
     <TypeIdentifier>
-      <HashCode>ACAA0KiAMRAAKEGTAHGAEA+CJCAwRCgZBxEAAICBAGQ=</HashCode>
+      <HashCode>ECQA0KiQMRAAKEGTAHGAFA+CpCAwRCgZhxEAAIKJQGQ=</HashCode>
       <FileName>Services\Core\SupabaseService.cs</FileName>
     </TypeIdentifier>
   </Class>

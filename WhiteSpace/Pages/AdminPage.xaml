@@ -211,7 +211,7 @@
                             <DataGridTextColumn Header="Доступы" Binding="{Binding MembershipsCount}" Width="0.8*"/>
                             <DataGridTextColumn Header="Статус" Binding="{Binding PresenceLabel}" Width="0.9*"/>
                             <DataGridTextColumn Header="Активность" Binding="{Binding LastActivityText}" Width="1.2*"/>
-                            <DataGridTemplateColumn Header="Действия" Width="220">
+                            <DataGridTemplateColumn Header="Действия" Width="340">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
@@ -219,6 +219,11 @@
                                                     Content="ID"
                                                     CommandParameter="{Binding}"
                                                     Click="CopyUserId_Click"/>
+                                            <Button Style="{StaticResource AdminButtonStyle}"
+                                                    Content="{Binding BanButtonLabel}"
+                                                    IsEnabled="{Binding CanToggleBan}"
+                                                    CommandParameter="{Binding}"
+                                                    Click="ToggleBanUser_Click"/>
                                             <Button Style="{StaticResource DangerButtonStyle}"
                                                     Content="Удалить"
                                                     IsEnabled="{Binding CanDeleteProfile}"

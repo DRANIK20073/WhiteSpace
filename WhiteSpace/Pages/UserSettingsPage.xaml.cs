@@ -16,11 +16,22 @@ public partial class UserSettingsPage : Page
     public UserSettingsPage()
     {
         InitializeComponent();
-        Unloaded += (_, _) => _isThemeInitializing = true;
+        Unloaded += (_, _) =>
+        {
+            AccountBanGuard.Stop();
+            _isThemeInitializing = true;
+        };
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
+        if (await _service.EnforceBanLogoutIfNeededAsync())
+        {
+            return;
+        }
+
+        AccountBanGuard.Start();
+
         _preferences = AppPreferences.Load();
         WhiteSpaceThemeManager.Apply(_preferences);
         _isThemeInitializing = true;

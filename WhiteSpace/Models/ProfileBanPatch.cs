@@ -1,20 +1,12 @@
-﻿using Supabase.Postgrest.Models;
 using Supabase.Postgrest.Attributes;
+using Supabase.Postgrest.Models;
 
+/// <summary>Частичное обновление блокировки в profiles.</summary>
 [Table("profiles")]
-public class Profile : BaseModel
+public class ProfileBanPatch : BaseModel
 {
     [PrimaryKey("id")]
     public Guid Id { get; set; }
-
-    [Column("email")]
-    public string Email { get; set; }
-
-    [Column("username")]
-    public string Username { get; set; }
-
-    [Column("created_at")]
-    public DateTime CreatedAt { get; set; }
 
     [Column("is_banned")]
     public bool IsBanned { get; set; }

@@ -258,6 +258,11 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            if (!_returnToAdminPage && await _supabaseService.EnforceBanLogoutIfNeededAsync())
+            {
+                return;
+            }
+
             var prefs = AppPreferences.Load();
             WhiteSpaceThemeManager.Apply(prefs);
             UiAnimationHelper.ApplyFadeIn(BoardRootGrid, prefs.EnableAnimations);
@@ -283,6 +288,11 @@ namespace WhiteSpace.Pages
 
             await LoadBoardMetadataAsync();
             _isAdminSession = _returnToAdminPage || await _supabaseService.IsCurrentUserAdminAsync();
+
+            if (!_isAdminSession)
+            {
+                AccountBanGuard.Start();
+            }
 
             // Загружаем фигуры из Supabase
             await LoadShapesFromSupabase();
@@ -466,6 +476,7 @@ namespace WhiteSpace.Pages
         private async void Page_Unloaded(object sender, RoutedEventArgs e)
         {
             _isPageUnloading = true;
+            AccountBanGuard.Stop();
 
             Viewport.LostMouseCapture -= Viewport_LostMouseCapture;
 

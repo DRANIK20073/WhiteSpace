@@ -211,6 +211,7 @@ public partial class AdminPage : Page
                 onlineUsersById.TryGetValue(userId, out var lastSeenUtc);
                 var isOnline = lastSeenUtc > DateTime.UtcNow.AddSeconds(-20);
 
+                var isBanned = profile?.IsBanned == true;
                 var row = new AdminUserRow
                 {
                     Id = userId,
@@ -223,8 +224,11 @@ public partial class AdminPage : Page
                     CreatedText = FormatDateTime(profile?.CreatedAt ?? DateTime.MinValue),
                     OwnedBoardsCount = ownedBoardsCount,
                     MembershipsCount = profileMemberships.Count,
-                    PresenceLabel = isOnline ? "Онлайн" : "Не в сети",
+                    PresenceLabel = isBanned ? "Заблокирован" : (isOnline ? "Онлайн" : "Не в сети"),
                     LastActivityText = FormatDateTime(lastActivity),
+                    IsBanned = isBanned,
+                    CanToggleBan = _isConfiguredAdmin && !IsCurrentUser(userId),
+                    BanButtonLabel = isBanned ? "Разблокировать" : "Заблокировать",
                     CanDeleteProfile = _isConfiguredAdmin && ownedBoardsCount == 0 && !IsCurrentUser(userId)
                 };
 
@@ -337,6 +341,47 @@ public partial class AdminPage : Page
         }
 
         if (await _service.AdminDeleteProfileAsync(row.Id))
+        {
+            await LoadAdminDataAsync();
+        }
+    }
+
+    private async void ToggleBanUser_Click(object sender, RoutedEventArgs e)
+    {
+        if (GetRow<AdminUserRow>(sender) is not { } row)
+        {
+            return;
+        }
+
+        if (row.IsBanned)
+        {
+            if (!AppDialogService.ShowConfirmation(
+                    $"Разблокировать аккаунт {row.Email}?",
+                    "Разблокировка",
+                    "Разблокировать",
+                    "Отмена"))
+            {
+                return;
+            }
+
+            if (await _service.AdminSetUserBannedAsync(row.Id, banned: false, emailHint: row.Email))
+            {
+                await LoadAdminDataAsync();
+            }
+
+            return;
+        }
+
+        if (!AppDialogService.ShowConfirmation(
+                $"Заблокировать аккаунт {row.Email}? Пользователь не сможет войти в приложение.",
+                "Блокировка аккаунта",
+                "Заблокировать",
+                "Отмена"))
+        {
+            return;
+        }
+
+        if (await _service.AdminSetUserBannedAsync(row.Id, banned: true, emailHint: row.Email))
         {
             await LoadAdminDataAsync();
         }
@@ -561,6 +606,12 @@ public sealed class AdminUserRow
     public string PresenceLabel { get; set; } = "Не в сети";
 
     public string LastActivityText { get; set; } = string.Empty;
+
+    public bool IsBanned { get; set; }
+
+    public bool CanToggleBan { get; set; }
+
+    public string BanButtonLabel { get; set; } = "Заблокировать";
 
     public bool CanDeleteProfile { get; set; }
 }

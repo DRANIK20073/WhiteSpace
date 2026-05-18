@@ -251,6 +251,12 @@ public class SupabaseService
                 SessionStorage.SaveSession(session);
             }
 
+            if (await RejectSessionIfBannedAsync())
+            {
+                NavigateToLoginPage();
+                return false;
+            }
+
             AppDialogService.ShowSuccess("Вход выполнен успешно!", "Вход");
 
             return true;
@@ -388,6 +394,12 @@ public class SupabaseService
                         if (_client.Auth.CurrentSession != null)
                         {
                             SessionStorage.SaveSession(_client.Auth.CurrentSession);
+                        }
+
+                        if (await RejectSessionIfBannedAsync())
+                        {
+                            NavigateToLoginPage();
+                            return false;
                         }
 
                         var profile = await GetProfileByActorIdAsync(_client.Auth.CurrentUser.Id);
@@ -938,6 +950,12 @@ public class SupabaseService
                 return null;
             }
 
+            if (await IsCurrentUserBannedAsync())
+            {
+                await RejectSessionIfBannedAsync();
+                return null;
+            }
+
             if (string.IsNullOrWhiteSpace(title))
             {
                 AppDialogService.ShowWarning("Название доски не может быть пустым", "Создание доски");
@@ -1328,6 +1346,12 @@ public class SupabaseService
             if (user == null)
             {
                 AppDialogService.ShowWarning("Пользователь не авторизован.", "Подключение к доске");
+                return null;
+            }
+
+            if (await IsCurrentUserBannedAsync())
+            {
+                await RejectSessionIfBannedAsync();
                 return null;
             }
 
@@ -1753,6 +1777,233 @@ public class SupabaseService
         catch (Exception ex)
         {
             AppDialogService.ShowError($"Ошибка удаления доски администратором: {ex.Message}", "Админка");
+            return false;
+        }
+    }
+
+    public async Task<bool> IsUserBannedAsync(Guid userId)
+    {
+        try
+        {
+            var profile = await GetProfileByUserIdAsync(userId);
+            if (profile != null)
+            {
+                return profile.IsBanned;
+            }
+
+            var patch = await _client
+                .From<ProfileBanPatch>()
+                .Where(p => p.Id == userId)
+                .Single();
+
+            return patch?.IsBanned == true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> IsCurrentUserBannedAsync()
+    {
+        var currentUser = _client.Auth.CurrentUser;
+        if (currentUser == null || !Guid.TryParse(currentUser.Id, out var userId))
+        {
+            return false;
+        }
+
+        return await IsUserBannedAsync(userId);
+    }
+
+    public async Task<bool> EnforceBanLogoutIfNeededAsync()
+    {
+        if (await IsCurrentUserAdminAsync())
+        {
+            return false;
+        }
+
+        var currentUser = _client.Auth.CurrentUser;
+        if (currentUser == null || !Guid.TryParse(currentUser.Id, out var userId))
+        {
+            return false;
+        }
+
+        if (!await IsUserBannedAsync(userId))
+        {
+            return false;
+        }
+
+        await RejectSessionIfBannedAsync();
+        NavigateToLoginPage();
+        return true;
+    }
+
+    private static void NavigateToLoginPage()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (Application.Current.MainWindow is MainWindow mainWindow)
+            {
+                mainWindow.MainFrame.Navigate(new LoginPage());
+            }
+        });
+    }
+
+    private async Task<bool> RejectSessionIfBannedAsync()
+    {
+        var currentUser = _client.Auth.CurrentUser;
+        if (currentUser == null || !Guid.TryParse(currentUser.Id, out var userId))
+        {
+            return false;
+        }
+
+        if (!await IsUserBannedAsync(userId))
+        {
+            return false;
+        }
+
+        var profile = await GetProfileByUserIdAsync(userId);
+        var reason = string.IsNullOrWhiteSpace(profile?.BanReason)
+            ? "Вы удалены со всех досок. Обратитесь к администратору."
+            : profile!.BanReason!.Trim();
+
+        AccountBanGuard.Stop();
+        BoardChatNotificationHub.Stop();
+        SessionStorage.ClearSession();
+        SupabaseService.ClearLocalAdminSession();
+        try
+        {
+            await _client.Auth.SignOut();
+        }
+        catch
+        {
+            // ignore
+        }
+
+        AppDialogService.ShowWarning(
+            $"Аккаунт заблокирован администратором.\n{reason}",
+            "Доступ ограничен");
+
+        return true;
+    }
+
+    private async Task RemoveUserFromAllBoardsAsync(Guid userId)
+    {
+        await _client.From<BoardMember>()
+            .Where(m => m.UserId == userId)
+            .Delete();
+    }
+
+    private async Task ApplyProfileBanStateAsync(Guid userId, bool banned, string? reason, string? emailHint)
+    {
+        var bannedAt = banned ? DateTime.UtcNow : (DateTime?)null;
+        var banReason = banned ? reason?.Trim() : null;
+        var existing = await GetProfileByUserIdAsync(userId);
+
+        if (existing == null)
+        {
+            var created = new Profile
+            {
+                Id = userId,
+                Email = emailHint?.Trim() ?? string.Empty,
+                Username = string.Empty,
+                CreatedAt = DateTime.UtcNow,
+                IsBanned = banned,
+                BannedAt = bannedAt,
+                BanReason = banReason
+            };
+
+            try
+            {
+                await _client.From<Profile>().Insert(created);
+                return;
+            }
+            catch (Exception ex) when (IsMissingBanColumnError(ex))
+            {
+                await _client.From<Profile>().Insert(new Profile
+                {
+                    Id = userId,
+                    Email = emailHint?.Trim() ?? string.Empty,
+                    Username = string.Empty,
+                    CreatedAt = DateTime.UtcNow
+                });
+                await _client.From<ProfileBanPatch>().Update(new ProfileBanPatch
+                {
+                    Id = userId,
+                    IsBanned = banned,
+                    BannedAt = bannedAt
+                });
+                return;
+            }
+        }
+
+        existing.IsBanned = banned;
+        existing.BannedAt = bannedAt;
+        existing.BanReason = banReason;
+
+        try
+        {
+            await _client.From<Profile>().Update(existing);
+        }
+        catch (Exception ex) when (IsMissingBanColumnError(ex))
+        {
+            await _client.From<ProfileBanPatch>().Update(new ProfileBanPatch
+            {
+                Id = userId,
+                IsBanned = banned,
+                BannedAt = bannedAt
+            });
+        }
+    }
+
+    private static bool IsMissingBanColumnError(Exception ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("PGRST204", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("is_banned", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("ban_reason", StringComparison.OrdinalIgnoreCase)
+               || message.Contains("banned_at", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task<bool> AdminSetUserBannedAsync(Guid userId, bool banned, string? reason = null, string? emailHint = null)
+    {
+        if (!await IsCurrentUserAdminAsync())
+        {
+            AppDialogService.ShowWarning("Недостаточно прав для блокировки пользователей.", "Админка");
+            return false;
+        }
+
+        var currentUser = _client.Auth.CurrentUser;
+        if (banned
+            && currentUser != null
+            && Guid.TryParse(currentUser.Id, out var currentUserId)
+            && currentUserId == userId)
+        {
+            AppDialogService.ShowWarning("Нельзя заблокировать текущий аккаунт.", "Админка");
+            return false;
+        }
+
+        try
+        {
+            if (banned)
+            {
+                await RemoveUserFromAllBoardsAsync(userId);
+            }
+
+            await ApplyProfileBanStateAsync(userId, banned, reason, emailHint);
+
+            AppDialogService.ShowSuccess(
+                banned
+                    ? "Аккаунт заблокирован. Пользователь удалён со всех досок и будет отключён при следующей проверке."
+                    : "Блокировка снята.",
+                "Админка");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppDialogService.ShowError(
+                $"Не удалось изменить статус блокировки: {ex.Message}\n\nВыполните SQL из файла supabase/migrations/20260517_add_profile_ban.sql в Supabase → SQL Editor.",
+                "Админка");
             return false;
         }
     }

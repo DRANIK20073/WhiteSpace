@@ -81,6 +81,13 @@ namespace WhiteSpace
 
                     if (SupabaseService.Client.Auth.CurrentUser != null)
                     {
+                        var supabase = new SupabaseService();
+                        if (await supabase.EnforceBanLogoutIfNeededAsync())
+                        {
+                            window.Show();
+                            return;
+                        }
+
                         window.MainFrame.Navigate(new UserHomePage());
                         window.Show();
                         return;

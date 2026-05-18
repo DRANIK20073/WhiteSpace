@@ -87,6 +87,7 @@ namespace WhiteSpace.Pages
 
         private void UserHomePage_Unloaded(object sender, RoutedEventArgs e)
         {
+            AccountBanGuard.Stop();
             HomeToastService.ToastRequested -= OnHomeToastRequested;
             BoardChatNotificationHub.UnreadCountChanged -= OnNotificationUnreadCountChanged;
             if (BoardChatNotificationHub.Items is INotifyCollectionChanged notify)
@@ -105,6 +106,13 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
+            if (await _service.EnforceBanLogoutIfNeededAsync())
+            {
+                return;
+            }
+
+            AccountBanGuard.Start();
+
             LoadPreferences();
             _currentSection = DashboardSection.MyBoards;
             WhiteSpaceThemeManager.Apply(_preferences);
