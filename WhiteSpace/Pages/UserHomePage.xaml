@@ -873,7 +873,7 @@
                                     <Border Background="{DynamicResource WsSurfaceBrush}"
                                             BorderBrush="{DynamicResource WsBorderBrush}"
                                             BorderThickness="1"
-                                            CornerRadius="24"
+                                            CornerRadius="20"
                                             ClipToBounds="True"
                                             Tag="{Binding Id}"
                                             Cursor="Hand"
@@ -969,7 +969,7 @@
                                             <Border Grid.Row="0"
                                                     Margin="12,12,12,0"
                                                     Height="104"
-                                                    CornerRadius="16"
+                                                    CornerRadius="0"
                                                     ClipToBounds="True"
                                                     BorderBrush="{DynamicResource WsBorderBrush}"
                                                     BorderThickness="1"
@@ -1057,7 +1057,7 @@
                                                         </Button>
                                                         <Border HorizontalAlignment="Right"
                                                                 Height="24"
-                                                                Margin="0,4,40,0"
+                                                                Margin="0,4,2,0"
                                                                 Padding="10,0"
                                                                 Background="{Binding RoleBadgeBackground}"
                                                                 CornerRadius="12">
@@ -1162,6 +1162,7 @@
                AllowsTransparency="True">
             <Border Width="380"
                     MaxHeight="440"
+                    ClipToBounds="True"
                     CornerRadius="14"
                     Background="{DynamicResource WsSurfaceBrush}"
                     BorderBrush="{DynamicResource WsBorderBrush}"
@@ -1197,9 +1198,9 @@
                                         <ControlTemplate TargetType="ListBoxItem">
                                             <Border x:Name="Bd"
                                                     Background="Transparent"
-                                                    BorderBrush="{DynamicResource WsBorderBrush}"
-                                                    BorderThickness="1"
-                                                    CornerRadius="12"
+                                                    BorderBrush="Transparent"
+                                                    BorderThickness="0"
+                                                    CornerRadius="0"
                                                     Padding="0">
                                                 <ContentPresenter/>
                                             </Border>

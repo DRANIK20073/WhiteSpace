@@ -794,10 +794,10 @@
                             VerticalAlignment="Top"
                             HorizontalAlignment="Left"
                             Margin="0"
-                            Padding="8,6"
-                            CornerRadius="10"
-                            Background="#2C2C2E"
-                            BorderBrush="#555555"
+                            Padding="10,8"
+                            CornerRadius="12"
+                            Background="#242428"
+                            BorderBrush="#5B5B66"
                             BorderThickness="1"
                             Panel.ZIndex="10">
                         <Border.Effect>
@@ -1075,15 +1075,16 @@
                                         Visibility="Collapsed"
                                         VerticalAlignment="Center">
                                 <ComboBox x:Name="SelectionToolbarTextFontSizeCombo"
-                                          Width="58"
-                                          Height="30"
+                                          Width="72"
+                                          Height="34"
                                           Margin="0,0,6,0"
+                                          FontWeight="SemiBold"
                                           VerticalContentAlignment="Center"
                                           ToolTip="Размер шрифта"
                                           SelectionChanged="SelectionToolbarTextFontSizeCombo_SelectionChanged"/>
                                 <ToggleButton x:Name="SelectionToolbarTextBoldToggle"
-                                              Width="30"
-                                              Height="30"
+                                              Width="34"
+                                              Height="34"
                                               Margin="0,0,6,0"
                                               FontWeight="Bold"
                                               Content="B"
@@ -1108,8 +1109,8 @@
                                 </ToggleButton>
                                 <Button x:Name="SelectionToolbarTextColorButton"
                                         Style="{StaticResource SelectionToolbarColorChipStyle}"
-                                        Width="36"
-                                        Height="30"
+                                        Width="38"
+                                        Height="34"
                                         Margin="0,0,6,0"
                                         VerticalAlignment="Center"
                                         ToolTip="Цвет текста"
@@ -1131,10 +1132,11 @@
                                 <StackPanel Orientation="Horizontal">
                                     <ToggleButton x:Name="SelectionToolbarTextAlignLeftToggle"
                                                   Tag="left"
-                                                  Width="30"
-                                                  Height="30"
+                                                  Width="34"
+                                                  Height="34"
                                                   Margin="0,0,4,0"
-                                                  Content="L"
+                                                  Content="&#xE8E4;"
+                                                  FontFamily="Segoe MDL2 Assets"
                                                   ToolTip="По левому краю"
                                                   Click="SelectionToolbarTextAlign_Click">
                                         <ToggleButton.Style>
@@ -1156,10 +1158,11 @@
                                     </ToggleButton>
                                     <ToggleButton x:Name="SelectionToolbarTextAlignCenterToggle"
                                                   Tag="center"
-                                                  Width="30"
-                                                  Height="30"
+                                                  Width="34"
+                                                  Height="34"
                                                   Margin="0,0,4,0"
-                                                  Content="C"
+                                                  Content="&#xE8E3;"
+                                                  FontFamily="Segoe MDL2 Assets"
                                                   ToolTip="По центру"
                                                   Click="SelectionToolbarTextAlign_Click">
                                         <ToggleButton.Style>
@@ -1181,9 +1184,10 @@
                                     </ToggleButton>
                                     <ToggleButton x:Name="SelectionToolbarTextAlignRightToggle"
                                                   Tag="right"
-                                                  Width="30"
-                                                  Height="30"
-                                                  Content="R"
+                                                  Width="34"
+                                                  Height="34"
+                                                  Content="&#xE8E2;"
+                                                  FontFamily="Segoe MDL2 Assets"
                                                   ToolTip="По правому краю"
                                                   Click="SelectionToolbarTextAlign_Click">
                                         <ToggleButton.Style>

@@ -105,13 +105,13 @@ namespace WhiteSpace.Pages
 
         // Силуэты при размещении (фигура, стикер, комментарий, стрелка)
         private UIElement? _previewShapeElement;
-        private const double DefaultRectW = 140;
-        private const double DefaultRectH = 90;
-        private const double DefaultEllipse = 100;
+        private const double DefaultRectW = 112;
+        private const double DefaultRectH = 112;
+        private const double DefaultEllipse = 108;
 
         /// <summary>Минимальные габариты при ресайзе и размещении (прямоугольник, эллипс, блок-схема).</summary>
-        private const double MinRectEllipseWidth = 48;
-        private const double MinRectEllipseHeight = 40;
+        private const double MinRectEllipseWidth = 44;
+        private const double MinRectEllipseHeight = 44;
 
         /// <summary>Минимальные размеры стикера.</summary>
         private const double MinStickyWidth = 120;
@@ -229,6 +229,7 @@ namespace WhiteSpace.Pages
         private string _cursorDisplayName = "Участник";
         private readonly ObservableCollection<ChatMessageViewModel> _chatMessages = new();
         private double _textResizeStartFontSize = 16;
+        private double _imageResizeStartAspect = 1;
         private bool _chatUnreadSeeded;
         private DateTime _chatReadWatermarkUtc = DateTime.MinValue;
 
@@ -2709,7 +2710,7 @@ namespace WhiteSpace.Pages
                     MinHeight = 28,
                     Foreground = brush,
                     Uid = shape.Id.ToString(),
-                    IsReadOnly = false,
+                    IsReadOnly = true,
                     Focusable = true,
                     AcceptsReturn = true,
                     TextWrapping = TextWrapping.Wrap,
@@ -2735,6 +2736,7 @@ namespace WhiteSpace.Pages
                 textBox.PreviewMouseUp += TextBox_PreviewMouseUp;
                 textBox.LostFocus += TextBox_LostFocus;
                 textBox.TextChanged += TextBox_TextChanged;
+                textBox.Cursor = Cursors.SizeAll;
 
                 Canvas.SetLeft(textBox, shape.X);
                 Canvas.SetTop(textBox, shape.Y);
@@ -2940,6 +2942,21 @@ namespace WhiteSpace.Pages
 
             if (_tool == ToolMode.Select && e.LeftButton == MouseButtonState.Pressed)
             {
+                ShowResizeFrame(textBox);
+
+                if (e.ClickCount >= 2)
+                {
+                    textBox.IsReadOnly = false;
+                    textBox.Cursor = Cursors.IBeam;
+                    _focusedBoardTextEdit = textBox;
+                    textBox.Focus();
+                    textBox.SelectAll();
+                    e.Handled = true;
+                    return;
+                }
+
+                textBox.IsReadOnly = true;
+                textBox.Cursor = Cursors.SizeAll;
                 var world = ScreenToWorld(e.GetPosition(Viewport));
                 _dragStartWorld = world;
                 _dragLastWorld = world;
@@ -2975,8 +2992,8 @@ namespace WhiteSpace.Pages
                 _isDraggingElement = false;
                 _dragElement = null;
 
-                textBox.IsReadOnly = false;
-                textBox.Cursor = Cursors.IBeam;
+                textBox.IsReadOnly = true;
+                textBox.Cursor = Cursors.SizeAll;
 
                 Viewport.ReleaseMouseCapture();
 
@@ -2991,6 +3008,12 @@ namespace WhiteSpace.Pages
             if (textBox != null)
             {
                 SaveTextBoxText(textBox);
+                textBox.IsReadOnly = true;
+                textBox.Cursor = Cursors.SizeAll;
+                if (ReferenceEquals(_focusedBoardTextEdit, textBox))
+                {
+                    _focusedBoardTextEdit = null;
+                }
             }
         }
 
@@ -3248,6 +3271,10 @@ namespace WhiteSpace.Pages
             }
 
             var vp = WorldToViewport(worldTopCenter);
+            if (double.IsNaN(vp.X) || double.IsNaN(vp.Y) || double.IsInfinity(vp.X) || double.IsInfinity(vp.Y))
+            {
+                return;
+            }
 
             SelectionToolbarPanel.UpdateLayout();
             double toolbarW = SelectionToolbarPanel.ActualWidth > 1 ? SelectionToolbarPanel.ActualWidth : 160;
@@ -5452,6 +5479,22 @@ namespace WhiteSpace.Pages
             }
 
             var shape = _shapesOnBoard.FirstOrDefault(s => s.Id.ToString() == _resizeTarget.Uid);
+            if (shape == null && _resizeTarget is Polyline selectedPolyline && selectedPolyline.Points.Count > 0)
+            {
+                shape = _shapesOnBoard
+                    .Where(s => s.Type is "line" or "marker")
+                    .Select(s => new { Shape = s, Points = s.DeserializedPoints.Count > 0 ? s.DeserializedPoints : DeserializeShapePointsSafe(s) })
+                    .Where(x => x.Points.Count > 0)
+                    .OrderBy(x =>
+                    {
+                        var a = selectedPolyline.Points[0];
+                        var b = x.Points[0];
+                        var dx = a.X - b.X;
+                        var dy = a.Y - b.Y;
+                        return dx * dx + dy * dy;
+                    })
+                    .FirstOrDefault()?.Shape;
+            }
             if (shape == null)
             {
                 return;
@@ -5467,6 +5510,28 @@ namespace WhiteSpace.Pages
             await _firebaseService.DeleteShapeAsync(_boardId.ToString(), shape.Id.ToString());
             RemoveShapeFromBoardLocal(shape.Id);
             MarkSaved();
+        }
+
+        private static List<Point> DeserializeShapePointsSafe(BoardShape shape)
+        {
+            if (shape.DeserializedPoints.Count > 0)
+            {
+                return shape.DeserializedPoints;
+            }
+
+            if (string.IsNullOrWhiteSpace(shape.Points))
+            {
+                return new List<Point>();
+            }
+
+            try
+            {
+                return JsonConvert.DeserializeObject<List<Point>>(shape.Points) ?? new List<Point>();
+            }
+            catch
+            {
+                return new List<Point>();
+            }
         }
 
         private async void SelectionToolbarDelete_Click(object sender, RoutedEventArgs e)
@@ -6761,6 +6826,14 @@ namespace WhiteSpace.Pages
                 var y = Math.Min(_rectPlacementStartWorld.Y, world.Y);
                 var w = Math.Max(Math.Abs(world.X - _rectPlacementStartWorld.X), 1);
                 var h = Math.Max(Math.Abs(world.Y - _rectPlacementStartWorld.Y), 1);
+                if (_shapeKind is "rect" or "circle")
+                {
+                    var side = Math.Max(w, h);
+                    w = side;
+                    h = side;
+                    x = world.X >= _rectPlacementStartWorld.X ? _rectPlacementStartWorld.X : _rectPlacementStartWorld.X - side;
+                    y = world.Y >= _rectPlacementStartWorld.Y ? _rectPlacementStartWorld.Y : _rectPlacementStartWorld.Y - side;
+                }
                 SetPreviewElementBounds(_previewShapeElement, x, y, w, h);
                 return;
             }
@@ -6796,10 +6869,19 @@ namespace WhiteSpace.Pages
             double y0 = _rectPlacementStartWorld.Y;
             double x1 = endWorld.X;
             double y1 = endWorld.Y;
-            double minX = Math.Min(x0, x1);
-            double minY = Math.Min(y0, y1);
             double w = Math.Max(Math.Abs(x1 - x0), 1);
             double h = Math.Max(Math.Abs(y1 - y0), 1);
+            double minX = Math.Min(x0, x1);
+            double minY = Math.Min(y0, y1);
+
+            if (_shapeKind is "rect" or "circle")
+            {
+                var side = Math.Max(w, h);
+                w = side;
+                h = side;
+                minX = x1 >= x0 ? x0 : x0 - side;
+                minY = y1 >= y0 ? y0 : y0 - side;
+            }
 
             if (w < 8 && h < 8)
             {
@@ -7092,9 +7174,9 @@ namespace WhiteSpace.Pages
                 Height = 88,
                 FontSize = initialFs,
                 Foreground = _currentBrush,
-                IsReadOnly = false,
+                IsReadOnly = true,
                 Focusable = true,
-                Cursor = Cursors.IBeam,
+                Cursor = Cursors.SizeAll,
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -7726,6 +7808,14 @@ namespace WhiteSpace.Pages
                 {
                     _textResizeStartFontSize = tbStart.FontSize > 0 ? tbStart.FontSize : 16;
                 }
+                else if (_resizeTarget is Image)
+                {
+                    _imageResizeStartAspect = _startH > 0.01 ? _startW / _startH : 1;
+                    if (_imageResizeStartAspect <= 0.01)
+                    {
+                        _imageResizeStartAspect = 1;
+                    }
+                }
             }
 
             Viewport.CaptureMouse();
@@ -7815,6 +7905,24 @@ namespace WhiteSpace.Pages
             else
             {
                 var fe = (FrameworkElement)_resizeTarget;
+                if (fe is Image && _imageResizeStartAspect > 0.01)
+                {
+                    var widthScale = _startW > 0.01 ? newW / _startW : 1;
+                    var heightScale = _startH > 0.01 ? newH / _startH : 1;
+                    var scale = Math.Max(0.05, Math.Min(widthScale, heightScale));
+                    newW = Math.Max(minW, _startW * scale);
+                    newH = Math.Max(minH, _startH * scale);
+
+                    if (_resizeDirection.Contains("w"))
+                    {
+                        newX = _startX + (_startW - newW);
+                    }
+
+                    if (_resizeDirection.Contains("n"))
+                    {
+                        newY = _startY + (_startH - newH);
+                    }
+                }
                 fe.Width = newW;
                 fe.Height = newH;
                 Canvas.SetLeft(fe, newX);
@@ -9163,17 +9271,6 @@ namespace WhiteSpace.Pages
         private bool TryGetSelectionBounds(out double left, out double top, out double width, out double height)
         {
             left = top = width = height = 0;
-            if (_resizeBorder != null)
-            {
-                left = Canvas.GetLeft(_resizeBorder);
-                top = Canvas.GetTop(_resizeBorder);
-                width = _resizeBorder.Width;
-                height = _resizeBorder.Height;
-                if (double.IsNaN(left)) left = 0;
-                if (double.IsNaN(top)) top = 0;
-                return true;
-            }
-
             if (_resizeTarget is FrameworkElement fe)
             {
                 if (ConnectorVisualHelper.GetLine(fe) is Polyline line && line.Points.Count > 0)
@@ -9193,6 +9290,17 @@ namespace WhiteSpace.Pages
                 height = fe.ActualHeight > 0 ? fe.ActualHeight : fe.Height;
                 if (width < 1) width = 1;
                 if (height < 1) height = 1;
+                return true;
+            }
+
+            if (_resizeBorder != null)
+            {
+                left = Canvas.GetLeft(_resizeBorder);
+                top = Canvas.GetTop(_resizeBorder);
+                width = _resizeBorder.Width;
+                height = _resizeBorder.Height;
+                if (double.IsNaN(left)) left = 0;
+                if (double.IsNaN(top)) top = 0;
                 return true;
             }
 

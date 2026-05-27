@@ -13,6 +13,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Newtonsoft.Json;
+using WhiteSpace.Models;
 
 namespace WhiteSpace.Rendering;
 
@@ -279,15 +280,69 @@ public static class BoardThumbnailRenderer
                 var h = Math.Max(shape.Height, 12) * scale;
                 var left = shape.X * scale + offsetX - w / 2;
                 var top = shape.Y * scale + offsetY - h / 2;
-                Shape visual = shape.Type == "ellipse" ? new Ellipse() : new Rectangle();
-                visual.Width = w;
-                visual.Height = h;
-                visual.Fill = brush;
-                visual.Stroke = new SolidColorBrush(Color.FromArgb(80, 0, 0, 0));
-                visual.StrokeThickness = 1;
-                Canvas.SetLeft(visual, left);
-                Canvas.SetTop(visual, top);
-                return visual;
+                var stroke = new SolidColorBrush(Color.FromArgb(80, 0, 0, 0));
+                if (shape.Type == "ellipse")
+                {
+                    var ellipse = new Ellipse
+                    {
+                        Width = w,
+                        Height = h,
+                        Fill = brush,
+                        Stroke = stroke,
+                        StrokeThickness = 1
+                    };
+                    Canvas.SetLeft(ellipse, left);
+                    Canvas.SetTop(ellipse, top);
+                    return ellipse;
+                }
+
+                var appearance = RectEllipseAppearance.Parse(shape);
+                if (string.IsNullOrWhiteSpace(appearance.ShapeKind) || appearance.ShapeKind == "rect")
+                {
+                    var rect = new Rectangle
+                    {
+                        Width = w,
+                        Height = h,
+                        Fill = brush,
+                        Stroke = stroke,
+                        StrokeThickness = 1
+                    };
+                    Canvas.SetLeft(rect, left);
+                    Canvas.SetTop(rect, top);
+                    return rect;
+                }
+
+                if (appearance.ShapeKind == "roundRect")
+                {
+                    var radius = Math.Min(w, h) * 0.15;
+                    var rounded = new Rectangle
+                    {
+                        Width = w,
+                        Height = h,
+                        RadiusX = radius,
+                        RadiusY = radius,
+                        Fill = brush,
+                        Stroke = stroke,
+                        StrokeThickness = 1
+                    };
+                    Canvas.SetLeft(rounded, left);
+                    Canvas.SetTop(rounded, top);
+                    return rounded;
+                }
+
+                var path = new System.Windows.Shapes.Path
+                {
+                    Width = w,
+                    Height = h,
+                    Stretch = Stretch.Fill,
+                    Data = BoardShapeOutlineGeometry.Get(appearance.ShapeKind),
+                    Fill = brush,
+                    Stroke = stroke,
+                    StrokeThickness = 1
+                };
+                Canvas.SetLeft(path, left);
+                Canvas.SetTop(path, top);
+                return path;
             }
             case "stickyNote":
             {
