@@ -19,6 +19,21 @@ public static class PendingBoardInvite
         }
     }
 
+    public static bool TryPeek(out string code)
+    {
+        lock (Gate)
+        {
+            if (_code == null)
+            {
+                code = string.Empty;
+                return false;
+            }
+
+            code = _code;
+            return true;
+        }
+    }
+
     public static bool TryTake(out string code)
     {
         lock (Gate)

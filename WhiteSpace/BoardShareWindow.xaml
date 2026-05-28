@@ -29,7 +29,7 @@
                        Foreground="{DynamicResource WsTextSecondaryBrush}"
                        TextWrapping="Wrap"
                        Margin="0,0,0,16"
-                       Text="Отправьте код или ссылку участнику. Один раз выполните регистрацию протокола (скрипт register-protocol.ps1 рядом с exe), чтобы ссылка открывала приложение."/>
+                       Text="Отправьте код или ссылку участнику. Ссылка whitespace:// откроет приложение автоматически после первого запуска (или выполните register-protocol.ps1 рядом с exe)."/>
 
             <TextBlock FontSize="13"
                        FontWeight="SemiBold"

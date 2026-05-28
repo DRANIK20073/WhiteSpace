@@ -44,7 +44,17 @@ namespace WhiteSpace.Pages
             if (success)
             {
                 var isAdmin = await _supabaseService.IsCurrentUserAdminAsync();
-                NavigateAndClear(isAdmin ? new AdminPage() : new UserHomePage());
+                if (isAdmin)
+                {
+                    NavigateAndClear(new AdminPage());
+                }
+                else
+                {
+                    NavigateAndClear(new UserHomePage());
+                    await BoardInviteNavigation.TryNavigateFromPendingAsync(
+                        NavigationService
+                        ?? (Application.Current.MainWindow as MainWindow)?.MainFrame.NavigationService);
+                }
             }
         }
 

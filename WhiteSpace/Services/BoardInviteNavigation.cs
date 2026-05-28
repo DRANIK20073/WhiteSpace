@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Navigation;
 using WhiteSpace.Pages;
 
@@ -6,10 +7,20 @@ namespace WhiteSpace.Services;
 
 public static class BoardInviteNavigation
 {
-    /// <summary>Присоединение по отложенному коду и переход на доску (только с главной при авторизации).</summary>
+    /// <summary>Присоединение по отложенному коду из ссылки и переход на доску (нужна авторизация).</summary>
     public static async Task TryNavigateFromPendingAsync(NavigationService? nav)
     {
-        if (nav == null || nav.Content is not UserHomePage)
+        if (nav == null)
+        {
+            return;
+        }
+
+        if (!PendingBoardInvite.TryPeek(out _))
+        {
+            return;
+        }
+
+        if (SupabaseService.Client?.Auth?.CurrentUser == null)
         {
             return;
         }
@@ -23,12 +34,24 @@ public static class BoardInviteNavigation
         var board = await svc.JoinBoardAsync(code);
         if (board == null)
         {
-            HomeToastService.Show(
+            ShowInviteFailure(
+                nav,
                 "Не удалось подключиться к доске по приглашению. Проверьте код или права доступа.");
             return;
         }
 
         UserHomePage.RememberBoardActivity(board.Id);
         nav.Navigate(new BoardPage(board.Id));
+    }
+
+    private static void ShowInviteFailure(NavigationService nav, string message)
+    {
+        if (nav.Content is UserHomePage)
+        {
+            HomeToastService.Show(message);
+            return;
+        }
+
+        AppDialogService.ShowWarning(message, "Приглашение на доску");
     }
 }

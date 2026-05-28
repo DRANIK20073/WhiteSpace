@@ -705,7 +705,16 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            var board = await _service.JoinBoardAsync(accessCode.Trim().ToUpperInvariant());
+            var parsedCode = BoardInviteLinkParser.TryGetAccessCode(accessCode);
+            if (string.IsNullOrEmpty(parsedCode))
+            {
+                AppDialogService.ShowWarning(
+                    "Не удалось распознать код или ссылку-приглашение.",
+                    "Подключение по коду");
+                return;
+            }
+
+            var board = await _service.JoinBoardAsync(parsedCode);
             if (board == null)
             {
                 AppDialogService.ShowError("Не удалось присоединиться к доске. Проверьте код доступа.", "Подключение по коду");

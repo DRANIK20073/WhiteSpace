@@ -62,6 +62,7 @@ namespace WhiteSpace
             WhiteSpaceThemeManager.Apply(AppPreferences.Load());
 
             await SupabaseService.InitAsync();
+            InviteProtocolRegistration.EnsureRegistered();
 
             var session = SessionStorage.LoadSession();
 
