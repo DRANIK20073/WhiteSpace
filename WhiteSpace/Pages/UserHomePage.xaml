@@ -127,6 +127,17 @@
             </Setter>
         </Style>
 
+        <Style x:Key="HeaderMdl2IconStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource WsTextPrimaryBrush}"/>
+        </Style>
+
+        <Style x:Key="HeaderMdl2IconOnPrimaryStyle" TargetType="TextBlock" BasedOn="{StaticResource HeaderMdl2IconStyle}">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+        </Style>
+
         <Style x:Key="TopButtonStyle" TargetType="Button">
             <Setter Property="Height" Value="44"/>
             <Setter Property="Padding" Value="18,0"/>
@@ -247,6 +258,9 @@
                                               Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
+                            <Trigger Property="Tag" Value="compact">
+                                <Setter TargetName="Root" Property="CornerRadius" Value="10"/>
+                            </Trigger>
                             <EventTrigger RoutedEvent="MouseEnter">
                                 <BeginStoryboard>
                                     <Storyboard>
@@ -323,6 +337,14 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="compact">
+                    <Setter Property="Width" Value="44"/>
+                    <Setter Property="Height" Value="44"/>
+                    <Setter Property="MinWidth" Value="44"/>
+                    <Setter Property="Padding" Value="0"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <Style x:Key="ViewModeButtonStyle" TargetType="Button" BasedOn="{StaticResource TopButtonStyle}">
@@ -443,16 +465,22 @@
         </Style>
     </Page.Resources>
 
-    <Grid x:Name="RootPageGrid">
+    <Grid x:Name="RootPageGrid" SizeChanged="RootPageGrid_SizeChanged">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="248"/>
+            <ColumnDefinition x:Name="SidebarColumn" Width="248"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0"
+        <Border x:Name="SidebarBorder"
+                Grid.Column="0"
+                Panel.ZIndex="2"
                 Background="{DynamicResource WsSidebarBgBrush}"
                 BorderBrush="{DynamicResource WsSidebarBorderBrush}"
-                BorderThickness="0,0,1,0">
+                BorderThickness="0,0,1,0"
+                RenderTransformOrigin="0,0.5">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="SidebarSlideTransform" X="0"/>
+            </Border.RenderTransform>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -473,7 +501,8 @@
                                        HorizontalAlignment="Center"
                                        VerticalAlignment="Center"/>
                         </Border>
-                        <TextBlock Text="WhiteSpace"
+                        <TextBlock x:Name="SidebarLogoText"
+                                   Text="WhiteSpace"
                                    Margin="12,4,0,0"
                                    Foreground="White"
                                    FontWeight="Bold"
@@ -485,7 +514,7 @@
                             Click="MyBoardsButton_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="▦" FontSize="16"/>
-                            <TextBlock Text="Мои доски" Margin="12,0,0,0"/>
+                            <TextBlock x:Name="MyBoardsNavLabel" Text="Мои доски" Margin="12,0,0,0"/>
                         </StackPanel>
                     </Button>
 
@@ -494,7 +523,7 @@
                             Click="SharedBoardsButton_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="◌" FontSize="16"/>
-                            <TextBlock Text="Общие доски" Margin="12,0,0,0"/>
+                            <TextBlock x:Name="SharedBoardsNavLabel" Text="Общие доски" Margin="12,0,0,0"/>
                         </StackPanel>
                     </Button>
 
@@ -503,7 +532,7 @@
                             Click="RecentBoardsButton_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="◔" FontSize="16"/>
-                            <TextBlock Text="Недавние" Margin="12,0,0,0"/>
+                            <TextBlock x:Name="RecentBoardsNavLabel" Text="Недавние" Margin="12,0,0,0"/>
                         </StackPanel>
                     </Button>
 
@@ -512,7 +541,7 @@
                             Click="FavoriteBoardsButton_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="★" FontSize="16"/>
-                            <TextBlock Text="Избранные" Margin="12,0,0,0"/>
+                            <TextBlock x:Name="FavoriteBoardsNavLabel" Text="Избранные" Margin="12,0,0,0"/>
                         </StackPanel>
                     </Button>
 
@@ -550,7 +579,10 @@
                                                VerticalAlignment="Center"/>
                                 </Border>
 
-                                <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                <StackPanel x:Name="SidebarProfileTextPanel"
+                                            Grid.Column="1"
+                                            Margin="12,0,0,0"
+                                            VerticalAlignment="Center">
                                     <TextBlock x:Name="SidebarUserNameTextBlock"
                                                Text="Пользователь"
                                                Foreground="White"
@@ -587,11 +619,46 @@
                     Padding="24,18">
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel>
+                    <Button x:Name="SidebarToggleButton"
+                            Grid.Column="0"
+                            Width="44"
+                            Height="44"
+                            Margin="0,0,12,0"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed"
+                            Background="{DynamicResource WsSurfaceMutedBrush}"
+                            BorderBrush="{DynamicResource WsBorderBrush}"
+                            BorderThickness="1"
+                            Cursor="Hand"
+                            ToolTip="Меню"
+                            Click="SidebarToggleButton_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        CornerRadius="12">
+                                    <TextBlock Text="☰"
+                                               FontSize="18"
+                                               Foreground="{DynamicResource WsTextPrimaryBrush}"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource WsSurfaceBrush}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+
+                    <StackPanel Grid.Column="1">
                         <TextBlock x:Name="GreetingTextBlock"
                                    Text="Здравствуйте!"
                                    FontSize="28"
@@ -606,15 +673,24 @@
                                    Visibility="Collapsed"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel x:Name="HeaderActionsPanel"
+                                Grid.Column="2"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center">
                         <Grid Margin="0,0,10,0" VerticalAlignment="Center">
                             <Button x:Name="NotificationCenterButton"
                                     Style="{StaticResource TopButtonStyle}"
                                     Padding="16,0"
                                     Click="NotificationCenter_Click">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="🔔" FontSize="16" VerticalAlignment="Center"/>
-                                    <TextBlock Text="Уведомления" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="NotificationsHeaderIcon"
+                                               Text="🔔"
+                                               FontSize="16"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="NotificationsHeaderLabel"
+                                               Text="Уведомления"
+                                               Margin="8,0,0,0"
+                                               VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
                             <Border x:Name="NotificationUnreadBadge"
@@ -639,29 +715,51 @@
                         <Button Style="{StaticResource HelpRoundButtonStyle}"
                                 Margin="0,0,10,0"
                                 Click="Help_Click"/>
-                        <Button Style="{StaticResource PrimaryTopButtonStyle}"
-                                Click="CreateBoard_Click">
+                        <Button x:Name="CreateBoardHeaderButton"
+                                Style="{StaticResource PrimaryTopButtonStyle}"
+                                Click="CreateBoard_Click"
+                                ToolTip="Создать доску">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="+" FontSize="18" Margin="0,0,8,0"/>
-                                <TextBlock Text="Создать доску"/>
+                                <TextBlock x:Name="CreateBoardHeaderIcon"
+                                          Text="&#xE710;"
+                                          Style="{StaticResource HeaderMdl2IconOnPrimaryStyle}"/>
+                                <TextBlock x:Name="CreateBoardHeaderLabel"
+                                          Text="Создать доску"
+                                          Margin="8,0,0,0"
+                                          Foreground="#FFFFFF"
+                                          VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
 
-                        <Button Style="{StaticResource TopButtonStyle}"
+                        <Button x:Name="JoinByCodeHeaderButton"
+                                Style="{StaticResource TopButtonStyle}"
                                 Margin="8,0,0,0"
-                                Click="JoinByCode_Click">
+                                Click="JoinByCode_Click"
+                                ToolTip="По коду">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="⟷" FontSize="16" Margin="0,0,8,0"/>
-                                <TextBlock Text="По коду"/>
+                                <TextBlock x:Name="JoinByCodeHeaderIcon"
+                                          Text="&#xE8B7;"
+                                          Style="{StaticResource HeaderMdl2IconStyle}"/>
+                                <TextBlock x:Name="JoinByCodeHeaderLabel"
+                                          Text="По коду"
+                                          Margin="8,0,0,0"
+                                          VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
 
-                        <Button Style="{StaticResource TopButtonStyle}"
+                        <Button x:Name="LogoutHeaderButton"
+                                Style="{StaticResource TopButtonStyle}"
                                 Margin="8,0,0,0"
-                                Click="Logout_Click">
+                                Click="Logout_Click"
+                                ToolTip="Выход">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="⇥" FontSize="16" Margin="0,0,8,0"/>
-                                <TextBlock Text="Выход"/>
+                                <TextBlock x:Name="LogoutHeaderIcon"
+                                          Text="&#xE7E8;"
+                                          Style="{StaticResource HeaderMdl2IconStyle}"/>
+                                <TextBlock x:Name="LogoutHeaderLabel"
+                                          Text="Выход"
+                                          Margin="8,0,0,0"
+                                          VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                     </StackPanel>
@@ -673,14 +771,18 @@
                     BorderBrush="{DynamicResource WsBorderBrush}"
                     BorderThickness="0,0,0,1"
                     Padding="24,14">
-                <Grid>
+                <Grid x:Name="FilterBarGrid">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <Grid Height="42">
+                    <Grid Grid.Row="0" Grid.Column="0" Height="42">
                         <Border Background="{DynamicResource WsSurfaceMutedBrush}"
                                 BorderBrush="{DynamicResource WsBorderBrush}"
                                 BorderThickness="1"
@@ -707,6 +809,7 @@
                     </Grid>
 
                     <ComboBox x:Name="SortComboBox"
+                              Grid.Row="0"
                               Grid.Column="1"
                               Width="180"
                               Height="42"
@@ -719,7 +822,10 @@
                         <ComboBoxItem Content="Название Я-А"/>
                     </ComboBox>
 
-                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <StackPanel x:Name="ViewModePanel"
+                                Grid.Row="0"
+                                Grid.Column="2"
+                                Orientation="Horizontal">
                         <Button x:Name="LargeViewButton"
                                 Style="{StaticResource ViewModeButtonStyle}"
                                 Click="LargeViewButton_Click"
@@ -904,7 +1010,7 @@
                                             </ContextMenu>
                                         </Border.ContextMenu>
                                         <Border.RenderTransform>
-                                            <TranslateTransform x:Name="CardTranslateTransform" Y="12"/>
+                                            <TranslateTransform Y="12"/>
                                         </Border.RenderTransform>
                                         <Border.Triggers>
                                             <EventTrigger RoutedEvent="FrameworkElement.Loaded">
@@ -1264,5 +1370,12 @@
                 </Grid>
             </Border>
         </Popup>
+
+        <Border x:Name="SidebarBackdrop"
+                Grid.ColumnSpan="2"
+                Panel.ZIndex="1"
+                Background="#660F172A"
+                Visibility="Collapsed"
+                MouseLeftButtonDown="SidebarBackdrop_MouseLeftButtonDown"/>
     </Grid>
 </Page>

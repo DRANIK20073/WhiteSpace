@@ -50,7 +50,7 @@ namespace WhiteSpace.Pages
                 }
                 else
                 {
-                    NavigateAndClear(new UserHomePage());
+                    NavigateAndClear(AppNavigation.GetOrCreateHomePage());
                     await BoardInviteNavigation.TryNavigateFromPendingAsync(
                         NavigationService
                         ?? (Application.Current.MainWindow as MainWindow)?.MainFrame.NavigationService);

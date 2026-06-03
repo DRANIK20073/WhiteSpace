@@ -4,7 +4,7 @@
       Title="Настройки пользователя"
       Background="{DynamicResource WsPageBgBrush}"
       Loaded="Page_Loaded">
-    <Grid Margin="24">
+    <Grid x:Name="SettingsRootGrid" Margin="24" SizeChanged="SettingsRootGrid_SizeChanged">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>

@@ -62,6 +62,11 @@ public partial class AdminPage : Page
         SupabaseService.ClearLocalAdminSession();
         SupabaseService.Client.Auth.SignOut();
         NavigationService?.Navigate(new LoginPage());
+        AppNavigation.ResetCachedPages();
+        if (NavigationService != null)
+        {
+            AppNavigation.ClearBackStack(NavigationService);
+        }
     }
 
     private void Help_Click(object sender, RoutedEventArgs e) =>

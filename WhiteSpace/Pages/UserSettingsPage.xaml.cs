@@ -1,8 +1,7 @@
-using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media.Animation;
 using WhiteSpace;
+using WhiteSpace.Helpers;
 using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
@@ -42,11 +41,7 @@ public partial class UserSettingsPage : Page
         SyncThemeComboFromPreferences();
         _isThemeInitializing = false;
 
-        var fadeIn = _preferences.EnableAnimations;
-        if (fadeIn)
-        {
-            Opacity = 0;
-        }
+        UiAnimationHelper.ApplyFadeIn(SettingsRootGrid, _preferences.EnableAnimations, force: true);
 
         var profile = await _service.GetMyProfileAsync();
         UsernameBox.Text = profile?.Username ?? string.Empty;
@@ -58,22 +53,13 @@ public partial class UserSettingsPage : Page
         _isThemeInitializing = true;
         SyncThemeComboFromPreferences();
         _isThemeInitializing = false;
-
-        if (fadeIn)
-        {
-            var anim = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320))
-            {
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-            };
-            BeginAnimation(OpacityProperty, anim);
-        }
     }
 
     private void Back_Click(object sender, RoutedEventArgs e)
     {
         // Иначе при размонтировании страницы ComboBox может вызвать SelectionChanged и записать в файл светлую тему.
         _isThemeInitializing = true;
-        NavigationService?.Navigate(new UserHomePage());
+        AppNavigation.NavigateHome(NavigationService);
     }
 
     private void Help_Click(object sender, RoutedEventArgs e) =>
@@ -180,5 +166,11 @@ public partial class UserSettingsPage : Page
     {
         UserHomePage.ClearRecentBoards();
         AppDialogService.ShowSuccess("История недавних досок очищена.", "Настройки");
+    }
+
+    private void SettingsRootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var width = e.NewSize.Width;
+        SettingsRootGrid.Margin = new Thickness(width < AdaptiveLayout.TierNarrow ? 12 : 24);
     }
 }

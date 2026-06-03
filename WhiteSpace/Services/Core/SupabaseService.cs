@@ -417,7 +417,8 @@ public class SupabaseService
                                 AppDialogService.ShowSuccess($"Вход через Google выполнен успешно! Добро пожаловать, {_client.Auth.CurrentUser.Email}", "Вход через Google");
                             }
 
-                            currentPage.NavigationService.Navigate(isAdmin ? new AdminPage() : new UserHomePage());
+                            currentPage.NavigationService.Navigate(
+                                isAdmin ? new AdminPage() : AppNavigation.GetOrCreateHomePage());
                         });
 
                         return true;
@@ -804,7 +805,7 @@ public class SupabaseService
                 BoardChatNotificationHub.Stop();
                 if (Application.Current.MainWindow is WhiteSpace.MainWindow window)
                 {
-                    window.MainFrame.Navigate(new LoginPage());
+                    AppNavigation.NavigateToLogin(window.MainFrame.NavigationService);
                 }
             });
 
@@ -1864,10 +1865,7 @@ public class SupabaseService
     {
         Application.Current.Dispatcher.Invoke(() =>
         {
-            if (Application.Current.MainWindow is MainWindow mainWindow)
-            {
-                mainWindow.MainFrame.Navigate(new LoginPage());
-            }
+            AppNavigation.NavigateToLogin(AppNavigation.GetMainNavigationService());
         });
     }
 

@@ -16,6 +16,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using System.Windows.Navigation;
 using WhiteSpace;
+using WhiteSpace.Helpers;
 using WhiteSpace.Rendering;
 using WhiteSpace.Services;
 
@@ -41,6 +42,8 @@ namespace WhiteSpace.Pages
         private List<HomeBoardCard> _visibleBoards = new();
         private DashboardSection _currentSection = DashboardSection.MyBoards;
         private bool _isCompactView;
+        private AdaptiveWidthTier _layoutTier = AdaptiveWidthTier.Wide;
+        private bool _sidebarOverlayOpen;
         private string _userName = "Пользователь";
         private readonly DispatcherTimer _searchDebounceTimer;
         private readonly DispatcherTimer _toastAutoHideTimer;
@@ -60,12 +63,21 @@ namespace WhiteSpace.Pages
             }
         }
 
-        public double BoardCardWidth => _isCompactView ? 250 : 360;
+        public double BoardCardWidth => _isCompactView
+            ? (_layoutTier == AdaptiveWidthTier.Compact ? 220 : 250)
+            : (_layoutTier <= AdaptiveWidthTier.Narrow ? 300 : 360);
 
-        public double BoardCardHeight => _isCompactView ? 228 : 262;
+        public double BoardCardHeight => _isCompactView
+            ? (_layoutTier == AdaptiveWidthTier.Compact ? 210 : 228)
+            : (_layoutTier <= AdaptiveWidthTier.Narrow ? 248 : 262);
 
         private bool _boardsLoadedOnce;
-        private bool _homeNavHooked;
+        private bool _initialLoadComplete;
+        private bool _initialLoadInProgress;
+        private bool _refreshInProgress;
+        private bool _refreshScheduled;
+        private bool _playCardEntrance;
+        private readonly DispatcherTimer _adaptiveLayoutTimer;
 
         public UserHomePage()
         {
@@ -86,6 +98,21 @@ namespace WhiteSpace.Pages
 
             HomeToastService.ToastRequested += OnHomeToastRequested;
             BoardChatNotificationHub.UnreadCountChanged += OnNotificationUnreadCountChanged;
+
+            _adaptiveLayoutTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(80)
+            };
+            _adaptiveLayoutTimer.Tick += AdaptiveLayoutTimer_Tick;
+        }
+
+        private void AdaptiveLayoutTimer_Tick(object? sender, EventArgs e)
+        {
+            _adaptiveLayoutTimer.Stop();
+            if (RootPageGrid != null)
+            {
+                ApplyAdaptiveLayout(RootPageGrid.ActualWidth);
+            }
         }
 
         private void UserHomePage_Unloaded(object sender, RoutedEventArgs e)
@@ -99,68 +126,111 @@ namespace WhiteSpace.Pages
             }
 
             _toastAutoHideTimer.Stop();
+            _adaptiveLayoutTimer.Stop();
+        }
 
-            if (NavigationService != null && _homeNavHooked)
+        public void RequestRefreshAfterNavigation()
+        {
+            if (!_initialLoadComplete || _refreshScheduled)
             {
-                NavigationService.LoadCompleted -= HomeNavigation_LoadCompleted;
-                _homeNavHooked = false;
+                return;
+            }
+
+            _refreshScheduled = true;
+            Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                _refreshScheduled = false;
+                await RefreshAfterNavigationAsync();
+            }), DispatcherPriority.Loaded);
+        }
+
+        public async Task RefreshAfterNavigationAsync()
+        {
+            if (!_initialLoadComplete || _initialLoadInProgress || _refreshInProgress)
+            {
+                return;
+            }
+
+            _refreshInProgress = true;
+            try
+            {
+                LoadPreferences();
+                UiAnimationHelper.ApplyReturnFadeIn(RootPageGrid, _preferences.EnableAnimations);
+
+                ApplySidebarSelection();
+                ApplyViewModeSelection();
+                await LoadBoardsAsync(animateCards: false);
+                UpdateNotificationBadge();
+                UpdateNotificationEmptyHint();
+                ApplyAdaptiveLayout(RootPageGrid.ActualWidth);
+            }
+            finally
+            {
+                _refreshInProgress = false;
             }
         }
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
-            if (await _service.EnforceBanLogoutIfNeededAsync())
+            if (_initialLoadComplete)
+            {
+                ApplyAdaptiveLayout(RootPageGrid.ActualWidth);
+                return;
+            }
+
+            if (_initialLoadInProgress)
             {
                 return;
             }
 
-            AccountBanGuard.Start();
-
-            LoadPreferences();
-            WhiteSpaceThemeManager.Apply(_preferences);
-            UiAnimationHelper.ApplyFadeIn(RootPageGrid, _preferences.EnableAnimations);
-            ApplySidebarSelection();
-            ApplyViewModeSelection();
-            await LoadDashboardAsync();
-            _boardsLoadedOnce = true;
-
-            if (BoardChatNotificationHub.Items is INotifyCollectionChanged notify)
+            _initialLoadInProgress = true;
+            try
             {
-                notify.CollectionChanged -= NotificationItems_CollectionChanged;
-                notify.CollectionChanged += NotificationItems_CollectionChanged;
-            }
+                if (await _service.EnforceBanLogoutIfNeededAsync())
+                {
+                    return;
+                }
 
-            if (NotificationListBox != null)
+                AccountBanGuard.Start();
+
+                LoadPreferences();
+                WhiteSpaceThemeManager.Apply(_preferences);
+                _playCardEntrance = _preferences.EnableAnimations;
+                UiAnimationHelper.ApplyFadeIn(RootPageGrid, _preferences.EnableAnimations, force: true);
+                ApplySidebarSelection();
+                ApplyViewModeSelection();
+                await LoadDashboardAsync();
+                _boardsLoadedOnce = true;
+                _initialLoadComplete = true;
+
+                if (BoardChatNotificationHub.Items is INotifyCollectionChanged notify)
+                {
+                    notify.CollectionChanged -= NotificationItems_CollectionChanged;
+                    notify.CollectionChanged += NotificationItems_CollectionChanged;
+                }
+
+                if (NotificationListBox != null)
+                {
+                    NotificationListBox.ItemsSource = BoardChatNotificationHub.Items;
+                }
+
+                UpdateNotificationBadge();
+                UpdateNotificationEmptyHint();
+
+                await BoardInviteNavigation.TryNavigateFromPendingAsync(NavigationService);
+
+                ApplyAdaptiveLayout(RootPageGrid.ActualWidth);
+            }
+            finally
             {
-                NotificationListBox.ItemsSource = BoardChatNotificationHub.Items;
+                _initialLoadInProgress = false;
             }
-
-            UpdateNotificationBadge();
-            UpdateNotificationEmptyHint();
-
-            await BoardInviteNavigation.TryNavigateFromPendingAsync(NavigationService);
-
-            if (NavigationService != null && !_homeNavHooked)
-            {
-                NavigationService.LoadCompleted += HomeNavigation_LoadCompleted;
-                _homeNavHooked = true;
-            }
-        }
-
-        private async void HomeNavigation_LoadCompleted(object sender, NavigationEventArgs e)
-        {
-            if (!_boardsLoadedOnce || NavigationService?.Content != this)
-            {
-                return;
-            }
-
-            await LoadBoardsAsync();
         }
 
         private async Task LoadDashboardAsync()
         {
             await LoadUserProfileAsync();
-            await LoadBoardsAsync();
+            await LoadBoardsAsync(animateCards: _playCardEntrance);
         }
 
         private async Task LoadUserProfileAsync()
@@ -185,7 +255,7 @@ namespace WhiteSpace.Pages
             }
         }
 
-        private async Task LoadBoardsAsync()
+        private async Task LoadBoardsAsync(bool animateCards = false)
         {
             try
             {
@@ -243,7 +313,7 @@ namespace WhiteSpace.Pages
 
                 _allBoards = cards;
                 RefreshVisibleBoards();
-                ApplyAnimationPreference();
+                FinalizeBoardCardsPresentation(animateCards);
                 _ = PopulateBoardThumbnailsAsync(cards);
                 await BoardChatNotificationHub.SyncSubscriptionsAsync(_service);
             }
@@ -635,23 +705,16 @@ namespace WhiteSpace.Pages
         {
             if (_preferences.EnableAnimations && RootPageGrid != null)
             {
-                RootPageGrid.BeginAnimation(UIElement.OpacityProperty, null);
-                var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(240))
-                {
-                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
-                };
-                fade.Completed += (_, _) => OpenSettings();
-                RootPageGrid.BeginAnimation(UIElement.OpacityProperty, fade);
+                UiAnimationHelper.ApplyFadeOut(RootPageGrid, true, OpenSettings);
+                return;
             }
-            else
-            {
-                OpenSettings();
-            }
+
+            OpenSettings();
         }
 
         private void OpenSettings()
         {
-            NavigationService?.Navigate(new UserSettingsPage());
+            AppNavigation.NavigateTo(NavigationService, new UserSettingsPage(), clearBackStack: false);
         }
 
         private async void CreateBoard_Click(object sender, RoutedEventArgs e)
@@ -682,7 +745,7 @@ namespace WhiteSpace.Pages
             }
 
             RememberBoard(newBoard.Id);
-            NavigationService?.Navigate(new BoardPage(newBoard.Id));
+            AppNavigation.NavigateToBoard(NavigationService, newBoard.Id);
         }
 
         private async void JoinByCode_Click(object sender, RoutedEventArgs e)
@@ -726,7 +789,7 @@ namespace WhiteSpace.Pages
 
             if (AppDialogService.ShowConfirmation($"Вы подключились к доске \"{board.Title}\". Открыть её сейчас?", "Подключение по коду"))
             {
-                NavigationService?.Navigate(new BoardPage(board.Id));
+                AppNavigation.NavigateToBoard(NavigationService, board.Id);
             }
         }
 
@@ -738,7 +801,7 @@ namespace WhiteSpace.Pages
             }
 
             RememberBoard(boardId);
-            NavigationService?.Navigate(new BoardPage(boardId));
+            AppNavigation.NavigateToBoard(NavigationService, boardId);
         }
 
         private void OpenBoardCard_Click(object sender, MouseButtonEventArgs e)
@@ -791,7 +854,7 @@ namespace WhiteSpace.Pages
         private void OpenBoard(Guid boardId)
         {
             RememberBoard(boardId);
-            NavigationService?.Navigate(new BoardPage(boardId));
+            AppNavigation.NavigateToBoard(NavigationService, boardId);
         }
 
         private void Logout_Click(object sender, RoutedEventArgs e)
@@ -806,7 +869,7 @@ namespace WhiteSpace.Pages
             SessionStorage.ClearSession();
             SupabaseService.ClearLocalAdminSession();
             SupabaseService.Client.Auth.SignOut();
-            NavigationService?.Navigate(new LoginPage());
+            AppNavigation.NavigateToLogin(NavigationService);
         }
 
         private void Help_Click(object sender, RoutedEventArgs e) =>
@@ -849,6 +912,45 @@ namespace WhiteSpace.Pages
             }
         }
 
+        private void FinalizeBoardCardsPresentation(bool animateCards)
+        {
+            if (animateCards && _preferences.EnableAnimations)
+            {
+                _playCardEntrance = false;
+                return;
+            }
+
+            _playCardEntrance = false;
+            SnapBoardCardsVisible();
+        }
+
+        private void SnapBoardCardsVisible()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                foreach (var border in FindBoardCardBorders())
+                {
+                    border.BeginAnimation(UIElement.OpacityProperty, null);
+                    border.Opacity = 1;
+                    if (border.RenderTransform is TranslateTransform transform)
+                    {
+                        transform.Y = 0;
+                    }
+                }
+            }), DispatcherPriority.Loaded);
+        }
+
+        private IEnumerable<Border> FindBoardCardBorders()
+        {
+            foreach (var border in FindVisualChildren<Border>(BoardsItemsControl))
+            {
+                if (border.Tag is Guid)
+                {
+                    yield return border;
+                }
+            }
+        }
+
         private void ApplyAnimationPreference()
         {
             if (_preferences.EnableAnimations)
@@ -856,23 +958,7 @@ namespace WhiteSpace.Pages
                 return;
             }
 
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                foreach (var border in FindVisualChildren<Border>(BoardsItemsControl))
-                {
-                    border.Opacity = 1;
-                    if (border.RenderTransform is TranslateTransform transform)
-                    {
-                        transform.Y = 0;
-                    }
-                    else if (border.RenderTransform is TransformGroup transformGroup &&
-                             transformGroup.Children.Count > 1 &&
-                             transformGroup.Children[1] is TranslateTransform translateTransform)
-                    {
-                        translateTransform.Y = 0;
-                    }
-                }
-            }), DispatcherPriority.Loaded);
+            SnapBoardCardsVisible();
         }
 
         private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
@@ -1049,7 +1135,7 @@ namespace WhiteSpace.Pages
             NotificationCenterPopup.IsOpen = false;
             var boardId = item.BoardId;
             NotificationListBox.SelectedItem = null;
-            NavigationService?.Navigate(new BoardPage(boardId));
+            AppNavigation.NavigateToBoard(NavigationService, boardId);
         }
 
         private void NotificationClearAll_Click(object sender, RoutedEventArgs e)
@@ -1057,6 +1143,235 @@ namespace WhiteSpace.Pages
             BoardChatNotificationHub.ClearAll();
             UpdateNotificationBadge();
             UpdateNotificationEmptyHint();
+        }
+
+        private void RootPageGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            _adaptiveLayoutTimer.Stop();
+            _adaptiveLayoutTimer.Start();
+        }
+
+        private void SidebarToggleButton_Click(object sender, RoutedEventArgs e) =>
+            SetSidebarOverlayOpen(!_sidebarOverlayOpen);
+
+        private void SidebarBackdrop_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+            SetSidebarOverlayOpen(false);
+
+        private void ApplyAdaptiveLayout(double width)
+        {
+            if (width <= 0 || RootPageGrid == null)
+            {
+                return;
+            }
+
+            var tier = AdaptiveLayout.GetTier(width);
+            var tierChanged = tier != _layoutTier;
+            _layoutTier = tier;
+
+            switch (tier)
+            {
+                case AdaptiveWidthTier.Wide:
+                    _sidebarOverlayOpen = false;
+                    ConfigureSidebarDockedLayout(AdaptiveLayout.SidebarFullWidth);
+                    SetSidebarNavLabelsVisible(true);
+                    SidebarLogoText.Visibility = Visibility.Visible;
+                    SidebarProfileTextPanel.Visibility = Visibility.Visible;
+                    SidebarToggleButton.Visibility = Visibility.Collapsed;
+                    SetSidebarButtonsAlignment(false);
+                    break;
+
+                case AdaptiveWidthTier.Medium:
+                    _sidebarOverlayOpen = false;
+                    ConfigureSidebarDockedLayout(AdaptiveLayout.SidebarIconWidth);
+                    SetSidebarNavLabelsVisible(false);
+                    SidebarLogoText.Visibility = Visibility.Collapsed;
+                    SidebarProfileTextPanel.Visibility = Visibility.Collapsed;
+                    SidebarToggleButton.Visibility = Visibility.Collapsed;
+                    SetSidebarButtonsAlignment(true);
+                    break;
+
+                default:
+                    ConfigureSidebarOverlayLayout();
+                    SidebarToggleButton.Visibility = Visibility.Visible;
+                    SetSidebarNavLabelsVisible(true);
+                    SidebarLogoText.Visibility = Visibility.Visible;
+                    SidebarProfileTextPanel.Visibility = Visibility.Visible;
+                    SetSidebarButtonsAlignment(false);
+                    if (!_sidebarOverlayOpen)
+                    {
+                        SidebarSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+                        SidebarSlideTransform.X = -AdaptiveLayout.SidebarFullWidth;
+                        SidebarBackdrop.Visibility = Visibility.Collapsed;
+                        SidebarBackdrop.Opacity = 1;
+                    }
+
+                    break;
+            }
+
+            ApplyFilterBarLayout(tier == AdaptiveWidthTier.Compact);
+            ApplyHeaderLabelsVisibility(tier);
+
+            if (!tierChanged)
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(BoardCardWidth));
+            OnPropertyChanged(nameof(BoardCardHeight));
+            if (_boardsLoadedOnce)
+            {
+                RefreshVisibleBoards();
+            }
+        }
+
+        private void ConfigureSidebarDockedLayout(double columnWidth)
+        {
+            SidebarSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+            SidebarSlideTransform.X = 0;
+            Grid.SetColumn(SidebarBorder, 0);
+            Grid.SetColumnSpan(SidebarBorder, 1);
+            SidebarBorder.ClearValue(FrameworkElement.WidthProperty);
+            SidebarBorder.HorizontalAlignment = HorizontalAlignment.Stretch;
+            SidebarBorder.VerticalAlignment = VerticalAlignment.Stretch;
+            SidebarColumn.Width = new GridLength(columnWidth);
+            SidebarBackdrop.Visibility = Visibility.Collapsed;
+            SidebarBackdrop.BeginAnimation(UIElement.OpacityProperty, null);
+            SidebarBackdrop.Opacity = 1;
+        }
+
+        private void ConfigureSidebarOverlayLayout()
+        {
+            SidebarColumn.Width = new GridLength(0);
+            Grid.SetColumn(SidebarBorder, 0);
+            Grid.SetColumnSpan(SidebarBorder, 2);
+            SidebarBorder.Width = AdaptiveLayout.SidebarFullWidth;
+            SidebarBorder.HorizontalAlignment = HorizontalAlignment.Left;
+            SidebarBorder.VerticalAlignment = VerticalAlignment.Stretch;
+        }
+
+        private void SetSidebarOverlayOpen(bool open)
+        {
+            if (_layoutTier < AdaptiveWidthTier.Narrow)
+            {
+                _sidebarOverlayOpen = false;
+                return;
+            }
+
+            if (_sidebarOverlayOpen == open)
+            {
+                return;
+            }
+
+            _sidebarOverlayOpen = open;
+            ConfigureSidebarOverlayLayout();
+
+            var width = AdaptiveLayout.SidebarFullWidth;
+            var anim = _preferences.EnableAnimations;
+
+            if (open)
+            {
+                SidebarBackdrop.Visibility = Visibility.Visible;
+                UiAnimationHelper.ApplyFadeVisibilityToggle(SidebarBackdrop, true, anim);
+                UiAnimationHelper.AnimateHorizontalSlide(
+                    SidebarSlideTransform,
+                    slideIn: true,
+                    width,
+                    fromLeft: true,
+                    anim);
+                return;
+            }
+
+            UiAnimationHelper.ApplyFadeVisibilityToggle(SidebarBackdrop, false, anim);
+            UiAnimationHelper.AnimateHorizontalSlide(
+                SidebarSlideTransform,
+                slideIn: false,
+                width,
+                fromLeft: true,
+                anim);
+        }
+
+        private void SetSidebarNavLabelsVisible(bool visible)
+        {
+            var v = visible ? Visibility.Visible : Visibility.Collapsed;
+            MyBoardsNavLabel.Visibility = v;
+            SharedBoardsNavLabel.Visibility = v;
+            RecentBoardsNavLabel.Visibility = v;
+            FavoriteBoardsNavLabel.Visibility = v;
+        }
+
+        private void SetSidebarButtonsAlignment(bool iconOnly)
+        {
+            var alignment = iconOnly ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+            MyBoardsButton.HorizontalContentAlignment = alignment;
+            SharedBoardsButton.HorizontalContentAlignment = alignment;
+            RecentBoardsButton.HorizontalContentAlignment = alignment;
+            FavoriteBoardsButton.HorizontalContentAlignment = alignment;
+            ProfileButton.HorizontalContentAlignment = alignment;
+        }
+
+        private void ApplyHeaderLabelsVisibility(AdaptiveWidthTier tier)
+        {
+            var showLabel = tier < AdaptiveWidthTier.Medium;
+
+            AdaptiveLayout.SetIconLabelPair(showLabel, NotificationsHeaderLabel, NotificationsHeaderIcon);
+            AdaptiveLayout.SetIconLabelPair(showLabel, CreateBoardHeaderLabel, CreateBoardHeaderIcon);
+            AdaptiveLayout.SetIconLabelPair(showLabel, JoinByCodeHeaderLabel, JoinByCodeHeaderIcon);
+            AdaptiveLayout.SetIconLabelPair(showLabel, LogoutHeaderLabel, LogoutHeaderIcon);
+
+            var compact = !showLabel;
+            AdaptiveLayout.SetCompactButtonPadding(NotificationCenterButton, compact);
+            AdaptiveLayout.SetCompactButtonPadding(JoinByCodeHeaderButton, compact);
+            AdaptiveLayout.SetCompactButtonPadding(LogoutHeaderButton, compact);
+
+            CreateBoardHeaderButton.Tag = compact ? "compact" : null;
+            if (compact)
+            {
+                AdaptiveLayout.SetCompactButtonPadding(CreateBoardHeaderButton, true, 0, 0);
+            }
+            else
+            {
+                CreateBoardHeaderButton.ClearValue(FrameworkElement.WidthProperty);
+                CreateBoardHeaderButton.ClearValue(FrameworkElement.HeightProperty);
+                CreateBoardHeaderButton.ClearValue(FrameworkElement.MinWidthProperty);
+                AdaptiveLayout.SetCompactButtonPadding(CreateBoardHeaderButton, false);
+            }
+
+            GreetingTextBlock.FontSize = tier == AdaptiveWidthTier.Compact ? 22 : 28;
+        }
+
+        private void ApplyFilterBarLayout(bool stacked)
+        {
+            if (FilterBarGrid == null || SortComboBox == null || ViewModePanel == null)
+            {
+                return;
+            }
+
+            if (stacked)
+            {
+                FilterBarGrid.RowDefinitions[1].Height = GridLength.Auto;
+                Grid.SetRow(SortComboBox, 1);
+                Grid.SetColumn(SortComboBox, 0);
+                Grid.SetColumnSpan(SortComboBox, 2);
+                SortComboBox.Margin = new Thickness(0, 10, 10, 0);
+                SortComboBox.Width = double.NaN;
+                SortComboBox.HorizontalAlignment = HorizontalAlignment.Stretch;
+                Grid.SetRow(ViewModePanel, 1);
+                Grid.SetColumn(ViewModePanel, 2);
+                ViewModePanel.Margin = new Thickness(0, 10, 0, 0);
+            }
+            else
+            {
+                FilterBarGrid.RowDefinitions[1].Height = new GridLength(0);
+                Grid.SetRow(SortComboBox, 0);
+                Grid.SetColumn(SortComboBox, 1);
+                Grid.SetColumnSpan(SortComboBox, 1);
+                SortComboBox.Margin = new Thickness(14, 0, 10, 0);
+                SortComboBox.Width = 180;
+                SortComboBox.HorizontalAlignment = HorizontalAlignment.Left;
+                Grid.SetRow(ViewModePanel, 0);
+                Grid.SetColumn(ViewModePanel, 2);
+                ViewModePanel.Margin = new Thickness(0);
+            }
         }
     }
 

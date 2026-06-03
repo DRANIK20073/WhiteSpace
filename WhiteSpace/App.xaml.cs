@@ -89,8 +89,8 @@ namespace WhiteSpace
                             return;
                         }
 
-                        window.MainFrame.Navigate(new UserHomePage());
                         window.Show();
+                        AppNavigation.NavigateHome(window.MainFrame.NavigationService);
                         return;
                     }
                 }
@@ -104,6 +104,7 @@ namespace WhiteSpace
             }
 
             window.MainFrame.Navigate(new LoginPage());
+            AppNavigation.ClearBackStack(window.MainFrame.NavigationService);
             window.Show();
         }
     }

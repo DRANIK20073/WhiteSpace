@@ -8,6 +8,7 @@ namespace WhiteSpace
     public partial class MainWindow : Window
     {
         private DispatcherTimer? _inviteRelayTimer;
+        private static bool _playedWindowFade;
 
         public MainWindow()
         {
@@ -18,7 +19,12 @@ namespace WhiteSpace
         {
             var prefs = AppPreferences.Load();
             WhiteSpaceThemeManager.Apply(prefs);
-            UiAnimationHelper.ApplyFadeIn(WindowRoot, prefs.EnableAnimations);
+
+            if (!_playedWindowFade)
+            {
+                _playedWindowFade = true;
+                UiAnimationHelper.ApplyFadeIn(WindowRoot, prefs.EnableAnimations, force: true);
+            }
 
             _inviteRelayTimer = new DispatcherTimer
             {

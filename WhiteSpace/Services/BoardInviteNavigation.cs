@@ -41,7 +41,7 @@ public static class BoardInviteNavigation
         }
 
         UserHomePage.RememberBoardActivity(board.Id);
-        nav.Navigate(new BoardPage(board.Id));
+        AppNavigation.NavigateToBoard(nav, board.Id);
     }
 
     private static void ShowInviteFailure(NavigationService nav, string message)

@@ -26,6 +26,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using WhiteSpace;
+using WhiteSpace.Helpers;
 using WhiteSpace.Models;
 using WhiteSpace.Dialogs;
 using WhiteSpace.Rendering;
@@ -232,6 +233,10 @@ namespace WhiteSpace.Pages
         private double _imageResizeStartAspect = 1;
         private bool _chatUnreadSeeded;
         private DateTime _chatReadWatermarkUtc = DateTime.MinValue;
+        private AdaptiveWidthTier _layoutTier = AdaptiveWidthTier.Wide;
+        private bool _participantsPanelOpen;
+        private bool _enableAnimations = true;
+        private bool _pageLoadStarted;
 
         public BoardPage(Guid boardId, bool returnToAdminPage = false)
         {
@@ -260,14 +265,23 @@ namespace WhiteSpace.Pages
 
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
-            if (!_returnToAdminPage && await _supabaseService.EnforceBanLogoutIfNeededAsync())
+            if (_pageLoadStarted)
             {
                 return;
             }
 
+            _pageLoadStarted = true;
+
+            if (!_returnToAdminPage && await _supabaseService.EnforceBanLogoutIfNeededAsync())
+            {
+                _pageLoadStarted = false;
+                return;
+            }
+
             var prefs = AppPreferences.Load();
+            _enableAnimations = prefs.EnableAnimations;
             WhiteSpaceThemeManager.Apply(prefs);
-            UiAnimationHelper.ApplyFadeIn(BoardRootGrid, prefs.EnableAnimations);
+            UiAnimationHelper.ApplyFadeIn(BoardRootGrid, _enableAnimations, force: true);
 
             if (SelectionToolbarFillPopup != null && SelectionToolbarFillButton != null)
             {
@@ -353,6 +367,14 @@ namespace WhiteSpace.Pages
                 _hostWindow.PreviewMouseLeftButtonUp += HostWindow_PreviewMouseLeftButtonUp;
                 _hostWindow.PreviewMouseDown += HostWindow_PreviewMouseDown;
                 _hostWindow.PreviewKeyDown += HostWindow_PreviewKeyDown;
+            }
+
+            ApplyBoardAdaptiveLayout(BoardRootGrid.ActualWidth);
+            if (BoardRootGrid.ActualWidth <= 0)
+            {
+                Dispatcher.BeginInvoke(
+                    () => ApplyBoardAdaptiveLayout(BoardRootGrid.ActualWidth),
+                    DispatcherPriority.Loaded);
             }
         }
 
@@ -2166,7 +2188,13 @@ namespace WhiteSpace.Pages
 
         private void NavigateBackFromBoard()
         {
-            NavigationService?.Navigate((_isAdminSession || _returnToAdminPage) ? new AdminPage() : new UserHomePage());
+            if (_isAdminSession || _returnToAdminPage)
+            {
+                AppNavigation.NavigateTo(NavigationService, new AdminPage());
+                return;
+            }
+
+            AppNavigation.NavigateHome(NavigationService);
         }
 
         private void Invite_Click(object sender, RoutedEventArgs e)
@@ -10114,6 +10142,160 @@ namespace WhiteSpace.Pages
             await _supabaseService.SaveShapeAsync(shape);
             MarkSaved();
             PushShapeToFirebase(shape);
+        }
+
+        private void BoardRootGrid_SizeChanged(object sender, SizeChangedEventArgs e) =>
+            ApplyBoardAdaptiveLayout(e.NewSize.Width);
+
+        private void ParticipantsToggleButton_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            SetParticipantsPanelOpen(!_participantsPanelOpen);
+        }
+
+        private void ParticipantsBackdrop_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+            SetParticipantsPanelOpen(false);
+
+        private void ApplyBoardAdaptiveLayout(double width)
+        {
+            if (width <= 0 || BoardRootGrid == null)
+            {
+                return;
+            }
+
+            var tier = AdaptiveLayout.GetTier(width);
+            _layoutTier = tier;
+
+            var hideHeaderLabels = tier >= AdaptiveWidthTier.Medium;
+            var showHeaderLabels = !hideHeaderLabels;
+
+            AdaptiveLayout.SetIconLabelPair(showHeaderLabels, BackMenuLabel, BackMenuIcon);
+            AdaptiveLayout.SetCompactButtonPadding(BackMenuHeaderButton, hideHeaderLabels, 16, 11);
+
+            SaveStatusText.Visibility = tier >= AdaptiveWidthTier.Narrow
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+
+            var collapseParticipants = tier >= AdaptiveWidthTier.Narrow;
+            ParticipantsToggleButton.Visibility = collapseParticipants
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            ParticipantsToggleButton.IsEnabled = collapseParticipants;
+
+            if (collapseParticipants)
+            {
+                ConfigureParticipantsOverlayLayout();
+                var overlayWidth = AdaptiveLayout.BoardParticipantsMediumWidth;
+                if (!_participantsPanelOpen)
+                {
+                    ParticipantsSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+                    ParticipantsSlideTransform.X = overlayWidth;
+                    ParticipantsPanel.Visibility = Visibility.Collapsed;
+                    ParticipantsBackdrop.Visibility = Visibility.Collapsed;
+                    ParticipantsBackdrop.Opacity = 1;
+                }
+                else
+                {
+                    ParticipantsSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+                    ParticipantsSlideTransform.X = 0;
+                    ParticipantsPanel.Visibility = Visibility.Visible;
+                    ParticipantsBackdrop.Visibility = Visibility.Visible;
+                    ParticipantsBackdrop.Opacity = 1;
+                }
+
+                AdaptiveLayout.SetIconLabelPair(false, InviteParticipantsLabel, InviteParticipantsIcon);
+                AdaptiveLayout.SetCompactButtonPadding(InviteParticipantsButton, true, 14, 10);
+            }
+            else
+            {
+                _participantsPanelOpen = true;
+                ConfigureParticipantsDockedLayout(
+                    tier == AdaptiveWidthTier.Medium
+                        ? AdaptiveLayout.BoardParticipantsMediumWidth
+                        : AdaptiveLayout.BoardParticipantsFullWidth);
+                AdaptiveLayout.SetIconLabelPair(true, InviteParticipantsLabel, InviteParticipantsIcon);
+                AdaptiveLayout.SetCompactButtonPadding(InviteParticipantsButton, false, 14, 10);
+            }
+
+            MainToolbarScroll.HorizontalScrollBarVisibility = tier >= AdaptiveWidthTier.Narrow
+                ? ScrollBarVisibility.Auto
+                : ScrollBarVisibility.Disabled;
+        }
+
+        private void ConfigureParticipantsDockedLayout(double columnWidth)
+        {
+            ParticipantsSlideTransform.BeginAnimation(TranslateTransform.XProperty, null);
+            ParticipantsSlideTransform.X = 0;
+            Grid.SetColumn(ParticipantsPanel, 1);
+            Grid.SetColumnSpan(ParticipantsPanel, 1);
+            Panel.SetZIndex(ParticipantsPanel, 0);
+            ParticipantsPanel.ClearValue(FrameworkElement.WidthProperty);
+            ParticipantsPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+            ParticipantsPanel.VerticalAlignment = VerticalAlignment.Stretch;
+            ParticipantsColumn.Width = new GridLength(columnWidth);
+            ParticipantsPanel.Visibility = Visibility.Visible;
+
+            ParticipantsBackdrop.Visibility = Visibility.Collapsed;
+            ParticipantsBackdrop.BeginAnimation(UIElement.OpacityProperty, null);
+            ParticipantsBackdrop.Opacity = 1;
+        }
+
+        private void ConfigureParticipantsOverlayLayout()
+        {
+            ParticipantsColumn.Width = new GridLength(0);
+            Grid.SetColumn(ParticipantsPanel, 0);
+            Grid.SetColumnSpan(ParticipantsPanel, 2);
+            Panel.SetZIndex(ParticipantsPanel, 15);
+            ParticipantsPanel.Width = AdaptiveLayout.BoardParticipantsMediumWidth;
+            ParticipantsPanel.HorizontalAlignment = HorizontalAlignment.Right;
+            ParticipantsPanel.VerticalAlignment = VerticalAlignment.Stretch;
+        }
+
+        private void SetParticipantsPanelOpen(bool open)
+        {
+            if (_layoutTier < AdaptiveWidthTier.Narrow)
+            {
+                _participantsPanelOpen = true;
+                return;
+            }
+
+            if (_participantsPanelOpen == open)
+            {
+                return;
+            }
+
+            _participantsPanelOpen = open;
+            ConfigureParticipantsOverlayLayout();
+
+            var width = AdaptiveLayout.BoardParticipantsMediumWidth;
+            if (open)
+            {
+                ParticipantsPanel.Visibility = Visibility.Visible;
+                ParticipantsPanel.UpdateLayout();
+                ParticipantsBackdrop.Visibility = Visibility.Visible;
+                UiAnimationHelper.ApplyFadeVisibilityToggle(ParticipantsBackdrop, true, _enableAnimations);
+                UiAnimationHelper.AnimateHorizontalSlide(
+                    ParticipantsSlideTransform,
+                    slideIn: true,
+                    width,
+                    fromLeft: false,
+                    _enableAnimations);
+                return;
+            }
+
+            UiAnimationHelper.ApplyFadeVisibilityToggle(ParticipantsBackdrop, false, _enableAnimations);
+            UiAnimationHelper.AnimateHorizontalSlide(
+                ParticipantsSlideTransform,
+                slideIn: false,
+                width,
+                fromLeft: false,
+                _enableAnimations,
+                () =>
+                {
+                    ParticipantsPanel.Visibility = Visibility.Collapsed;
+                    ParticipantsBackdrop.Visibility = Visibility.Collapsed;
+                    ParticipantsBackdrop.Opacity = 1;
+                });
         }
     }
 
