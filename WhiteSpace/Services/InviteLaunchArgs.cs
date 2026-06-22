@@ -3,6 +3,7 @@ using System.Linq;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Разбор аргументов запуска: мульти-инстанс и код приглашения из ссылки.</summary>
 public static class InviteLaunchArgs
 {
     /// <summary>

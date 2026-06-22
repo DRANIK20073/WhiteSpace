@@ -3,6 +3,7 @@ using System.Windows;
 
 namespace WhiteSpace.Services
 {
+    /// <summary>Тип диалога для стилизации кнопок и иконки.</summary>
     public enum AppDialogType
     {
         Info,
@@ -12,28 +13,34 @@ namespace WhiteSpace.Services
         Question
     }
 
+    /// <summary>Единая точка для модальных окон приложения (всегда из UI-потока).</summary>
     public static class AppDialogService
     {
+        /// <summary>Информационное сообщение.</summary>
         public static void ShowInfo(string message, string title = "WhiteSpace")
         {
             ShowDialog(message, title, AppDialogType.Info);
         }
 
+        /// <summary>Успешное действие (зелёная иконка).</summary>
         public static void ShowSuccess(string message, string title = "WhiteSpace")
         {
             ShowDialog(message, title, AppDialogType.Success);
         }
 
+        /// <summary>Предупреждение без блокировки дальнейшей работы.</summary>
         public static void ShowWarning(string message, string title = "WhiteSpace")
         {
             ShowDialog(message, title, AppDialogType.Warning);
         }
 
+        /// <summary>Ошибка — пользователь должен её увидеть.</summary>
         public static void ShowError(string message, string title = "WhiteSpace")
         {
             ShowDialog(message, title, AppDialogType.Error);
         }
 
+        /// <summary>Да/Нет — возвращает true, если нажали primary.</summary>
         public static bool ShowConfirmation(
             string message,
             string title = "Подтверждение",
@@ -47,6 +54,7 @@ namespace WhiteSpace.Services
             });
         }
 
+        /// <summary>Диалог ввода текста; null — отмена.</summary>
         public static string? ShowTextInput(
             string title,
             string message,
@@ -68,6 +76,7 @@ namespace WhiteSpace.Services
             });
         }
 
+        /// <summary>Базовый ShowDialog для Info/Success/Warning/Error.</summary>
         private static void ShowDialog(string message, string title, AppDialogType type)
         {
             InvokeOnUiThread(() =>
@@ -78,6 +87,7 @@ namespace WhiteSpace.Services
             });
         }
 
+        /// <summary>Маршалит вызов на Dispatcher, если мы не в UI-потоке.</summary>
         private static T InvokeOnUiThread<T>(Func<T> action)
         {
             var app = Application.Current;

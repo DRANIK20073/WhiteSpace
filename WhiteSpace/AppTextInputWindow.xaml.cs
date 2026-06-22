@@ -4,6 +4,7 @@ using System.Windows.Media.Animation;
 
 namespace WhiteSpace
 {
+    /// <summary>Модальное окно ввода текста (название доски, rename и т.п.).</summary>
     public partial class AppTextInputWindow : Window
     {
         public string InputText => InputTextBox.Text.Trim();

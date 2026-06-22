@@ -3,12 +3,12 @@ using System.Windows.Media;
 
 namespace WhiteSpace.Rendering;
 
-/// <summary>Нормализованный контур 100×100 для <see cref="System.Windows.Shapes.Path"/> со Stretch=Fill.</summary>
+// Нормализованный контур 100×100 для Path со Stretch=Fill.
 public static class BoardShapeOutlineGeometry
 {
     private const double U = 100;
 
-    /// <summary>Точка порта на контуре в координатах 0–100 (для привязки стрелок снаружи фигуры).</summary>
+    // Точка порта на контуре в координатах 0–100 (для привязки стрелок снаружи фигуры).
     public static Point GetConnectionPortNormalized(string kind, string? side)
     {
         var s = (side ?? "n").ToLowerInvariant();
@@ -60,6 +60,7 @@ public static class BoardShapeOutlineGeometry
         };
     }
 
+    // Возвращает Geometry контура фигуры по kind (нормализованная сетка 100×100).
     public static Geometry Get(string kind)
     {
         return kind switch

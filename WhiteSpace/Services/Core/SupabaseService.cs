@@ -2,11 +2,15 @@
 using Newtonsoft.Json;
 using Supabase;
 using Supabase.Gotrue;
+using Supabase.Realtime;
+using Supabase.Realtime.Interfaces;
+using Supabase.Realtime.PostgresChanges;
 using Supabase.Storage;
 using Supabase.Gotrue.Exceptions;
 using Supabase.Interfaces;
 using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
+using WhiteSpace.Models;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -1237,23 +1241,7 @@ public class SupabaseService
             {
                 foreach (var model in result.Models)
                 {
-                    model.DeserializedPoints ??= new List<Point>();
-                    if (!string.IsNullOrEmpty(model.Points) &&
-                        (string.Equals(model.Type, "line", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(model.Type, "marker", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(model.Type, "connector", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        try
-                        {
-                            model.DeserializedPoints =
-                                JsonConvert.DeserializeObject<List<Point>>(model.Points) ?? new List<Point>();
-                        }
-                        catch
-                        {
-                            model.DeserializedPoints = new List<Point>();
-                        }
-                    }
-
+                    HydrateBoardShapePoints(model);
                     shapes.Add(model);
                 }
             }
@@ -1264,6 +1252,92 @@ public class SupabaseService
         {
             Console.WriteLine($"Ошибка при загрузке фигур: {ex.Message}");
             return new List<BoardShape>();
+        }
+    }
+
+    /// <summary>Realtime-подписка на фигуры доски (INSERT/UPDATE/DELETE в boardshape).</summary>
+    public async Task<IRealtimeChannel?> SubscribeBoardShapesRealtimeAsync(
+        Guid boardId,
+        Action<BoardShapeChange> onChange)
+    {
+        if (_client?.Realtime == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (_client.Realtime.Socket is { IsConnected: false })
+            {
+                await _client.Realtime.ConnectAsync();
+            }
+
+            var channelName = $"boardshape:{boardId:D}";
+            var filter = $"board_id=eq.{boardId:D}";
+            var channel = _client.Realtime.Channel(channelName);
+            channel.Register(new PostgresChangesOptions("public", "boardshape", ListenType.All, filter));
+
+            void HandleUpsert(PostgresChangesResponse change)
+            {
+                var shape = change.Model<BoardShape>();
+                if (shape == null || shape.Id <= 0)
+                {
+                    return;
+                }
+
+                shape.BoardId = boardId;
+                HydrateBoardShapePoints(shape);
+                onChange(new BoardShapeChange { ShapeId = shape.Id, Shape = shape });
+            }
+
+            void HandleDelete(PostgresChangesResponse change)
+            {
+                var id = change.OldModel<BoardShape>()?.Id ?? change.Model<BoardShape>()?.Id ?? 0;
+                if (id <= 0)
+                {
+                    return;
+                }
+
+                onChange(new BoardShapeChange { ShapeId = id });
+            }
+
+            channel.AddPostgresChangeHandler(ListenType.Inserts, (_, change) => HandleUpsert(change));
+            channel.AddPostgresChangeHandler(ListenType.Updates, (_, change) => HandleUpsert(change));
+            channel.AddPostgresChangeHandler(ListenType.Deletes, (_, change) => HandleDelete(change));
+
+            await channel.Subscribe();
+            return channel;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"SubscribeBoardShapesRealtimeAsync: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void HydrateBoardShapePoints(BoardShape model)
+    {
+        model.DeserializedPoints ??= new List<Point>();
+        if (string.IsNullOrEmpty(model.Points))
+        {
+            return;
+        }
+
+        if (!string.Equals(model.Type, "line", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(model.Type, "marker", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(model.Type, "connector", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            model.DeserializedPoints =
+                JsonConvert.DeserializeObject<List<Point>>(model.Points) ?? new List<Point>();
+        }
+        catch
+        {
+            model.DeserializedPoints = new List<Point>();
         }
     }
 

@@ -21,6 +21,7 @@ public static class FavoriteBoardsStorage
         PropertyNameCaseInsensitive = true
     };
 
+    /// <summary>Загружает список id избранных досок из AppData.</summary>
     public static List<Guid> Load()
     {
         try
@@ -40,6 +41,7 @@ public static class FavoriteBoardsStorage
         }
     }
 
+    /// <summary>Быстрая проверка «доска в избранном» без кэша.</summary>
     public static bool IsFavorite(Guid boardId) => Load().Contains(boardId);
 
     /// <summary>Переключает избранное. Возвращает новое состояние.</summary>
@@ -57,6 +59,7 @@ public static class FavoriteBoardsStorage
         return true;
     }
 
+    /// <summary>Убирает доску из избранного (если была там).</summary>
     public static void Remove(Guid boardId)
     {
         var ids = Load();
@@ -68,6 +71,7 @@ public static class FavoriteBoardsStorage
         Save(ids);
     }
 
+    /// <summary>Записывает список id в favorite-boards.json.</summary>
     private static void Save(List<Guid> boardIds)
     {
         var dir = Path.GetDirectoryName(FilePath);

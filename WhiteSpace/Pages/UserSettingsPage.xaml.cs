@@ -6,6 +6,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
 
+/// <summary>Настройки профиля, темы и поведения интерфейса.</summary>
 public partial class UserSettingsPage : Page
 {
     private readonly SupabaseService _service = new();
@@ -49,7 +50,6 @@ public partial class UserSettingsPage : Page
         EmailBox.IsReadOnly = true;
         EmailBox.Focusable = false;
 
-        // Без блокировки второй синхронизации ComboBox снова вызовет SelectionChanged и может записать в файл светлую тему.
         _isThemeInitializing = true;
         SyncThemeComboFromPreferences();
         _isThemeInitializing = false;
@@ -57,7 +57,6 @@ public partial class UserSettingsPage : Page
 
     private void Back_Click(object sender, RoutedEventArgs e)
     {
-        // Иначе при размонтировании страницы ComboBox может вызвать SelectionChanged и записать в файл светлую тему.
         _isThemeInitializing = true;
         AppNavigation.NavigateHome(NavigationService);
     }
@@ -97,6 +96,7 @@ public partial class UserSettingsPage : Page
         }
     }
 
+    /// <summary>Синхронизируем комбобокс темы с файлом настроек (не с runtime-состоянием).</summary>
     private void SyncThemeComboFromPreferences()
     {
         // Всегда опираемся на сохранённый файл, а не на IsDarkApplied — иначе после навигации возможна рассинхронизация и перезапись темы на Light.

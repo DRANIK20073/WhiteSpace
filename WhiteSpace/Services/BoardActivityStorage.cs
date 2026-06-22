@@ -22,6 +22,7 @@ public static class BoardActivityStorage
         PropertyNameCaseInsensitive = true
     };
 
+    /// <summary>Фиксирует «последний заход» на доску для подписи на карточке.</summary>
     public static void Touch(Guid boardId)
     {
         try
@@ -50,6 +51,7 @@ public static class BoardActivityStorage
         }
     }
 
+    /// <summary>Читает JSON-словарь boardId → UTC время активности.</summary>
     private static Dictionary<string, DateTime> LoadRaw()
     {
         if (!File.Exists(FilePath))
@@ -62,6 +64,7 @@ public static class BoardActivityStorage
                ?? new Dictionary<string, DateTime>();
     }
 
+    /// <summary>Атомарная запись board_activity.json через временный файл.</summary>
     private static void SaveRaw(Dictionary<string, DateTime> map)
     {
         var dir = Path.GetDirectoryName(FilePath);

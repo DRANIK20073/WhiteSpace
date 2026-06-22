@@ -25,8 +25,10 @@ public sealed class RectEllipseAppearance
     [JsonProperty("lbl")]
     public string? Label { get; set; }
 
+    /// <summary>Только контур, без заливки — значение по умолчанию.</summary>
     public static RectEllipseAppearance StrokeOnly() => new() { Mode = "stroke" };
 
+    /// <summary>Читает JSON из Text; для неподходящих типов возвращает StrokeOnly().</summary>
     public static RectEllipseAppearance Parse(BoardShape shape)
     {
         if (shape.Type is not ("rectangle" or "ellipse"))
@@ -50,6 +52,7 @@ public sealed class RectEllipseAppearance
         }
     }
 
+    /// <summary>Записывает внешний вид обратно в Text (только rectangle/ellipse).</summary>
     public void SaveTo(BoardShape shape)
     {
         if (shape.Type is not ("rectangle" or "ellipse"))

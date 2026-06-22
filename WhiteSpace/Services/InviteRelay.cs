@@ -11,6 +11,7 @@ public static class InviteRelay
         "WhiteSpace",
         "relay_invite.code");
 
+    /// <summary>Записывает код для первого экземпляра, когда второй уже запущен.</summary>
     public static void WritePendingInvite(string code)
     {
         try
@@ -29,6 +30,7 @@ public static class InviteRelay
         }
     }
 
+    /// <summary>Читает код из relay-файла и сразу удаляет его.</summary>
     public static bool TryReadAndClear(out string code)
     {
         code = string.Empty;

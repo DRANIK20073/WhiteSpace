@@ -1,6 +1,7 @@
 ﻿using Supabase.Postgrest.Attributes;
 using Supabase.Postgrest.Models;
 
+/// <summary>Доска пользователя: заголовок, владелец и код доступа для приглашений.</summary>
 [Table("boards")]
 public class Board : BaseModel
 {

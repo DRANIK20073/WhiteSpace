@@ -5,8 +5,10 @@ using System.Windows.Media.Animation;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Общие fade/slide-анимации UI с учётом настройки EnableAnimations.</summary>
 public static class UiAnimationHelper
 {
+    /// <summary>Плавное появление элемента с нулевой прозрачности.</summary>
     public static void ApplyFadeIn(FrameworkElement? element, bool enableAnimations, bool force = false)
     {
         if (element == null || !enableAnimations)
@@ -51,6 +53,7 @@ public static class UiAnimationHelper
         element.BeginAnimation(UIElement.OpacityProperty, anim);
     }
 
+    /// <summary>Плавное исчезновение; по завершении вызывает onComplete.</summary>
     public static void ApplyFadeOut(FrameworkElement? element, bool enableAnimations, Action? onComplete = null)
     {
         if (element == null)
@@ -79,6 +82,7 @@ public static class UiAnimationHelper
         element.BeginAnimation(UIElement.OpacityProperty, fade);
     }
 
+    /// <summary>Показ/скрытие через opacity + Visibility с опциональным callback после hide.</summary>
     public static void ApplyFadeVisibilityToggle(
         UIElement element,
         bool show,
@@ -174,6 +178,7 @@ public static class UiAnimationHelper
         transform.BeginAnimation(TranslateTransform.XProperty, anim);
     }
 
+    /// <summary>Достаёт или создаёт TranslateTransform для анимации выезда панели.</summary>
     public static TranslateTransform GetOrCreateTranslateTransform(FrameworkElement element, bool anchorLeft)
     {
         if (element.RenderTransform is TranslateTransform existing)

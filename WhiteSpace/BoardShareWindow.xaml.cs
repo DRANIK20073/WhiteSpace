@@ -4,6 +4,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace
 {
+    /// <summary>Диалог «Поделиться доской»: код доступа и invite-ссылка в буфер.</summary>
     public partial class BoardShareWindow : Window
     {
         private readonly string _code;
@@ -37,6 +38,7 @@ namespace WhiteSpace
             TryCopy(_link);
         }
 
+        /// <summary>Копируем в буфер; при ошибке показываем warning.</summary>
         private static void TryCopy(string text)
         {
             try

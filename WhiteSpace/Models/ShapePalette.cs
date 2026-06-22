@@ -65,6 +65,7 @@ public static class ShapePalette
         return ("rectangle", paletteId);
     }
 
+    /// <summary>Определяет id палитры по сохранённой фигуре (для UI и смены вида).</summary>
     public static string GetPaletteId(BoardShape shape)
     {
         if (shape.Type == "ellipse")

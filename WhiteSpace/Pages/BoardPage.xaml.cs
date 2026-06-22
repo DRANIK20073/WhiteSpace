@@ -2,7 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using Newtonsoft.Json;
-using Supabase;
+using Supabase.Realtime.Interfaces;
 using IOPath = System.IO.Path;
 using System;
 using System.Collections.Generic;
@@ -34,6 +34,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Рабочая страница доски: рисование, инструменты, реалтайм-синхронизация и участники.</summary>
     public partial class BoardPage : Page
     {
         private static readonly HttpClient BoardImageHttpClient = CreateBoardImageHttpClient();
@@ -55,6 +56,7 @@ namespace WhiteSpace.Pages
 
         private IDisposable? _shapesSubscription;
         private IDisposable? _shapesSnapshotSubscription;
+        private IRealtimeChannel? _supabaseShapesRealtimeChannel;
         private IDisposable? _membersSubscription;
         private IDisposable? _cursorsSubscription;
         private IDisposable? _chatSubscription;
@@ -241,6 +243,7 @@ namespace WhiteSpace.Pages
         private bool _enableAnimations = true;
         private bool _pageLoadStarted;
 
+        // --- Загрузка и инициализация ---
         public BoardPage(Guid boardId, bool returnToAdminPage = false)
         {
             InitializeComponent();
@@ -267,6 +270,7 @@ namespace WhiteSpace.Pages
             _presenceUiRefreshTimer.Tick += PresenceUiRefreshTimer_Tick;
         }
 
+        /// <summary>Первичная загрузка: метаданные, фигуры, роль, подписки на Firebase.</summary>
         private async void Page_Loaded(object sender, RoutedEventArgs e)
         {
             if (_pageLoadStarted)
@@ -348,8 +352,8 @@ namespace WhiteSpace.Pages
 
             await InitCursorIdentityAsync();
 
-            // Подписываемся на изменения из Firebase после известного профиля (для мгновенной смены роли из списка участников)
-            SubscribeToShapes();
+            // Подписываемся на изменения фигур (Supabase Realtime + Firebase как запасной канал)
+            await SubscribeToShapesAsync();
             SubscribeToPresentationMode();
             SubscribeToBoardMembers();
             SubscribeToCursors();
@@ -382,6 +386,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Тянем название доски и access code из Supabase.</summary>
         private async Task LoadBoardMetadataAsync()
         {
             _boardInfo = await _supabaseService.GetBoardByIdAsync(_boardId);
@@ -528,6 +533,19 @@ namespace WhiteSpace.Pages
             _shapesSubscription = null;
             _shapesSnapshotSubscription?.Dispose();
             _shapesSnapshotSubscription = null;
+            if (_supabaseShapesRealtimeChannel != null)
+            {
+                try
+                {
+                    _supabaseShapesRealtimeChannel.Unsubscribe();
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                _supabaseShapesRealtimeChannel = null;
+            }
             _membersSubscription?.Dispose();
             _membersSubscription = null;
             _cursorsSubscription?.Dispose();
@@ -729,7 +747,8 @@ namespace WhiteSpace.Pages
                 : "Включить режим презентации";
         }
 
-        private void SubscribeToShapes()
+        // --- Реалтайм-синхронизация (Supabase + Firebase) ---
+        private async Task SubscribeToShapesAsync()
         {
             try
             {
@@ -777,11 +796,56 @@ namespace WhiteSpace.Pages
                             ApplyRemoteShapesSnapshot(snapshot.Shapes);
                         });
                     });
+
+                if (_supabaseShapesRealtimeChannel != null)
+                {
+                    try
+                    {
+                        _supabaseShapesRealtimeChannel.Unsubscribe();
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+                }
+
+                _supabaseShapesRealtimeChannel = await _supabaseService.SubscribeBoardShapesRealtimeAsync(
+                    _boardId,
+                    change =>
+                    {
+                        if (_isLoadingShapes)
+                        {
+                            return;
+                        }
+
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            if (change.IsDelete)
+                            {
+                                if (change.ShapeId > 0)
+                                {
+                                    RemoveShapeFromBoardLocal(change.ShapeId);
+                                }
+
+                                return;
+                            }
+
+                            if (change.Shape != null)
+                            {
+                                UpdateOrAddShapeFromFirebase(change.Shape);
+                            }
+                        });
+                    });
             }
             catch (Exception ex)
             {
-                AppDialogService.ShowError($"Ошибка подписки на Firebase: {ex.Message}", "Доска");
+                AppDialogService.ShowError($"Ошибка подписки на изменения фигур: {ex.Message}", "Доска");
             }
+        }
+
+        private void SubscribeToShapes()
+        {
+            _ = SubscribeToShapesAsync();
         }
 
         private void ApplyRemoteShapesSnapshot(List<BoardShape>? shapes)
@@ -847,6 +911,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Удаляем фигуру локально и сбрасываем выделение, если нужно.</summary>
         private void RemoveShapeFromBoardLocal(int shapeId)
         {
             var uid = shapeId.ToString();
@@ -870,7 +935,7 @@ namespace WhiteSpace.Pages
             }
         }
 
-        // Обновление или добавление фигуры из Firebase (от других пользователей)
+        // Подтягиваем изменения фигуры с Firebase (другой пользователь двинул, перекрасил или сменил вид).
         private void UpdateOrAddShapeFromFirebase(BoardShape shape)
         {
             if (shape == null || shape.Id <= 0)
@@ -884,9 +949,21 @@ namespace WhiteSpace.Pages
             {
                 var existingShape = _shapesOnBoard[existingShapeIndex];
                 var uiElement = FindUIElementByUid(shape.Id.ToString());
+                var shapeUid = shape.Id.ToString();
+                var wasSelected = _resizeTarget is FrameworkElement selectedFe &&
+                                  selectedFe.Uid == shapeUid;
                 var previousType = existingShape.Type;
                 var previousPaletteId = ShapePalette.GetPaletteId(existingShape);
+                var incomingPaletteId = shape.Type is "rectangle" or "ellipse"
+                    ? ShapePalette.GetPaletteId(shape)
+                    : previousPaletteId;
                 var typeChanged = !string.Equals(previousType, shape.Type, StringComparison.Ordinal);
+                var paletteChanged = !string.Equals(previousPaletteId, incomingPaletteId, StringComparison.Ordinal);
+                var dimensionsChanged = Math.Abs(existingShape.Width - shape.Width) > 0.5 ||
+                                        Math.Abs(existingShape.Height - shape.Height) > 0.5;
+                var shouldRecreateVisual = typeChanged ||
+                                           paletteChanged ||
+                                           (dimensionsChanged && shape.Type is "rectangle" or "ellipse");
 
                 existingShape.Type = shape.Type;
                 existingShape.Color = shape.Color;
@@ -894,7 +971,11 @@ namespace WhiteSpace.Pages
                 existingShape.Y = shape.Y;
                 existingShape.Width = shape.Width;
                 existingShape.Height = shape.Height;
-                existingShape.Text = shape.Text;
+                if (!string.IsNullOrEmpty(shape.Text) || typeChanged || paletteChanged)
+                {
+                    existingShape.Text = shape.Text;
+                }
+
                 existingShape.Points = shape.Points;
 
                 if (shape.Type is "line" or "marker" or "connector" && !string.IsNullOrEmpty(shape.Points))
@@ -911,23 +992,22 @@ namespace WhiteSpace.Pages
                     ApplyConnectorGeometryToBoardShape(existingShape);
                 }
 
-                var currentPaletteId = ShapePalette.GetPaletteId(existingShape);
-                var paletteChanged = !string.Equals(previousPaletteId, currentPaletteId, StringComparison.Ordinal);
-                var shouldRecreateVisual = typeChanged || paletteChanged;
-
                 if (uiElement != null)
                 {
-                    Console.WriteLine($"Получено обновление для фигуры {shape.Id}: цвет {shape.Color}");
-
                     if (shouldRecreateVisual)
                     {
                         BoardCanvas.Children.Remove(uiElement);
                         AddShapeToCanvas(existingShape, false);
-                        uiElement = FindUIElementByUid(shape.Id.ToString());
+                        uiElement = FindUIElementByUid(shapeUid);
                     }
 
                     if (uiElement == null)
                     {
+                        if (shape.Type != "connector")
+                        {
+                            RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
+                        }
+
                         return;
                     }
 
@@ -956,6 +1036,15 @@ namespace WhiteSpace.Pages
                 if (shape.Type != "connector")
                 {
                     RefreshConnectorVisualsReferencingShapeLocal(shape.Id);
+                }
+
+                if (wasSelected)
+                {
+                    var refreshed = FindUIElementByUid(shapeUid) ?? uiElement;
+                    if (refreshed != null)
+                    {
+                        ShowResizeFrame(refreshed);
+                    }
                 }
             }
             else
@@ -1108,18 +1197,22 @@ namespace WhiteSpace.Pages
             }
         }
 
-        // Отправка изменений в Firebase (для реалтайм обновлений)
-        private async void PushShapeToFirebase(BoardShape shape)
+        // Пушим копию фигуры в Firebase — так другие клиенты сразу получают полный снимок, включая JSON в Text.
+        private async Task PushShapeToFirebaseAsync(BoardShape shape)
         {
             try
             {
-                await _firebaseService.PushShapeAsync(_boardId.ToString(), shape);
+                await _firebaseService.PushShapeAsync(_boardId.ToString(), CloneShape(shape));
             }
             catch (Exception ex)
             {
-                // Логируем ошибку, но не показываем пользователю
                 System.Diagnostics.Debug.WriteLine($"Ошибка отправки в Firebase: {ex.Message}");
             }
+        }
+
+        private void PushShapeToFirebase(BoardShape shape)
+        {
+            _ = PushShapeToFirebaseAsync(shape);
         }
 
         private UIElement FindUIElementByUid(string uid)
@@ -1221,6 +1314,7 @@ namespace WhiteSpace.Pages
                 : (!string.IsNullOrWhiteSpace(profile?.Email) ? profile.Email : $"User {_myUserId.Value.ToString("N")[..6]}");
         }
 
+        /// <summary>Курсоры других участников на доске.</summary>
         private void SubscribeToCursors()
         {
             try
@@ -2495,6 +2589,7 @@ namespace WhiteSpace.Pages
             await SendChatMessageAsync();
         }
 
+        /// <summary>Чат доски — новые сообщения и счётчик непрочитанных.</summary>
         private void SubscribeToChatMessages()
         {
             try
@@ -2738,6 +2833,8 @@ namespace WhiteSpace.Pages
             return target?.DataContext as ChatMessageViewModel;
         }
 
+        // --- Добавление фигур на canvas ---
+        /// <summary>Создаёт визуальный элемент для BoardShape и кладёт на BoardCanvas.</summary>
         private void AddShapeToCanvas(BoardShape shape, bool addToBoardState = true, ImageSource? prefetchedBoardImage = null, string? boardImageLocalFallbackPath = null)
         {
             if (shape.Id > 0 && FindUIElementByUid(shape.Id.ToString()) is UIElement existingSameId)
@@ -3244,6 +3341,7 @@ namespace WhiteSpace.Pages
             SetTool(ToolMode.Shape);
         }
 
+        /// <summary>Переключает активный инструмент и сбрасывает временные состояния (рисование, превью).</summary>
         private void SetTool(ToolMode tool)
         {
             _tool = tool;
@@ -3471,6 +3569,7 @@ namespace WhiteSpace.Pages
             SelectionToolbarPanel.Margin = new Thickness(marginLeft, marginTop, 0, 0);
         }
 
+        /// <summary>Строит палитру заливки в popup toolbar (один раз).</summary>
         private void EnsureFillPaletteBuilt()
         {
             if (_fillPaletteBuilt || FillPaletteGridFill == null || FillPaletteGridStroke == null)
@@ -5422,6 +5521,8 @@ namespace WhiteSpace.Pages
             }
         }
 
+        // --- Панель выделения (toolbar над объектом) ---
+        /// <summary>Синхронизирует панель с выделенной фигурой: цвета, шрифт, тип.</summary>
         private void SyncSelectionToolbar(UIElement element)
         {
             if (SelectionToolbarPanel == null || SelectionToolbarDeleteButton == null ||
@@ -5590,6 +5691,7 @@ namespace WhiteSpace.Pages
             Dispatcher.BeginInvoke(new Action(UpdateSelectionToolbarPosition), DispatcherPriority.Loaded);
         }
 
+        // Меняем вид выделенной фигуры (квадрат → треугольник, круг и т.д.) и сразу пушим в Firebase.
         private async Task TryChangeSelectedShapeKindAsync(string paletteId)
         {
             if (_resizeTarget == null)
@@ -5643,7 +5745,7 @@ namespace WhiteSpace.Pages
 
             await _supabaseService.SaveShapeAsync(shape);
             MarkSaved();
-            PushShapeToFirebase(shape);
+            await PushShapeToFirebaseAsync(shape);
 
             ShowResizeFrame(visual);
             await RefreshConnectorsReferencingShapeAsync(shape.Id);
@@ -5890,6 +5992,8 @@ namespace WhiteSpace.Pages
             _focusedBoardTextEdit = null;
         }
 
+        // --- Создание фигур (клик / drag) ---
+        /// <summary>Главный обработчик клика на viewport: инструмент, выделение, pan.</summary>
         private void Viewport_MouseDown(object sender, MouseButtonEventArgs e)
         {
             TryCommitBoardTextFocus(e);
@@ -6151,6 +6255,7 @@ namespace WhiteSpace.Pages
             return child as TextBox;
         }
 
+        /// <summary>Движение мыши: рисование, drag, marquee, превью размещения.</summary>
         private void Viewport_MouseMove(object sender, MouseEventArgs e)
         {
             var screen = e.GetPosition(Viewport);
@@ -6445,6 +6550,7 @@ namespace WhiteSpace.Pages
             Viewport.ReleaseMouseCapture();
         }
 
+        /// <summary>Завершение жеста: сохранение фигуры, отпускание capture.</summary>
         private async void Viewport_MouseUp(object sender, MouseButtonEventArgs e)
         {
             if (e.ChangedButton == MouseButton.Middle && _isPanning)
@@ -7512,6 +7618,7 @@ namespace WhiteSpace.Pages
         }
 
         // РУЧКИ ИЗМЕНЕНИЯ РАЗМЕРА
+        /// <summary>Показывает рамку выделения и ручки ресайза для элемента.</summary>
         private void ShowResizeFrame(UIElement element)
         {
             RemoveResizeFrame();

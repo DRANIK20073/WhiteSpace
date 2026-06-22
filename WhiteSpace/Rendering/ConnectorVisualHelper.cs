@@ -9,11 +9,13 @@ using WhiteSpace.Models;
 
 namespace WhiteSpace.Rendering;
 
+// Визуал коннектора: линия, штрихи и стрелки на концах.
 public static class ConnectorVisualHelper
 {
     public const string ArrowHeadTag = "connectorArrowHead";
     public const string LineTag = "connectorLine";
 
+    // Собираем Canvas с Polyline и стрелками по точкам и метаданным в Text.
     public static Canvas Build(BoardShape shape, IReadOnlyList<Point> points, Brush stroke, double thickness)
     {
         ConnectorAttachmentHelper.TryDeserialize(shape.Text, out var att);
@@ -48,6 +50,7 @@ public static class ConnectorVisualHelper
         return null;
     }
 
+    // Обновляем точки линии и пересчитываем стрелки.
     public static void UpdatePoints(UIElement element, BoardShape shape, IReadOnlyList<Point> points, Brush stroke, double thickness)
     {
         if (GetLine(element) is not { } line)

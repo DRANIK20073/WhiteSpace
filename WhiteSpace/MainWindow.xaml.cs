@@ -5,6 +5,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace
 {
+    /// <summary>Корневое окно: Frame для навигации и relay invite-ссылок из второго экземпляра.</summary>
     public partial class MainWindow : Window
     {
         private DispatcherTimer? _inviteRelayTimer;
@@ -34,6 +35,7 @@ namespace WhiteSpace
             _inviteRelayTimer.Start();
         }
 
+        /// <summary>Читаем invite-код, который второй процесс записал в relay-файл.</summary>
         private async void InviteRelayTimer_Tick(object? sender, EventArgs e)
         {
             if (!InviteRelay.TryReadAndClear(out var code))

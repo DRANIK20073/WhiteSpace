@@ -15,6 +15,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages;
 
+/// <summary>Панель администратора: пользователи, доски, права и быстрые действия.</summary>
 public partial class AdminPage : Page
 {
     private readonly SupabaseService _service = new();
@@ -95,6 +96,7 @@ public partial class AdminPage : Page
         }
     }
 
+    /// <summary>Подтягиваем данные с сервера и обновляем таблицы (или тихо в фоне по таймеру).</summary>
     private async Task LoadAdminDataAsync(bool isBackgroundRefresh = false)
     {
         try
@@ -173,6 +175,7 @@ public partial class AdminPage : Page
         RefreshRows();
     }
 
+    /// <summary>Фильтруем и заполняем ObservableCollection для трёх вкладок.</summary>
     private void RefreshRows()
     {
         var selectedScope = (ScopeComboBox?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "Пользователи";
@@ -310,6 +313,7 @@ public partial class AdminPage : Page
         StatusTextBlock.Text = $"Показано: {Users.Count} пользователей, {Boards.Count} досок, {Members.Count} доступов.";
     }
 
+    /// <summary>Счётчики в шапке панели (пользователи, доски, фигуры, активные).</summary>
     private void UpdateStats()
     {
         var activeSince = DateTime.UtcNow.AddDays(-7);
@@ -544,6 +548,7 @@ public partial class AdminPage : Page
             && currentUserId == userId;
     }
 
+    /// <summary>Генерируем превьюшки для списка досок — best-effort, ошибки не критичны.</summary>
     private async Task PopulateBoardThumbnailsAsync()
     {
         var rows = Boards.ToList();
@@ -571,12 +576,13 @@ public partial class AdminPage : Page
             }
             catch
             {
-                // thumbnails are best-effort in admin list
+                // превью в админ-списке — необязательная оптимизация
             }
         }
     }
 }
 
+/// <summary>Строка таблицы пользователей на панели админа.</summary>
 public sealed class AdminUserRow
 {
     public Guid Id { get; set; }
@@ -604,6 +610,7 @@ public sealed class AdminUserRow
     public bool CanDeleteProfile { get; set; }
 }
 
+/// <summary>Строка таблицы досок с lazy-превью.</summary>
 public sealed class AdminBoardRow : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -650,6 +657,7 @@ public sealed class AdminBoardRow : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
+/// <summary>Строка таблицы прав доступа (участник ↔ доска).</summary>
 public sealed class AdminMemberRow
 {
     public Guid BoardId { get; set; }

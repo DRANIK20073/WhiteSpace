@@ -17,6 +17,7 @@ using WhiteSpace.Models;
 
 namespace WhiteSpace.Rendering;
 
+// Рендер и дисковый кэш превьюшек досок для домашней страницы и админки.
 public static class BoardThumbnailRenderer
 {
     public const int DefaultWidth = 360;
@@ -33,6 +34,7 @@ public static class BoardThumbnailRenderer
     private static string GetCacheMetaPath(Guid boardId) =>
         System.IO.Path.Combine(CacheDirectory, $"{boardId:N}.meta");
 
+    // SHA256 от содержимого фигур — для проверки актуальности кэша.
     public static string ComputeFingerprint(IReadOnlyList<BoardShape> shapes)
     {
         if (shapes.Count == 0)
@@ -58,6 +60,7 @@ public static class BoardThumbnailRenderer
         return Convert.ToHexString(hash);
     }
 
+    // Читаем PNG из кэша, если fingerprint совпал.
     public static ImageSource? TryLoadCached(Guid boardId, string fingerprint)
     {
         try
@@ -113,10 +116,11 @@ public static class BoardThumbnailRenderer
         }
         catch
         {
-            // cache is best-effort
+            // кэш необязателен — при ошибке просто перерисуем
         }
     }
 
+    // Рисуем миниатюру на off-screen Canvas и возвращаем BitmapSource.
     public static ImageSource? Render(IReadOnlyList<BoardShape> shapes, int width = DefaultWidth, int height = DefaultHeight)
     {
         if (shapes.Count == 0)
@@ -160,6 +164,7 @@ public static class BoardThumbnailRenderer
         return renderTarget;
     }
 
+    // Кэш → рендер на UI-потоке → сохранение PNG при необходимости.
     public static async Task<ImageSource?> EnsureThumbnailAsync(
         Guid boardId,
         IReadOnlyList<BoardShape> shapes,
@@ -499,7 +504,7 @@ public static class BoardThumbnailRenderer
         }
         catch
         {
-            // ignore invalid color
+            // битый hex — оставляем fallback
         }
 
         var fallbackBrush = new SolidColorBrush(fallback);

@@ -5,6 +5,7 @@ using WhiteSpace.Pages;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Обработка отложенного приглашения после авторизации пользователя.</summary>
 public static class BoardInviteNavigation
 {
     /// <summary>Присоединение по отложенному коду из ссылки и переход на доску (нужна авторизация).</summary>
@@ -44,6 +45,7 @@ public static class BoardInviteNavigation
         AppNavigation.NavigateToBoard(nav, board.Id);
     }
 
+    /// <summary>Тост на главной или диалог, если пользователь на другой странице.</summary>
     private static void ShowInviteFailure(NavigationService nav, string message)
     {
         if (nav.Content is UserHomePage)

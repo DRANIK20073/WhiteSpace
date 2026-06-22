@@ -1,6 +1,7 @@
 ﻿using Supabase.Postgrest.Models;
 using Supabase.Postgrest.Attributes;
 
+/// <summary>Профиль пользователя в Supabase, включая статус блокировки.</summary>
 [Table("profiles")]
 public class Profile : BaseModel
 {

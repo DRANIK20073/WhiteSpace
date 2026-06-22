@@ -9,6 +9,7 @@ public static class BoardInviteLinkParser
 {
     private static readonly Regex SixAlnum = new(@"[A-Za-z0-9]{6}", RegexOptions.Compiled);
 
+    /// <summary>Вытаскивает 6-символьный код из URL, query-параметра или произвольной строки.</summary>
     public static string? TryGetAccessCode(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -63,6 +64,7 @@ public static class BoardInviteLinkParser
         return m.Success ? m.Value.ToUpperInvariant() : null;
     }
 
+    /// <summary>Вытаскивает первую 6-символьную последовательность из фрагмента строки.</summary>
     private static string? ExtractSix(string chunk)
     {
         if (string.IsNullOrWhiteSpace(chunk))

@@ -6,10 +6,12 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace
 {
+    /// <summary>Точка входа: single-instance, восстановление сессии, инициализация Supabase.</summary>
     public partial class App : Application
     {
         private static Mutex? _singleInstanceMutex;
 
+        /// <summary>Запуск приложения: mutex, invite из аргументов, сессия или LoginPage.</summary>
         protected override async void OnStartup(StartupEventArgs e)
         {
             var allowMultiInstance = InviteLaunchArgs.AllowsMultipleInstancesForCurrentProcess(e.Args);

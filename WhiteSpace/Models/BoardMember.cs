@@ -4,6 +4,7 @@ using System;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Участник доски с ролью и снимком имени на момент присоединения.</summary>
     [Table("board_members")]
     public class BoardMember : BaseModel
     {

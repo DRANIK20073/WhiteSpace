@@ -6,6 +6,7 @@ public static class PendingBoardInvite
     private static readonly object Gate = new();
     private static string? _code;
 
+    /// <summary>Запоминает код приглашения до входа на главную.</summary>
     public static void Set(string code)
     {
         if (string.IsNullOrWhiteSpace(code))
@@ -19,6 +20,7 @@ public static class PendingBoardInvite
         }
     }
 
+    /// <summary>Читает код, не сбрасывая его (для проверки «есть ли приглашение»).</summary>
     public static bool TryPeek(out string code)
     {
         lock (Gate)
@@ -34,6 +36,7 @@ public static class PendingBoardInvite
         }
     }
 
+    /// <summary>Забирает код один раз — после вызова буфер пуст.</summary>
     public static bool TryTake(out string code)
     {
         lock (Gate)

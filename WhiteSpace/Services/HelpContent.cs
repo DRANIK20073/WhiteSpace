@@ -78,6 +78,7 @@ public static class HelpContent
             })
     };
 
+    /// <summary>Ищет тему справки по id (intro, home, board и т.д.).</summary>
     public static HelpTopic? Find(string id)
     {
         foreach (var t in Topics)

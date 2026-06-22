@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 
 namespace WhiteSpace;
 
+/// <summary>Настройки клиента: вид списка, тема, анимации — хранятся в AppData.</summary>
 public sealed class AppPreferences
 {
     public bool UseCompactView { get; set; }
@@ -37,6 +38,7 @@ public sealed class AppPreferences
         AllowTrailingCommas = true
     };
 
+    /// <summary>Читает preferences.json или возвращает значения по умолчанию.</summary>
     public static AppPreferences Load()
     {
         try
@@ -57,6 +59,7 @@ public sealed class AppPreferences
         }
     }
 
+    /// <summary>Сохраняет текущий объект на диск (обёртка над TrySave).</summary>
     public void Save()
     {
         TrySave(out _);

@@ -10,6 +10,7 @@ using WhiteSpace.Models;
 
 namespace WhiteSpace
 {
+    /// <summary>Realtime-слой доски через Firebase: фигуры, чат, курсоры, участники.</summary>
     public class FirebaseService : IDisposable
     {
         private readonly FirebaseClient _client;
@@ -29,6 +30,7 @@ namespace WhiteSpace
 
         #region Shapes
 
+        /// <summary>Поток изменений отдельных фигур (добавление, правка, удаление).</summary>
         public IObservable<BoardShapeChange> GetShapesObservable(string boardId)
         {
             return _client
@@ -65,6 +67,7 @@ namespace WhiteSpace
                 });
         }
 
+        /// <summary>Полный снимок фигур доски при каждом изменении в ветке shapes.</summary>
         public IObservable<FirebaseShapesSnapshot> GetBoardShapesObservable(string boardId)
         {
             return _client
@@ -112,6 +115,7 @@ namespace WhiteSpace
                 }));
         }
 
+        /// <summary>Создаёт или обновляет фигуру; для Id=0 выдаёт следующий свободный id.</summary>
         public async Task PushShapeAsync(string boardId, BoardShape shape)
         {
             if (Guid.TryParse(boardId, out Guid guid))
@@ -119,13 +123,27 @@ namespace WhiteSpace
                 shape.BoardId = guid;
             }
 
+            // Явный payload — так в RTDB всегда уходит Text с видом фигуры (поле sk в JSON).
+            var payload = new
+            {
+                shape.BoardId,
+                shape.Type,
+                shape.X,
+                shape.Y,
+                shape.Width,
+                shape.Height,
+                shape.Color,
+                shape.Text,
+                shape.Points
+            };
+
             if (shape.Id > 0)
             {
                 await _client
                     .Child(SHAPES_PATH)
                     .Child(boardId)
                     .Child(shape.Id.ToString())
-                    .PutAsync(shape);
+                    .PutAsync(payload);
             }
             else
             {
@@ -153,6 +171,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Заменяет весь набор фигур доски без предварительной очистки.</summary>
         public async Task ReplaceBoardShapesAsync(string boardId, IEnumerable<BoardShape> shapes)
         {
             var payload = new Dictionary<string, BoardShape>();
@@ -189,6 +208,7 @@ namespace WhiteSpace
             await ReplaceBoardShapesAsync(boardId, shapes);
         }
 
+        /// <summary>Удаляет одну фигуру по id.</summary>
         public async Task DeleteShapeAsync(string boardId, string shapeId)
         {
             await _client
@@ -198,6 +218,7 @@ namespace WhiteSpace
                 .DeleteAsync();
         }
 
+        /// <summary>Разовая загрузка всех фигур доски.</summary>
         public async Task<List<BoardShape>> GetAllShapesAsync(string boardId)
         {
             var shapes = await _client
@@ -225,6 +246,7 @@ namespace WhiteSpace
 
         #region Members
 
+        /// <summary>Список участников доски в realtime (онлайн-статус и роли).</summary>
         public IObservable<List<FirebaseBoardMember>> GetBoardMembersObservable(string boardId)
         {
             return _client
@@ -249,6 +271,7 @@ namespace WhiteSpace
                 }));
         }
 
+        /// <summary>Полная синхронизация участников с сохранением IsOnline из текущего снимка.</summary>
         public async Task PushBoardMembersAsync(string boardId, List<FirebaseBoardMember> members)
         {
             try
@@ -285,6 +308,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Обновляет или добавляет одного участника.</summary>
         public async Task PushBoardMemberAsync(string boardId, FirebaseBoardMember member)
         {
             try
@@ -308,6 +332,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Убирает участника из realtime-списка доски.</summary>
         public async Task DeleteBoardMemberAsync(string boardId, string userId)
         {
             try
@@ -324,6 +349,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Разовый снимок участников без подписки.</summary>
         public async Task<List<FirebaseBoardMember>> GetBoardMembersSnapshotAsync(string boardId)
         {
             try
@@ -345,6 +371,7 @@ namespace WhiteSpace
 
         #region Chat
 
+        /// <summary>Нормализует словарь сообщений: подставляет id из ключа Firebase.</summary>
         private static List<FirebaseChatMessage> NormalizeChatMessages(Dictionary<string, FirebaseChatMessage>? snapshot)
         {
             if (snapshot == null || snapshot.Count == 0)
@@ -372,6 +399,7 @@ namespace WhiteSpace
             return list;
         }
 
+        /// <summary>Поток сообщений чата доски.</summary>
         public IObservable<List<FirebaseChatMessage>> GetBoardChatMessagesObservable(string boardId)
         {
             return _client
@@ -396,6 +424,7 @@ namespace WhiteSpace
                 }));
         }
 
+        /// <summary>Отправляет новое сообщение в чат.</summary>
         public async Task PushChatMessageAsync(string boardId, FirebaseChatMessage message)
         {
             try
@@ -412,6 +441,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Редактирует существующее сообщение по id.</summary>
         public async Task UpdateChatMessageAsync(string boardId, FirebaseChatMessage message)
         {
             if (string.IsNullOrWhiteSpace(message.Id))
@@ -433,6 +463,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Удаляет сообщение из чата.</summary>
         public async Task DeleteChatMessageAsync(string boardId, string messageId)
         {
             if (string.IsNullOrWhiteSpace(messageId))
@@ -458,6 +489,7 @@ namespace WhiteSpace
 
         #region Cursors
 
+        /// <summary>Позиции курсоров всех участников на доске.</summary>
         public IObservable<List<FirebaseCursorState>> GetBoardCursorsObservable(string boardId)
         {
             return _client
@@ -482,6 +514,7 @@ namespace WhiteSpace
                 }));
         }
 
+        /// <summary>Обновляет положение курсора текущего пользователя.</summary>
         public async Task UpsertCursorAsync(string boardId, FirebaseCursorState cursorState)
         {
             try
@@ -506,6 +539,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Убирает курсор пользователя (уход с доски).</summary>
         public async Task DeleteCursorAsync(string boardId, string userId)
         {
             try
@@ -526,6 +560,7 @@ namespace WhiteSpace
 
         #region Presentation mode
 
+        /// <summary>Включён ли режим презентации на доске.</summary>
         public IObservable<bool> GetBoardPresentationActiveObservable(string boardId)
         {
             return _client
@@ -550,6 +585,7 @@ namespace WhiteSpace
                 }));
         }
 
+        /// <summary>Включает или выключает режим презентации для всех клиентов.</summary>
         public async Task SetBoardPresentationActiveAsync(string boardId, bool active)
         {
             await _client
@@ -566,6 +602,7 @@ namespace WhiteSpace
 
         #region Board versions
 
+        /// <summary>Сохраняет именованный снимок версии доски.</summary>
         public async Task PushBoardVersionSnapshotAsync(string boardId, string versionKey, BoardVersionSnapshot snapshot)
         {
             await _client
@@ -575,6 +612,7 @@ namespace WhiteSpace
                 .PutAsync(snapshot);
         }
 
+        /// <summary>Список сохранённых версий, от новых к старым.</summary>
         public async Task<List<(string Key, BoardVersionSnapshot Snapshot)>> GetBoardVersionSnapshotsAsync(string boardId)
         {
             try
@@ -608,6 +646,7 @@ namespace WhiteSpace
             }
         }
 
+        /// <summary>Удаляет сохранённую версию по ключу.</summary>
         public async Task DeleteBoardVersionAsync(string boardId, string versionKey)
         {
             try
@@ -631,13 +670,14 @@ namespace WhiteSpace
         }
     }
 
+    /// <summary>Состояние режима презентации в Firebase.</summary>
     public sealed class FirebasePresentationState
     {
         public bool Active { get; set; }
         public DateTime UpdatedAtUtc { get; set; }
     }
 
-    // Класс для Firebase (с UserId как string)
+    /// <summary>Участник доски в Firebase (UserId — строка для совместимости с RTDB).</summary>
     public class FirebaseBoardMember
     {
         public string UserId { get; set; }
@@ -647,11 +687,13 @@ namespace WhiteSpace
         public DateTime LastSeenUtc { get; set; }
     }
 
+    /// <summary>Результат загрузки полного снимка фигур (успех или ошибка сети).</summary>
     public sealed class FirebaseShapesSnapshot
     {
         public bool IsSuccess { get; init; }
         public List<BoardShape> Shapes { get; init; } = new();
 
+        /// <summary>Успешная загрузка со списком фигур.</summary>
         public static FirebaseShapesSnapshot Success(List<BoardShape> shapes) =>
             new()
             {
@@ -659,6 +701,7 @@ namespace WhiteSpace
                 Shapes = shapes ?? new List<BoardShape>()
             };
 
+        /// <summary>Ошибка загрузки — Shapes пустой, IsSuccess=false.</summary>
         public static FirebaseShapesSnapshot Failed() =>
             new()
             {
@@ -667,6 +710,7 @@ namespace WhiteSpace
             };
     }
 
+    /// <summary>Позиция и видимость курсора участника на доске.</summary>
     public class FirebaseCursorState
     {
         public string UserId { get; set; } = string.Empty;
@@ -677,6 +721,7 @@ namespace WhiteSpace
         public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     }
 
+    /// <summary>Сообщение чата доски в Firebase.</summary>
     public class FirebaseChatMessage
     {
         public string Id { get; set; } = string.Empty;

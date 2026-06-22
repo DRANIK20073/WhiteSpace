@@ -10,6 +10,7 @@ public static class InviteProtocolRegistration
 {
     public const string Scheme = "whitespace";
 
+    /// <summary>Прописывает whitespace:// в реестре, если exe найден.</summary>
     public static void EnsureRegistered()
     {
         try
@@ -41,6 +42,7 @@ public static class InviteProtocolRegistration
         }
     }
 
+    /// <summary>Путь к текущему exe: ProcessPath или MainModule.</summary>
     private static string? ResolveExecutablePath()
     {
         if (!string.IsNullOrWhiteSpace(Environment.ProcessPath) &&

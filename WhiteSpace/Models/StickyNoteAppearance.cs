@@ -18,6 +18,7 @@ public sealed class StickyNoteAppearance
     [JsonProperty("paper")]
     public string? PaperHex { get; set; }
 
+    /// <summary>Читает метаданные стикера из Points; старый формат с координатами игнорируется.</summary>
     public static StickyNoteAppearance Parse(BoardShape shape)
     {
         var raw = shape.Points?.Trim();
@@ -37,14 +38,17 @@ public sealed class StickyNoteAppearance
         }
     }
 
+    /// <summary>Записывает метаданные обратно в Points фигуры.</summary>
     public void SaveTo(BoardShape shape)
     {
         shape.Points = JsonConvert.SerializeObject(this);
     }
 
+    /// <summary>Цвет бумаги с подстановкой значения по умолчанию.</summary>
     public string EffectivePaperHex() =>
         string.IsNullOrWhiteSpace(PaperHex) ? DefaultPaper : PaperHex!;
 
+    /// <summary>Имя автора для отображения (верхний регистр).</summary>
     public string DisplayAuthor() =>
         string.IsNullOrWhiteSpace(Author) ? "" : Author!.Trim().ToUpperInvariant();
 }

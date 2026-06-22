@@ -6,6 +6,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Регистрация нового аккаунта по email и паролю (или через Google).</summary>
     public partial class RegisterPage : Page
     {
         private readonly SupabaseService _supabaseService;
@@ -23,6 +24,7 @@ namespace WhiteSpace.Pages
             UiAnimationHelper.ApplyFadeIn(AuthRootGrid, prefs.EnableAnimations);
         }
 
+        /// <summary>Создаём аккаунт и при успехе возвращаем на страницу входа.</summary>
         private async void Register_Click(object sender, RoutedEventArgs e)
         {
             string email = EmailBox.Text;
@@ -61,6 +63,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Навигация с очисткой back stack — как на LoginPage.</summary>
         private void NavigateAndClear(Page page)
         {
             var navigationService = NavigationService
@@ -80,6 +83,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Регистрация/вход через Google OAuth.</summary>
         private async void GoogleLogin_Click(object sender, RoutedEventArgs e)
         {
             try

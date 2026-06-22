@@ -22,6 +22,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Главная страница: мои/общие/недавние/избранные доски, поиск и уведомления.</summary>
     public partial class UserHomePage : Page, INotifyPropertyChanged
     {
         private enum DashboardSection
@@ -129,6 +130,7 @@ namespace WhiteSpace.Pages
             _adaptiveLayoutTimer.Stop();
         }
 
+        /// <summary>Мягкий рефреш при возврате с другой страницы (без полной перезагрузки).</summary>
         public void RequestRefreshAfterNavigation()
         {
             if (!_initialLoadComplete || _refreshScheduled)
@@ -228,6 +230,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Первичная загрузка профиля и списка досок.</summary>
         private async Task LoadDashboardAsync()
         {
             await LoadUserProfileAsync();
@@ -256,6 +259,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Тянем доски с ролями и строим карточки для грида.</summary>
         private async Task LoadBoardsAsync(bool animateCards = false)
         {
             try
@@ -401,7 +405,7 @@ namespace WhiteSpace.Pages
                 }
                 catch
                 {
-                    // thumbnails are best-effort on the home page
+
                 }
                 finally
                 {
@@ -995,7 +999,7 @@ namespace WhiteSpace.Pages
             }
             catch
             {
-                // Nothing critical: history cleanup can fail silently.
+                // история недавних — не критична, молча игнорируем
             }
         }
 
@@ -1158,6 +1162,7 @@ namespace WhiteSpace.Pages
         private void SidebarBackdrop_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
             SetSidebarOverlayOpen(false);
 
+        /// <summary>Переключаем sidebar, карточки и overlay по ширине окна.</summary>
         private void ApplyAdaptiveLayout(double width)
         {
             if (width <= 0 || RootPageGrid == null)

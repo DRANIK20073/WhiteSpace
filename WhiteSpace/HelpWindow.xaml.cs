@@ -5,6 +5,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace;
 
+/// <summary>Окно справки: список тем и навигация «назад» по истории.</summary>
 public partial class HelpWindow : Window
 {
     private readonly Stack<string> _history = new();
@@ -16,6 +17,7 @@ public partial class HelpWindow : Window
         InitTopics();
     }
 
+    /// <summary>Заполняем список тем и показываем первую.</summary>
     private void InitTopics()
     {
         TopicsListBox.Items.Clear();

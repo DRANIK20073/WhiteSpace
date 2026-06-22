@@ -2,6 +2,7 @@ using System;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Сборка ссылки whitespace:// для приглашения на доску.</summary>
 public static class BoardInviteLinkBuilder
 {
     /// <summary>Ссылка для обработчика протокола whitespace:// (регистрация в системе).</summary>

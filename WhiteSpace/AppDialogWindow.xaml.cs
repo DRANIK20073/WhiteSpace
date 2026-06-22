@@ -4,6 +4,7 @@ using System.Windows.Media;
 
 namespace WhiteSpace
 {
+    /// <summary>Кастомный диалог вместо MessageBox — тип, цвета и две кнопки.</summary>
     public partial class AppDialogWindow : Window
     {
         public AppDialogWindow(
@@ -29,6 +30,7 @@ namespace WhiteSpace
             ApplyType(type);
         }
 
+        /// <summary>Раскрашиваем полосу и иконку по типу сообщения.</summary>
         private void ApplyType(Services.AppDialogType type)
         {
             string accentColor;

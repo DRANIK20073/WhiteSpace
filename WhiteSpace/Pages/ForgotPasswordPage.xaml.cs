@@ -6,10 +6,12 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Запрос письма для сброса пароля.</summary>
     public partial class ForgotPasswordPage : Page
     {
         private readonly SupabaseService _supabaseService;
 
+        /// <param name="email">Можно передать email с формы входа, чтобы не вводить заново.</param>
         public ForgotPasswordPage(string? email = null)
         {
             InitializeComponent();
@@ -24,6 +26,7 @@ namespace WhiteSpace.Pages
             UiAnimationHelper.ApplyFadeIn(AuthRootGrid, prefs.EnableAnimations);
         }
 
+        /// <summary>Отправляем reset-link на указанный email.</summary>
         private async void SendResetLink_Click(object sender, RoutedEventArgs e)
         {
             bool success = await _supabaseService.SendPasswordResetEmailAsync(EmailBox.Text.Trim());
@@ -47,6 +50,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Навигация без истории — обычно обратно на LoginPage.</summary>
         private void NavigateAndClear(Page page)
         {
             var navigationService = NavigationService

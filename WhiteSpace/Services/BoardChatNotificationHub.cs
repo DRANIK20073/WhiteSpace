@@ -11,6 +11,7 @@ using WhiteSpace;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Одно уведомление о сообщении в чате доски.</summary>
 public sealed class BoardChatNotificationItem : INotifyPropertyChanged
 {
     private bool _isRead;
@@ -87,6 +88,7 @@ public static class BoardChatNotificationHub
         string MessageId,
         DateTime SentAtUtc);
 
+    /// <summary>Отписывается от Firebase и очищает список уведомлений.</summary>
     public static void Stop()
     {
         lock (Gate)
@@ -112,6 +114,7 @@ public static class BoardChatNotificationHub
         });
     }
 
+    /// <summary>Переподписывается на чаты всех доступных досок после входа или смены списка.</summary>
     public static async Task SyncSubscriptionsAsync(SupabaseService supabase)
     {
         var user = SupabaseService.Client.Auth.CurrentUser;
@@ -163,6 +166,7 @@ public static class BoardChatNotificationHub
         }
     }
 
+    /// <summary>Помечает все уведомления прочитанными.</summary>
     public static void MarkAllRead()
     {
         var app = Application.Current;
@@ -182,6 +186,7 @@ public static class BoardChatNotificationHub
         });
     }
 
+    /// <summary>Пересчитывает счётчик непрочитанных (вызывается из UI-потока).</summary>
     public static void RecountUnread()
     {
         var app = Application.Current;
@@ -200,6 +205,7 @@ public static class BoardChatNotificationHub
         }
     }
 
+    /// <summary>Удаляет все уведомления из центра.</summary>
     public static void ClearAll()
     {
         var app = Application.Current;
@@ -215,6 +221,7 @@ public static class BoardChatNotificationHub
         });
     }
 
+    /// <summary>Обрабатывает пачку сообщений из Firebase: первый заход — только запоминаем id.</summary>
     private static void ProcessMessages(Guid boardId, List<FirebaseChatMessage>? messages)
     {
         if (messages == null || Application.Current == null)
@@ -290,6 +297,7 @@ public static class BoardChatNotificationHub
         Application.Current.Dispatcher.BeginInvoke(() => ApplyPendingNotifications(snapshot));
     }
 
+    /// <summary>Добавляет новые уведомления в UI и показывает тосты (кроме активной доски).</summary>
     private static void ApplyPendingNotifications(List<PendingChatNote> snapshot)
     {
         foreach (var note in snapshot)
@@ -324,6 +332,7 @@ public static class BoardChatNotificationHub
         }
     }
 
+    /// <summary>Обновляет счётчик и оповещает подписчиков.</summary>
     private static void SetUnread(int n)
     {
         _unreadCount = n;

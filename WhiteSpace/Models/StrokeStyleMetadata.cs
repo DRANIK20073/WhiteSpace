@@ -10,8 +10,10 @@ public sealed class StrokeStyleMetadata
     [JsonProperty("isMarker")] public bool IsMarker { get; set; }
 }
 
+/// <summary>Разбор и сборка JSON стиля линии/маркера в поле Text.</summary>
 public static class StrokeStyleMetadataHelper
 {
+    /// <summary>Пытается прочитать JSON стиля из Text фигуры.</summary>
     public static bool TryParse(string? text, out StrokeStyleMetadata style)
     {
         style = new StrokeStyleMetadata();
@@ -36,12 +38,15 @@ public static class StrokeStyleMetadataHelper
         }
     }
 
+    /// <summary>Сериализует стиль для сохранения в Text.</summary>
     public static string Serialize(StrokeStyleMetadata style) =>
         JsonConvert.SerializeObject(style);
 
+    /// <summary>Пресет для инструмента «маркер».</summary>
     public static StrokeStyleMetadata ForMarker() =>
         new() { Thickness = 14, Opacity = 0.42, IsMarker = true };
 
+    /// <summary>Пресет для обычной ручки.</summary>
     public static StrokeStyleMetadata ForPen() =>
         new() { Thickness = 2, Opacity = 1, IsMarker = false };
 }

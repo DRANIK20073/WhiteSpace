@@ -7,12 +7,14 @@ using Wpf.Ui.Controls;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Переключение светлой/тёмной темы и палитры WhiteSpace поверх WPF UI.</summary>
 public static class WhiteSpaceThemeManager
 {
     private static ResourceDictionary? _paletteDictionary;
     public static bool HasAppliedTheme { get; private set; }
     public static bool IsDarkApplied { get; private set; }
 
+    /// <summary>Проверяет, выбрана ли тёмная тема в настройках.</summary>
     public static bool IsDarkTheme(AppPreferences preferences) =>
         string.Equals(preferences.Theme, "Dark", StringComparison.OrdinalIgnoreCase);
 
@@ -22,6 +24,7 @@ public static class WhiteSpaceThemeManager
         Apply(IsDarkTheme(preferences));
     }
 
+    /// <summary>Непосредственное применение темы WPF UI и нашей палитры Ws*.</summary>
     public static void Apply(bool dark)
     {
         var app = Application.Current;
@@ -60,6 +63,7 @@ public static class WhiteSpaceThemeManager
         }
     }
 
+    /// <summary>Обновляет фон окна и корневой Grid после смены темы.</summary>
     public static void RefreshWindowChrome(Window? window)
     {
         if (window == null)

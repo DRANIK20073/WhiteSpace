@@ -11,12 +11,15 @@ public sealed class BoardCommentMetadata
     [JsonProperty("message")] public string Message { get; set; } = "";
     [JsonProperty("createdAtUtc")] public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
+    /// <summary>Имя автора для отображения в UI (верхний регистр, fallback «УЧАСТНИК»).</summary>
     public string DisplayAuthor() =>
         string.IsNullOrWhiteSpace(AuthorName) ? "УЧАСТНИК" : AuthorName.Trim().ToUpperInvariant();
 }
 
+/// <summary>Разбор и форматирование комментариев на доске из поля Text.</summary>
 public static class BoardCommentMetadataHelper
 {
+    /// <summary>Читает JSON или plain-text fallback для старых записей.</summary>
     public static bool TryParse(string? text, out BoardCommentMetadata meta)
     {
         meta = new BoardCommentMetadata();
@@ -44,9 +47,11 @@ public static class BoardCommentMetadataHelper
         }
     }
 
+    /// <summary>Сериализует комментарий для сохранения в Text.</summary>
     public static string Serialize(BoardCommentMetadata meta) =>
         JsonConvert.SerializeObject(meta);
 
+    /// <summary>Человекочитаемое «сколько времени назад» для подписи комментария.</summary>
     public static string FormatRelativeTime(DateTime createdAtUtc)
     {
         var delta = DateTime.UtcNow - createdAtUtc;

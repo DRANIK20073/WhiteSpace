@@ -10,6 +10,7 @@ public static class AccountBanGuard
     private static DispatcherTimer? _timer;
     private static bool _checkInProgress;
 
+    /// <summary>Запускает фоновую проверку бана каждые 3 секунды.</summary>
     public static void Start()
     {
         Stop();
@@ -21,6 +22,7 @@ public static class AccountBanGuard
         _timer.Start();
     }
 
+    /// <summary>Останавливает таймер проверки (при выходе из аккаунта).</summary>
     public static void Stop()
     {
         if (_timer == null)
@@ -33,6 +35,7 @@ public static class AccountBanGuard
         _timer = null;
     }
 
+    /// <summary>Один тик таймера — не наслаиваем параллельные проверки.</summary>
     private static async void Timer_Tick(object? sender, EventArgs e)
     {
         if (_checkInProgress)

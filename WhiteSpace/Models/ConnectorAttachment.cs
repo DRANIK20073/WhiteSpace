@@ -24,21 +24,26 @@ public sealed class ConnectorAttachment
     /// <summary>none, block, open, diamond, oval</summary>
     [JsonProperty("arrowEnd")] public string? ArrowEnd { get; set; }
 
+    /// <summary>Есть ли привязка хотя бы к одному концу.</summary>
     public bool HasAnyAttachment =>
         StartShapeId.HasValue || EndShapeId.HasValue;
 
+    /// <summary>Стрелка у начала: по умолчанию none.</summary>
     public string EffectiveArrowStart() =>
         string.IsNullOrWhiteSpace(ArrowStart) ? "none" : ArrowStart.Trim().ToLowerInvariant();
 
+    /// <summary>Стрелка у конца: по умолчанию block.</summary>
     public string EffectiveArrowEnd() =>
         string.IsNullOrWhiteSpace(ArrowEnd) ? "block" : ArrowEnd.Trim().ToLowerInvariant();
 }
 
+/// <summary>Разбор JSON привязок и расчёт маршрута коннектора на доске.</summary>
 public static class ConnectorAttachmentHelper
 {
     private const double RouteStubLength = 28;
     private const double SnapPortRadius = 22;
 
+    /// <summary>Читает JSON из Text, даже если привязок к фигурам нет.</summary>
     public static bool TryDeserialize(string? text, out ConnectorAttachment attachment)
     {
         attachment = new ConnectorAttachment();
@@ -66,6 +71,7 @@ public static class ConnectorAttachmentHelper
         }
     }
 
+    /// <summary>Как TryDeserialize, но возвращает true только если есть хотя бы одна привязка.</summary>
     public static bool TryParse(string? text, out ConnectorAttachment attachment)
     {
         if (!TryDeserialize(text, out attachment))
@@ -76,6 +82,7 @@ public static class ConnectorAttachmentHelper
         return attachment.HasAnyAttachment;
     }
 
+    /// <summary>Сериализует привязку обратно в строку для поля Text.</summary>
     public static string SerializeForStorage(ConnectorAttachment attachment) =>
         JsonConvert.SerializeObject(attachment);
 
@@ -126,6 +133,7 @@ public static class ConnectorAttachmentHelper
             _ => new Point(edge.X, edge.Y - offset),
         };
 
+    /// <summary>Строит список точек линии с учётом привязок к фигурам или fallback из Points.</summary>
     public static List<Point> ResolveConnectorPoints(BoardShape connector, IReadOnlyList<BoardShape> allShapes)
     {
         if (!TryParse(connector.Text, out var att) || !att.HasAnyAttachment)
@@ -217,6 +225,7 @@ public static class ConnectorAttachmentHelper
         return SimplifyCollinear(route);
     }
 
+    /// <summary>Ортогональный маршрут от привязанного конца к свободной точке.</summary>
     public static List<Point> ComputeOrthogonalRouteToFreePoint(Point attached, Point free, string? side)
     {
         var exit = OffsetAlongSide(attached, side, RouteStubLength);
@@ -392,6 +401,7 @@ public static class ConnectorAttachmentHelper
         }
     }
 
+    /// <summary>Проверяет, ссылается ли коннектор на указанную фигуру.</summary>
     public static bool ReferencesShape(BoardShape connector, int shapeId)
     {
         if (!TryParse(connector.Text, out var att))

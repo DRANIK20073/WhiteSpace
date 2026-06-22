@@ -3,8 +3,10 @@ using WhiteSpace.Models;
 
 namespace WhiteSpace.Rendering;
 
+// Создаёт WPF Shape для BoardShape: Rectangle, Ellipse или Path с контуром из палитры.
 public static class BoardShapeVisualFactory
 {
+    // Подбираем визуальный тип: эллипс, прямоугольник, скруглённый rect или Path.
     public static Shape Create(BoardShape shape)
     {
         // Размер задаёт контейнер Grid на доске; фиксированные W/H ломали масштаб при ресайзе (фигура «уезжала» под рамку).

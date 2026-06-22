@@ -2,6 +2,7 @@
 using System.IO;
 using System.Text.Json;
 
+/// <summary>Локальное хранение сессии Supabase между запусками приложения.</summary>
 public static class SessionStorage
 {
     private static readonly string FilePath =
@@ -11,12 +12,14 @@ public static class SessionStorage
             "session.json"
         );
 
+    /// <summary>Сохраняет токены и данные сессии в session.json.</summary>
     public static void SaveSession(Session session)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
         File.WriteAllText(FilePath, JsonSerializer.Serialize(session));
     }
 
+    /// <summary>Читает сохранённую сессию или null, если файла нет.</summary>
     public static Session? LoadSession()
     {
         if (!File.Exists(FilePath))
@@ -27,6 +30,7 @@ public static class SessionStorage
         );
     }
 
+    /// <summary>Удаляет файл сессии при выходе из аккаунта.</summary>
     public static void ClearSession()
     {
         if (File.Exists(FilePath))

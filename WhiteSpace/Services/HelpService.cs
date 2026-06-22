@@ -2,6 +2,7 @@ using System.Windows;
 
 namespace WhiteSpace.Services;
 
+/// <summary>Окно справки: одно на приложение, повторный вызов просто активирует его.</summary>
 public static class HelpService
 {
     private static HelpWindow? _open;

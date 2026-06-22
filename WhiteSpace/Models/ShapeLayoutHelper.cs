@@ -3,6 +3,7 @@ namespace WhiteSpace.Models;
 /// <summary>Подбор «нормальных» пропорций при смене вида фигуры (без сильного сжатия по одной оси).</summary>
 public static class ShapeLayoutHelper
 {
+    /// <summary>Подбирает ширину и высоту при смене вида фигуры, чтобы не получить «сплющенный» объект.</summary>
     public static (double W, double H) NormalizeOnKindChange(string paletteId, double w, double h)
     {
         w = Math.Max(w, 1);
@@ -37,6 +38,7 @@ public static class ShapeLayoutHelper
         return (w, h);
     }
 
+    /// <summary>Фигуры, которым при смене вида логично оставаться примерно квадратными.</summary>
     private static bool IsRoughlySquareKind(string id) =>
         id is "rect" or "roundRect" or "diamond" or "triangle" or "triangleInv" or "pentagon" or "octagon" or
             "plus" or "star" or "prepHex" or "flowPentagon" or "orGate" or "magDisk" or "process" or

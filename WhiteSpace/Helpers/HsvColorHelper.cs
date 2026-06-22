@@ -2,8 +2,10 @@ using System.Windows.Media;
 
 namespace WhiteSpace.Helpers;
 
+/// <summary>Конвертация RGB ↔ HSV для цветового пикера.</summary>
 internal static class HsvColorHelper
 {
+    /// <summary>RGB 0–255 → H (0–360), S и V (0–1).</summary>
     public static void RgbToHsv(byte r, byte g, byte b, out double h, out double s, out double v)
     {
         var rf = r / 255.0;
@@ -44,6 +46,7 @@ internal static class HsvColorHelper
         }
     }
 
+    /// <summary>HSV → Color; hue нормализуем на круг 0–360.</summary>
     public static Color ColorFromHsv(double h, double s, double v)
     {
         h = ((h % 360) + 360) % 360;

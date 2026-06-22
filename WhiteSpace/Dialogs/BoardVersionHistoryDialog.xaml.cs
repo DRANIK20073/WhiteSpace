@@ -5,6 +5,7 @@ using WhiteSpace.Models;
 
 namespace WhiteSpace.Dialogs;
 
+/// <summary>Диалог истории версий доски: восстановить или удалить снимок.</summary>
 public partial class BoardVersionHistoryDialog : Window
 {
     public sealed class VersionListItem

@@ -4,6 +4,7 @@ using System;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Учётные данные администратора для входа в панель управления.</summary>
     [Table("admin_credentials")]
     public class AdminCredential : BaseModel
     {

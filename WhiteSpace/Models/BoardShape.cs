@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 
+/// <summary>Элемент полотна доски: геометрия, стиль и сериализованные данные в Text/Points.</summary>
 [Table("boardshape")]
 public class BoardShape : BaseModel
 {

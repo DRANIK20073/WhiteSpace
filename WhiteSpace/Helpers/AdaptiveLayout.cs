@@ -24,6 +24,7 @@ namespace WhiteSpace.Helpers
         public const double BoardParticipantsFullWidth = 320;
         public const double BoardParticipantsMediumWidth = 260;
 
+        /// <summary>Определяем tier по ширине контейнера (wide → compact).</summary>
         public static AdaptiveWidthTier GetTier(double width)
         {
             if (width >= TierWide)

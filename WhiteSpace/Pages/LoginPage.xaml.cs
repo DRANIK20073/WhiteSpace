@@ -6,6 +6,7 @@ using WhiteSpace.Services;
 
 namespace WhiteSpace.Pages
 {
+    /// <summary>Страница входа: email/пароль, Google OAuth и переход к регистрации или восстановлению.</summary>
     public partial class LoginPage : Page
     {
         private readonly SupabaseService _supabaseService;
@@ -16,6 +17,7 @@ namespace WhiteSpace.Pages
             _supabaseService = new SupabaseService();
         }
 
+        /// <summary>Применяем тему и лёгкую анимацию появления формы.</summary>
         private void Page_Loaded(object sender, RoutedEventArgs e)
         {
             var prefs = AppPreferences.Load();
@@ -26,6 +28,7 @@ namespace WhiteSpace.Pages
         private void Help_Click(object sender, RoutedEventArgs e) =>
             HelpService.Show(Window.GetWindow(this), "auth");
 
+        /// <summary>Основной вход: сначала проверяем админские креды, потом обычный Supabase sign-in.</summary>
         private async void Login_Click(object sender, RoutedEventArgs e)
         {
             if (await _supabaseService.TryAdminLoginAsync(EmailBox.Text, PasswordBox.Password))
@@ -88,6 +91,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Навигация без истории «назад» — после логина не хотим вернуться на форму входа.</summary>
         private void NavigateAndClear(Page page)
         {
             var navigationService = NavigationService
@@ -115,6 +119,7 @@ namespace WhiteSpace.Pages
             }
         }
 
+        /// <summary>Вход через Google: блокируем кнопку на время OAuth-потока.</summary>
         private async void GoogleLogin_Click(object sender, RoutedEventArgs e)
         {
             try

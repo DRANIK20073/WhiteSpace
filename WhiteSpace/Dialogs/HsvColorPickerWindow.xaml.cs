@@ -8,6 +8,7 @@ using WhiteSpace.Helpers;
 
 namespace WhiteSpace.Dialogs;
 
+/// <summary>HSV-пикер с ползунком hue, плоскостью S/V и пипеткой.</summary>
 public partial class HsvColorPickerWindow : Window
 {
     private double _h;
@@ -56,6 +57,7 @@ public partial class HsvColorPickerWindow : Window
         PushRgbFromHsv();
     }
 
+    /// <summary>Рисуем bitmap S/V при текущем hue.</summary>
     private void RenderSbPlane()
     {
         var w = _sbBitmap.PixelWidth;
@@ -127,6 +129,7 @@ public partial class HsvColorPickerWindow : Window
         SbBorder.ReleaseMouseCapture();
     }
 
+    /// <summary>Клик/перетаскивание на плоскости насыщенности и яркости.</summary>
     private void PickSb(Point p)
     {
         var w = SbBorder.ActualWidth;
