@@ -160,7 +160,9 @@ public class SupabaseService
 
                 if (result.Models?.Any() == true)
                 {
+                    await SyncAccountUsernameOnMembershipsAsync(userId, newUsername);
                     AppDialogService.ShowSuccess($"Имя пользователя успешно обновлено на: {newUsername}", "Профиль");
+                    ProfileIdentityHub.NotifyDisplayNameChanged(userId, newUsername);
                     return true;
                 }
                 else
@@ -184,7 +186,9 @@ public class SupabaseService
 
                 if (result.Models?.Any() == true)
                 {
+                    await SyncAccountUsernameOnMembershipsAsync(userId, newUsername);
                     AppDialogService.ShowSuccess($"Профиль создан с именем пользователя: {newUsername}", "Профиль");
+                    ProfileIdentityHub.NotifyDisplayNameChanged(userId, newUsername);
                     return true;
                 }
                 else
@@ -198,6 +202,53 @@ public class SupabaseService
         {
             AppDialogService.ShowError($"Ошибка при смене имени пользователя: {ex.Message}", "Профиль");
             return false;
+        }
+    }
+
+    private async Task SyncAccountUsernameOnMembershipsAsync(Guid userId, string newUsername)
+    {
+        try
+        {
+            var memberships = await _client
+                .From<BoardMember>()
+                .Where(m => m.UserId == userId)
+                .Get();
+
+            var boardIds = new List<Guid>();
+            if (memberships.Models == null || memberships.Models.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var member in memberships.Models)
+            {
+                member.AccountUsername = newUsername;
+                await _client.From<BoardMember>().Update(member);
+                boardIds.Add(member.BoardId);
+            }
+
+            if (boardIds.Count == 0)
+            {
+                return;
+            }
+
+            var firebase = new FirebaseService();
+            foreach (var boardId in boardIds.Distinct())
+            {
+                var members = await GetBoardMembersAsync(boardId);
+                var firebaseMembers = members.Select(m => new FirebaseBoardMember
+                {
+                    UserId = m.UserId.ToString(),
+                    Role = m.Role,
+                    JoinedAt = m.JoinedAt
+                }).ToList();
+
+                await firebase.PushBoardMembersAsync(boardId.ToString(), firebaseMembers);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"SyncAccountUsernameOnMemberships: {ex.Message}");
         }
     }
 
@@ -976,12 +1027,14 @@ public class SupabaseService
             if (result.Models?.Any() == true)
             {
                 var boardId = result.Models.First().Id;
+                var profile = await GetMyProfileAsync();
                 var newBoardMember = new BoardMember
                 {
                     BoardId = boardId,
                     UserId = Guid.Parse(user.Id),
                     Role = "owner",
-                    JoinedAt = DateTime.UtcNow
+                    JoinedAt = DateTime.UtcNow,
+                    AccountUsername = profile?.Username
                 };
 
                 await _client.From<BoardMember>().Insert(newBoardMember);
@@ -1407,12 +1460,14 @@ public class SupabaseService
                 return boardResult;
             }
 
+            var profile = await GetMyProfileAsync();
             var newMember = new BoardMember
             {
                 BoardId = boardId,
                 UserId = userId,
                 Role = "viewer",
-                JoinedAt = DateTime.UtcNow
+                JoinedAt = DateTime.UtcNow,
+                AccountUsername = profile?.Username
             };
 
             var insertResult = await _client.From<BoardMember>().Insert(newMember);

@@ -188,6 +188,9 @@ namespace WhiteSpace.Pages
         private readonly Stack<List<BoardShape>> _redoHistory = new Stack<List<BoardShape>>();
         private const double DefaultImageW = 280;
         private const double DefaultImageH = 180;
+        private const double MaxBoardImageDisplaySize = 480;
+        private const double MinBoardImageDisplayWidth = 48;
+        private const double MinBoardImageDisplayHeight = 40;
         private static readonly string BoardSnapshotsRoot = IOPath.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "WhiteSpace",
@@ -258,6 +261,7 @@ namespace WhiteSpace.Pages
 
             Loaded += Page_Loaded;
             Unloaded += Page_Unloaded;
+            ProfileIdentityHub.DisplayNameChanged += OnProfileDisplayNameChanged;
             _accessMonitorTimer.Tick += AccessMonitorTimer_Tick;
             _presenceHeartbeatTimer.Tick += PresenceHeartbeatTimer_Tick;
             _presenceUiRefreshTimer.Tick += PresenceUiRefreshTimer_Tick;
@@ -501,6 +505,7 @@ namespace WhiteSpace.Pages
         private async void Page_Unloaded(object sender, RoutedEventArgs e)
         {
             _isPageUnloading = true;
+            ProfileIdentityHub.DisplayNameChanged -= OnProfileDisplayNameChanged;
             AccountBanGuard.Stop();
 
             Viewport.LostMouseCapture -= Viewport_LostMouseCapture;
@@ -1020,8 +1025,23 @@ namespace WhiteSpace.Pages
             {
                 image.Stretch = Stretch.Uniform;
                 RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-                image.Source = null;
-                ScheduleBoardImageLoad(image, shape.Text, null);
+
+                var newRef = shape.Text ?? string.Empty;
+                var currentRef = image.Tag as string ?? string.Empty;
+                if (!string.Equals(currentRef, newRef, StringComparison.Ordinal))
+                {
+                    image.Tag = newRef;
+                    image.Source = null;
+                    ScheduleBoardImageLoad(image, shape.Text, null);
+                }
+
+                var width = shape.Width > 0 ? shape.Width : DefaultImageW;
+                var height = shape.Height > 0 ? shape.Height : DefaultImageH;
+                image.Width = width;
+                image.Height = height;
+                Canvas.SetLeft(image, shape.X - width / 2);
+                Canvas.SetTop(image, shape.Y - height / 2);
+                return;
             }
 
             // Обновляем позицию и размеры
@@ -1420,6 +1440,7 @@ namespace WhiteSpace.Pages
             {
                 Console.WriteLine($"Получено обновление участников из Firebase. Количество: {members?.Count ?? 0}");
 
+                _profileDisplayNameCache.Clear();
                 ApplyCurrentUserRoleFromFirebaseMembers(members);
                 await RefreshCurrentUserPermissionsAsync();
                 var currentUser = _isAdminSession ? null : await _supabaseService.GetMyProfileAsync();
@@ -1514,6 +1535,7 @@ namespace WhiteSpace.Pages
         {
             try
             {
+                _profileDisplayNameCache.Clear();
                 var boardMembers = await _supabaseService.GetBoardMembersAsync(_boardId);
 
                 // Получаем текущего пользователя
@@ -1816,6 +1838,61 @@ namespace WhiteSpace.Pages
 
             MembersCountText.Text = cards.Count.ToString();
             return cards;
+        }
+
+        private async void OnProfileDisplayNameChanged(Guid userId, string displayName)
+        {
+            if (_isPageUnloading)
+            {
+                return;
+            }
+
+            _profileDisplayNameCache[userId] = (displayName, GetInitials(displayName));
+
+            if (_myUserId == userId)
+            {
+                _cursorDisplayName = displayName;
+            }
+
+            if (_cachedBoardMembers.Count == 0)
+            {
+                return;
+            }
+
+            var changed = false;
+            foreach (var member in _cachedBoardMembers)
+            {
+                if (member.UserId != userId)
+                {
+                    continue;
+                }
+
+                member.AccountUsername = displayName;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            await RefreshParticipantListUiAsync();
+        }
+
+        private async Task RefreshParticipantListUiAsync()
+        {
+            if (_cachedBoardMembers.Count == 0 || UsersListView == null)
+            {
+                return;
+            }
+
+            var currentUser = _isAdminSession ? null : await _supabaseService.GetMyProfileAsync();
+            _cachedCurrentUserId = currentUser?.Id;
+            UsersListView.ItemsSource = await CreateParticipantCardsAsync(
+                _cachedBoardMembers,
+                currentUser?.Id,
+                _presenceByUserId);
+            MembersCountText.Text = _cachedBoardMembers.Count.ToString();
         }
 
         private static string GetInitials(string displayName)
@@ -2777,19 +2854,22 @@ namespace WhiteSpace.Pages
             }
             else if (shape.Type == "image")
             {
+                var width = shape.Width > 0 ? shape.Width : DefaultImageW;
+                var height = shape.Height > 0 ? shape.Height : DefaultImageH;
                 var image = new Image
                 {
-                    Width = shape.Width > 0 ? shape.Width : DefaultImageW,
-                    Height = shape.Height > 0 ? shape.Height : DefaultImageH,
+                    Width = width,
+                    Height = height,
                     Stretch = Stretch.Uniform,
                     Uid = shape.Id.ToString(),
+                    Tag = shape.Text ?? string.Empty,
                     Source = prefetchedBoardImage
                 };
 
                 RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
 
-                Canvas.SetLeft(image, shape.X - image.Width / 2);
-                Canvas.SetTop(image, shape.Y - image.Height / 2);
+                Canvas.SetLeft(image, shape.X - width / 2);
+                Canvas.SetTop(image, shape.Y - height / 2);
 
                 BoardCanvas.Children.Add(image);
                 if (addToBoardState)
@@ -2863,6 +2943,81 @@ namespace WhiteSpace.Pages
                     }
                 }
             }
+        }
+
+        private static (double Width, double Height) ComputeBoardImageDisplaySize(int pixelWidth, int pixelHeight)
+        {
+            if (pixelWidth <= 0 || pixelHeight <= 0)
+            {
+                return (DefaultImageW, DefaultImageH);
+            }
+
+            var scale = Math.Max(pixelWidth, pixelHeight) > MaxBoardImageDisplaySize
+                ? MaxBoardImageDisplaySize / Math.Max(pixelWidth, pixelHeight)
+                : 1.0;
+
+            return (
+                Math.Max(MinBoardImageDisplayWidth, pixelWidth * scale),
+                Math.Max(MinBoardImageDisplayHeight, pixelHeight * scale));
+        }
+
+        private static (double Width, double Height) GetElementLayoutSize(FrameworkElement element)
+        {
+            var width = element.Width;
+            var height = element.Height;
+            if (double.IsNaN(width) || width <= 0)
+            {
+                width = element.ActualWidth;
+            }
+
+            if (double.IsNaN(height) || height <= 0)
+            {
+                height = element.ActualHeight;
+            }
+
+            if (width <= 0)
+            {
+                width = DefaultImageW;
+            }
+
+            if (height <= 0)
+            {
+                height = DefaultImageH;
+            }
+
+            return (width, height);
+        }
+
+        private static double GetBoardImageAspectRatio(Image image)
+        {
+            if (image.Source is BitmapSource bitmap && bitmap.PixelHeight > 0)
+            {
+                return (double)bitmap.PixelWidth / bitmap.PixelHeight;
+            }
+
+            var (width, height) = GetElementLayoutSize(image);
+            return height > 0.01 ? width / height : 1;
+        }
+
+        private static void SyncImageShapeFromElement(Image image, BoardShape shape)
+        {
+            var (width, height) = GetElementLayoutSize(image);
+            var left = Canvas.GetLeft(image);
+            var top = Canvas.GetTop(image);
+            if (double.IsNaN(left))
+            {
+                left = 0;
+            }
+
+            if (double.IsNaN(top))
+            {
+                top = 0;
+            }
+
+            shape.Width = width;
+            shape.Height = height;
+            shape.X = left + width / 2;
+            shape.Y = top + height / 2;
         }
 
         private void ScheduleBoardImageLoad(Image imageControl, string? imageRef, string? localFallbackPath)
@@ -6376,11 +6531,6 @@ namespace WhiteSpace.Pages
                     shape.X = offsetX;
                     shape.Y = offsetY;
                 }
-                else if (_dragElement is Image image)
-                {
-                    shape.X = offsetX + image.ActualWidth / 2;
-                    shape.Y = offsetY + image.ActualHeight / 2;
-                }
                 else if (_dragElement is Grid)
                 {
                     if (shape.Type == "comment")
@@ -6408,6 +6558,12 @@ namespace WhiteSpace.Pages
 
             Canvas.SetLeft(_dragElement, offsetX);
             Canvas.SetTop(_dragElement, offsetY);
+
+            if (shape?.Type == "image" && _dragElement is Image draggedImage)
+            {
+                SyncImageShapeFromElement(draggedImage, shape);
+                PushRealtimeResizeUpdate(_dragElement);
+            }
 
             if (_resizeTarget == _dragElement && _resizeBorder != null)
             {
@@ -6500,8 +6656,7 @@ namespace WhiteSpace.Pages
                 }
                 else if (element is Image image)
                 {
-                    shape.X = Canvas.GetLeft(element) + image.ActualWidth / 2;
-                    shape.Y = Canvas.GetTop(element) + image.ActualHeight / 2;
+                    SyncImageShapeFromElement(image, shape);
                 }
                 else if (element is Grid grid)
                 {
@@ -7826,8 +7981,9 @@ namespace WhiteSpace.Pages
             {
                 _startX = Canvas.GetLeft(_resizeTarget);
                 _startY = Canvas.GetTop(_resizeTarget);
-                _startW = ((FrameworkElement)_resizeTarget).ActualWidth;
-                _startH = ((FrameworkElement)_resizeTarget).ActualHeight;
+                var (layoutW, layoutH) = GetElementLayoutSize((FrameworkElement)_resizeTarget);
+                _startW = layoutW;
+                _startH = layoutH;
 
                 if (double.IsNaN(_startX)) _startX = 0;
                 if (double.IsNaN(_startY)) _startY = 0;
@@ -7836,9 +7992,9 @@ namespace WhiteSpace.Pages
                 {
                     _textResizeStartFontSize = tbStart.FontSize > 0 ? tbStart.FontSize : 16;
                 }
-                else if (_resizeTarget is Image)
+                else if (_resizeTarget is Image imageStart)
                 {
-                    _imageResizeStartAspect = _startH > 0.01 ? _startW / _startH : 1;
+                    _imageResizeStartAspect = GetBoardImageAspectRatio(imageStart);
                     if (_imageResizeStartAspect <= 0.01)
                     {
                         _imageResizeStartAspect = 1;
@@ -7935,11 +8091,22 @@ namespace WhiteSpace.Pages
                 var fe = (FrameworkElement)_resizeTarget;
                 if (fe is Image && _imageResizeStartAspect > 0.01)
                 {
-                    var widthScale = _startW > 0.01 ? newW / _startW : 1;
-                    var heightScale = _startH > 0.01 ? newH / _startH : 1;
-                    var scale = Math.Max(0.05, Math.Min(widthScale, heightScale));
-                    newW = Math.Max(minW, _startW * scale);
-                    newH = Math.Max(minH, _startH * scale);
+                    if (_resizeDirection.Contains("e") || _resizeDirection.Contains("w"))
+                    {
+                        newH = Math.Max(minH, newW / _imageResizeStartAspect);
+                    }
+                    else if (_resizeDirection.Contains("n") || _resizeDirection.Contains("s"))
+                    {
+                        newW = Math.Max(minW, newH * _imageResizeStartAspect);
+                    }
+                    else
+                    {
+                        var widthScale = _startW > 0.01 ? newW / _startW : 1;
+                        var heightScale = _startH > 0.01 ? newH / _startH : 1;
+                        var scale = Math.Max(0.05, Math.Min(widthScale, heightScale));
+                        newW = Math.Max(minW, _startW * scale);
+                        newH = Math.Max(minH, newW / _imageResizeStartAspect);
+                    }
 
                     if (_resizeDirection.Contains("w"))
                     {
@@ -7951,6 +8118,7 @@ namespace WhiteSpace.Pages
                         newY = _startY + (_startH - newH);
                     }
                 }
+
                 fe.Width = newW;
                 fe.Height = newH;
                 Canvas.SetLeft(fe, newX);
@@ -8019,6 +8187,7 @@ namespace WhiteSpace.Pages
             }
 
             UpdateResizeFrame(newX, newY, newW, newH);
+            PushRealtimeResizeUpdate(_resizeTarget);
         }
 
         private void PushRealtimeResizeUpdate(UIElement? target)
@@ -8068,10 +8237,23 @@ namespace WhiteSpace.Pages
             }
             else if (target is FrameworkElement fe)
             {
-                shape.Width = fe.Width > 0 ? fe.Width : fe.ActualWidth;
-                shape.Height = fe.Height > 0 ? fe.Height : fe.ActualHeight;
-                shape.X = Canvas.GetLeft(target) + shape.Width / 2;
-                shape.Y = Canvas.GetTop(target) + shape.Height / 2;
+                var (width, height) = GetElementLayoutSize(fe);
+                shape.Width = width;
+                shape.Height = height;
+                var left = Canvas.GetLeft(target);
+                var top = Canvas.GetTop(target);
+                if (double.IsNaN(left))
+                {
+                    left = 0;
+                }
+
+                if (double.IsNaN(top))
+                {
+                    top = 0;
+                }
+
+                shape.X = left + width / 2;
+                shape.Y = top + height / 2;
             }
 
             _lastResizeRealtimePushUtc = now;
@@ -8156,12 +8338,17 @@ namespace WhiteSpace.Pages
                 shape.Y = Canvas.GetTop(_resizeTarget);
                 shape.Points = SerializeTextShapeStyle(ReadTextShapeStyleFromTextBoxValues(tbSave));
             }
-            else
+            else if (_resizeTarget is Image imageSave)
             {
-                shape.Width = ((FrameworkElement)_resizeTarget).ActualWidth;
-                shape.Height = ((FrameworkElement)_resizeTarget).ActualHeight;
-                shape.X = Canvas.GetLeft(_resizeTarget) + shape.Width / 2;
-                shape.Y = Canvas.GetTop(_resizeTarget) + shape.Height / 2;
+                SyncImageShapeFromElement(imageSave, shape);
+            }
+            else if (_resizeTarget is FrameworkElement feSave)
+            {
+                var (width, height) = GetElementLayoutSize(feSave);
+                shape.Width = width;
+                shape.Height = height;
+                shape.X = Canvas.GetLeft(_resizeTarget) + width / 2;
+                shape.Y = Canvas.GetTop(_resizeTarget) + height / 2;
             }
 
             // Сохраняем в Supabase
@@ -8341,29 +8528,35 @@ namespace WhiteSpace.Pages
                 var viewportCenter = new Point(Viewport.ActualWidth / 2, Viewport.ActualHeight / 2);
                 var world = ScreenToWorld(viewportCenter);
 
+                ImageSource? prefetch = null;
+                var displayWidth = DefaultImageW;
+                var displayHeight = DefaultImageH;
+                try
+                {
+                    var bytes = await File.ReadAllBytesAsync(imagePath);
+                    prefetch = CreateImageSourceFromBytes(bytes);
+                    if (prefetch is BitmapSource bitmap)
+                    {
+                        (displayWidth, displayHeight) = ComputeBoardImageDisplaySize(bitmap.PixelWidth, bitmap.PixelHeight);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Локальный превью кадр: {ex.Message}");
+                }
+
                 var shape = new BoardShape
                 {
                     BoardId = _boardId,
                     Type = "image",
                     X = world.X,
                     Y = world.Y,
-                    Width = DefaultImageW,
-                    Height = DefaultImageH,
+                    Width = displayWidth,
+                    Height = displayHeight,
                     Color = null,
                     Text = publicUrl,
                     Id = uniqueId
                 };
-
-                ImageSource? prefetch = null;
-                try
-                {
-                    var bytes = await File.ReadAllBytesAsync(imagePath);
-                    prefetch = CreateImageSourceFromBytes(bytes);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Локальный превью кадр: {ex.Message}");
-                }
 
                 AddShapeToCanvas(shape, true, prefetch, prefetch == null ? imagePath : null);
                 await _supabaseService.SaveShapeAsync(shape);

@@ -157,6 +157,7 @@ namespace WhiteSpace.Pages
                 LoadPreferences();
                 UiAnimationHelper.ApplyReturnFadeIn(RootPageGrid, _preferences.EnableAnimations);
 
+                await LoadUserProfileAsync();
                 ApplySidebarSelection();
                 ApplyViewModeSelection();
                 await LoadBoardsAsync(animateCards: false);
